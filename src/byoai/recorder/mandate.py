@@ -98,6 +98,8 @@ from typing import Any
 from byoai.errors import ByoAIError
 
 from .identity import CoriqoIdentity, resolve_identity
+from .suspend import DEFAULT_HOOK_TIMEOUT_S, SuspendHook, SuspendHooks, SuspendNotice
+from .suspend import utc_now as suspend_utc_now
 
 __all__ = [
     "BLOCKING_STATUSES",
@@ -757,6 +759,8 @@ class MandateGate:
         report_approval_request: Callable[["RequireApproval"], None] | None = None,
         report_capability_snapshot: Callable[[dict[str, Any]], None] | None = None,
         environment: str | None = None,
+        on_suspend: SuspendHook | Iterable[SuspendHook] | None = None,
+        on_suspend_timeout_s: float = DEFAULT_HOOK_TIMEOUT_S,
     ) -> None:
         """``default_posture`` and ``default_max_staleness_s`` apply only until
         the first snapshot lands; after that the tenant's own values, which
@@ -778,9 +782,19 @@ class MandateGate:
         :meth:`decide`, not something ``decide`` fires itself: ``decide``
         stays pure (no I/O, no awaits, no surprises, per its own docstring),
         so reporting a pending call to Coriqo is a second, explicit step —
-        exactly like reporting a normal enforcement verdict already is."""
+        exactly like reporting a normal enforcement verdict already is.
+
+        ``on_suspend`` (TI-25) is your hook, or hooks, for stopping the workers
+        this gate cannot reach: your queue's consumers, your workflow engine's
+        runs. Called on the same transition as ``on_suspend_observed``, with a
+        :class:`~byoai.recorder.suspend.SuspendNotice`; sync or async; each
+        hook's return, failure or time-out (``on_suspend_timeout_s``) is
+        recorded to the ledger as that worker's acknowledgement. See
+        :mod:`byoai.recorder.suspend` for Redis, NATS, Celery and Temporal
+        examples. More can be added later with :meth:`add_suspend_hook`."""
         self._source = source
         self._on_suspend_observed = on_suspend_observed
+        self._suspend_hooks = SuspendHooks(on_suspend, timeout_s=on_suspend_timeout_s)
         self._report_approval_request = report_approval_request
         self._report_capability_snapshot = report_capability_snapshot
         # W-7: the digest last successfully sent (or attempted), so repeated
@@ -840,6 +854,18 @@ class MandateGate:
     def environment(self) -> str | None:
         """The environment this gate was told it runs in, if any."""
         return self._environment
+
+    @property
+    def suspend_hooks(self) -> SuspendHooks:
+        """The ``on_suspend`` hooks (TI-25), and the acknowledgements so far."""
+        return self._suspend_hooks
+
+    def add_suspend_hook(
+        self, hook: SuspendHook, *, name: str | None = None, timeout_s: float | None = None
+    ) -> None:
+        """Register one more ``on_suspend`` hook. ``name`` is what the record
+        calls this worker; it defaults to the function's qualified name."""
+        self._suspend_hooks.add(hook, name=name, timeout_s=timeout_s)
 
     def offered_tools(self, names: Iterable[str]) -> list[str]:
         """The subset of ``names`` a model should be shown, in order.
@@ -924,7 +950,8 @@ class MandateGate:
         # AD-9: fire only on the transition into suspended, not on every
         # fetch of an already-suspended snapshot — the ack is a one-time
         # "I saw this and stopped" report, not a heartbeat.
-        if snapshot.suspended and not (previous is not None and previous.suspended) and self._on_suspend_observed:
+        newly_suspended = snapshot.suspended and not (previous is not None and previous.suspended)
+        if newly_suspended and self._on_suspend_observed:
             try:
                 self._on_suspend_observed(snapshot)
             except Exception:
@@ -933,6 +960,17 @@ class MandateGate:
                     "still applies locally, only the ack to Coriqo may be missing",
                     self._agent_id,
                 )
+        # TI-25: the customer's own workers. Fired, not awaited: apply_snapshot
+        # stays synchronous, and every call this gate decides is already denied.
+        if newly_suspended and len(self._suspend_hooks):
+            self._suspend_hooks.fire(
+                SuspendNotice(
+                    agent_id=self._agent_id,
+                    status=snapshot.status or "suspended",
+                    mandate_version_id=snapshot.mandate_version_id,
+                    observed_at=suspend_utc_now(),
+                )
+            )
         return snapshot
 
     # -- the decide path: no I/O, no awaits, no surprises -------------------

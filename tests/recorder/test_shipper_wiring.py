@@ -86,3 +86,39 @@ def test_shipper_starts_when_enrolled(tmp_path):
     finally:
         recorder2.close()
     assert not recorder2._shipper_thread.is_alive()
+
+
+class _CountingShipper:
+    def __init__(self, fail: bool = False) -> None:
+        self.shipped = 0
+        self.closed = False
+        self.fail = fail
+
+    def ship_once(self):
+        self.shipped += 1
+        if self.fail:
+            raise RuntimeError("coriqo unreachable")
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_close_sends_once_more_only_when_asked(tmp_path):
+    # TI-25: coriqo-mcp writes its worker_stop_ack moments before exit. With
+    # final_ship the entry is sent on the way out; a plain close() is as before.
+    plain = Recorder(dir=tmp_path / "a")
+    plain._shipper = shipper = _CountingShipper()
+    plain.close()
+    assert shipper.shipped == 0 and shipper.closed
+
+    asked = Recorder(dir=tmp_path / "b")
+    asked._shipper = shipper = _CountingShipper()
+    asked.close(final_ship=True)
+    assert shipper.shipped == 1 and shipper.closed
+
+
+def test_final_ship_failure_is_logged_not_raised(tmp_path):
+    recorder = Recorder(dir=tmp_path)
+    recorder._shipper = shipper = _CountingShipper(fail=True)
+    recorder.close(final_ship=True)
+    assert shipper.shipped == 1 and shipper.closed

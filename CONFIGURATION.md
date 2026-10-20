@@ -1637,7 +1637,9 @@ coriqo-mcp --mandate coriqo.mandate.yaml --http --upstream http://127.0.0.1:9000
 | `--http` | off | relay an HTTP MCP server (streamable HTTP or SSE) instead of a stdio child |
 | `--upstream URL` | — | with `--http`: the server's base URL. Requests keep their path and query |
 | `--listen HOST:PORT` | `127.0.0.1:8808` | with `--http`: where `coriqo-mcp` listens |
-| `--grace SECONDS` | `5` | how long the server gets to exit before SIGTERM, then SIGKILL, to its process group |
+| `--grace SECONDS` | the file's `x-stop_grace_s`, else `5` | how long the server gets to exit after SIGTERM before SIGKILL goes to its process group |
+| `--on-suspend MODULE:FUNCTION` | none | a function to call when the agent is suspended in Coriqo, to stop workers `coriqo-mcp` does not own. Repeatable. The module must be importable; one that is not stops start-up (exit 2) |
+| `--on-suspend-timeout SECONDS` | `30` | how long each `--on-suspend` function gets before it is recorded as timed out |
 | `-v` | off | log each decision's operator detail to stderr |
 
 The server command goes after `--`. On stdio, `coriqo-mcp` owns it: it runs in
@@ -1647,6 +1649,53 @@ written to stdout; everything else goes to stderr. Decisions are sent to
 Coriqo's verdict endpoint every 5 seconds when the device is enrolled and the
 agent has a Coriqo id (`agent.id` in the file, or `--coriqo-agent-id`). The
 README's `coriqo-mcp` section lists what is and is not checked.
+
+**When the agent is suspended.** With `--coriqo-agent-id`, the snapshot
+`coriqo-mcp` fetches carries the agent's status. When it changes to
+`suspended`, every call is refused (as it always was), and `coriqo-mcp` also
+sends SIGTERM to the server's process group, waits for the grace period, then
+sends SIGKILL to anything still running in the group. The exit is written to
+the ledger as a `worker_stop_ack` event: when the signal went, when the group
+was gone, the exit code and the last signal sent. Each `--on-suspend`
+function is called at the same time and recorded the same way. `coriqo-mcp`
+then exits with status 3. If the agent is already suspended at start-up, the
+server is never started and the exit status is also 3.
+
+A mandate file has no status, so with `--mandate` none of this fires. The
+file can still set the grace period:
+
+```yaml
+x-stop_grace_s: 20   # seconds; above 0, at most 600
+```
+
+`x-` fields are extensions under `MANDATE_SPEC.md` §3: they are not part of
+the document hash, so two files that differ only here hash the same. An
+invalid value is ignored with a warning. `--grace` overrides it.
+
+#### Suspend hooks (`on_suspend`, `byoai.recorder.suspend`)
+
+`MandateGate(on_suspend=hook_or_list, on_suspend_timeout_s=30)`, or
+`gate.add_suspend_hook(hook, name=..., timeout_s=...)`. Each hook is called
+once per suspension, when a snapshot moves the agent from any other status
+into `suspended` (a repeated suspended snapshot does not call it again; a
+resume and a new suspension does). It receives a `SuspendNotice`
+(`agent_id`, `status`, `mandate_version_id`, `observed_at`) and may be a
+plain function or a coroutine function. Hooks run concurrently, on the
+running event loop when there is one, otherwise on a background thread, so
+`apply_snapshot` never waits for them.
+
+Each hook's result is written to the ledger of the bound verdict recorder as
+a `worker_stop_ack` event: `worker` (the name given, else the function's
+qualified name), `kind: hook`, `outcome` (`returned`, `raised` or
+`timed_out`), `notified_at`, `acknowledged_at`, `elapsed_s`, and for
+`raised` the exception's type (never its message). A hook that returns a
+`WorkerAck` is recorded as that instead. With no recorder bound, the result
+is only logged. A hook that raises or hangs never lifts the suspension: the
+gate keeps denying every call.
+
+"Returned" means your hook returned, for example that the message was
+published. It does not prove every consumer stopped; have the hook wait for
+your workers' replies if you need that on the record.
 
 #### The denial latch — repeats and the halt (`byoai.recorder.denial_latch`)
 

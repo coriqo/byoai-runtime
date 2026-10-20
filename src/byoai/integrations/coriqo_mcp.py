@@ -40,24 +40,29 @@ import argparse
 import asyncio
 import contextlib
 import hashlib
+import importlib
 import json
 import logging
 import os
 import signal
 import sys
 import threading
+import time
 import uuid
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Iterable, Sequence
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 from ..recorder.canonical import canonicalize, sha256_hex
 from ..recorder.mandate import MODEL_MESSAGE, MandateError, MandateGate
 from ..recorder.proxy_gate import ProxyDecision, ProxyEnforcer
+from ..recorder.suspend import SuspendHook, SuspendNotice, WorkerAck, WorkerOutcome, utc_now
 
 __all__ = [
     "DENIAL_RESULT",
+    "EXIT_SUSPENDED",
+    "ChildStopper",
     "HttpInterposer",
     "Interposer",
     "arguments_sha256",
@@ -85,6 +90,13 @@ _MAX_RUNS = 1024
 #: How long the child gets to exit after its stdin closes, and again after
 #: SIGTERM, before it is killed.
 DEFAULT_GRACE_S = 5.0
+
+#: Longest grace period a mandate file's ``x-stop_grace_s`` may set.
+MAX_GRACE_S = 600.0
+
+#: Exit status when coriqo-mcp stopped (or never started) the server because
+#: the agent is suspended in Coriqo.
+EXIT_SUSPENDED = 3
 
 
 class _BadJson(ValueError):
@@ -437,6 +449,135 @@ async def stop_child(proc: asyncio.subprocess.Process, *, grace_s: float = DEFAU
     return await proc.wait()
 
 
+def _group_alive(pgid: int) -> bool:
+    if os.name != "posix":
+        return False
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+async def _wait_group_gone(pgid: int, until: float) -> None:
+    """Until no process is left in group ``pgid``, or ``until`` (monotonic).
+    Polled: there is nothing to await for "every process in a group is gone"."""
+    while _group_alive(pgid) and time.monotonic() < until:  # noqa: ASYNC110
+        await asyncio.sleep(0.05)
+
+
+class ChildStopper:
+    """The ``on_suspend`` hook for the server coriqo-mcp started (TI-25).
+
+    On suspension: SIGTERM to the server's process group, then SIGKILL to the
+    group if anything in it is still running after ``grace_s``. Returns a
+    :class:`~byoai.recorder.suspend.WorkerAck` with the times, the exit code
+    and the last signal sent, which the gate records to the ledger.
+    """
+
+    # How long the hook waits for a server that is still starting. Short, so
+    # the hook stays inside its timeout budget (grace + 15s).
+    START_WAIT_S = 2.0
+
+    def __init__(self, grace_s: float = DEFAULT_GRACE_S) -> None:
+        self.grace_s = grace_s
+        self.triggered = False
+        self.ack: WorkerAck | None = None
+        self._proc: asyncio.subprocess.Process | None = None
+        self._attached = asyncio.Event()
+        self._late_stop: asyncio.Task | None = None
+
+    def attach(self, proc: asyncio.subprocess.Process) -> None:
+        """The server is running. If the suspension already arrived and the
+        hook has answered, the server gets the full stop now (SIGTERM, then
+        SIGKILL after the grace period), not a bare SIGTERM."""
+        self._proc = proc
+        self._attached.set()
+        if self.triggered and self.ack is not None:
+            self._late_stop = asyncio.ensure_future(self._stop(proc, utc_now()))
+
+    async def __call__(self, notice: SuspendNotice) -> WorkerAck:
+        self.triggered = True
+        notified_at = utc_now()
+        proc = self._proc
+        if proc is None:
+            # Starting: wait briefly for attach() rather than record "not
+            # running" for a server about to run.
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self._attached.wait(), self.START_WAIT_S)
+            proc = self._proc
+        if proc is None or proc.returncode is not None:
+            self.ack = WorkerAck(
+                worker="mcp-server" if proc is None else f"mcp-server pid {proc.pid}",
+                kind="process",
+                outcome=WorkerOutcome.NOT_RUNNING,
+                notified_at=notified_at,
+                acknowledged_at=utc_now(),
+                elapsed_s=0.0,
+                exit_code=None if proc is None else proc.returncode,
+                grace_s=self.grace_s,
+                detail=("not started yet; it is stopped the moment it starts"
+                        if proc is None else None),
+            )
+            return self.ack
+        print(
+            f"coriqo-mcp: agent {notice.agent_id or '?'} is suspended in Coriqo; stopping "
+            f"the server (SIGTERM, then SIGKILL after {self.grace_s:g}s)",
+            file=sys.stderr,
+        )
+        self.ack = await self._stop(proc, notified_at)
+        return self.ack
+
+    async def _stop(self, proc: asyncio.subprocess.Process, notified_at: Any) -> WorkerAck:
+        """SIGTERM the group, SIGKILL whatever is left after the grace period."""
+        started = time.monotonic()
+        deadline = started + self.grace_s
+        last = "SIGTERM"
+        _signal_child(proc, signal.SIGTERM)
+        code: int | None = None
+        try:
+            code = await asyncio.wait_for(proc.wait(), self.grace_s)
+        except asyncio.TimeoutError:
+            pass
+        # The leader exiting is not the group exiting: whatever it started is
+        # still in the group until it goes too.
+        await _wait_group_gone(proc.pid, deadline)
+        leader_exited = proc.returncode is not None
+        killed = not leader_exited or _group_alive(proc.pid)
+        if killed:
+            last = "SIGKILL"
+            if os.name == "posix":
+                with contextlib.suppress(ProcessLookupError, PermissionError):
+                    os.killpg(proc.pid, signal.SIGKILL)
+            else:
+                with contextlib.suppress(ProcessLookupError):
+                    proc.kill()
+            with contextlib.suppress(asyncio.TimeoutError):
+                code = await asyncio.wait_for(proc.wait(), 10.0)
+            # Members it started are reaped by init, not by us; give that a
+            # moment so "acknowledged" means the whole group is gone.
+            await _wait_group_gone(proc.pid, time.monotonic() + 2.0)
+        exited = proc.returncode is not None
+        return WorkerAck(
+            worker=f"mcp-server pid {proc.pid}",
+            kind="process",
+            outcome=WorkerOutcome.KILLED if killed else WorkerOutcome.EXITED,
+            notified_at=notified_at,
+            acknowledged_at=utc_now() if exited else None,
+            elapsed_s=round(time.monotonic() - started, 6),
+            exit_code=code if code is not None else proc.returncode,
+            signal=last,
+            grace_s=self.grace_s,
+            detail=(
+                "still running 10s after SIGKILL" if not exited
+                else "the server exited on SIGTERM; processes it started did not"
+                if killed and leader_exited else None
+            ),
+        )
+
+
 def _install_stop_signals(
     loop: asyncio.AbstractEventLoop, stopping: asyncio.Event
 ) -> list[int]:
@@ -465,11 +606,13 @@ async def run_stdio(
     grace_s: float = DEFAULT_GRACE_S,
     stdin_queue: asyncio.Queue[bytes | None] | None = None,
     write_host: Callable[[bytes], None] | None = None,
+    stopper: ChildStopper | None = None,
 ) -> int:
     """Run ``command`` as the server and relay stdio through ``interposer``.
 
     Returns the server's exit code. ``stdin_queue``/``write_host`` replace the
-    process's own stdin and stdout, for tests.
+    process's own stdin and stdout, for tests. ``stopper`` is told about the
+    server once it is running, so a suspension can stop it.
     """
     loop = asyncio.get_running_loop()
     if write_host is None:
@@ -484,6 +627,8 @@ async def run_stdio(
     session = _StdioSession(interposer, write_host)
     queue = stdin_queue if stdin_queue is not None else _start_stdin_reader(loop)
     proc = await _spawn(command)
+    if stopper is not None:
+        stopper.attach(proc)
     assert proc.stdin is not None and proc.stdout is not None
     child_in, child_out = proc.stdin, proc.stdout
 
@@ -896,8 +1041,20 @@ def _parser() -> argparse.ArgumentParser:
         "--listen", default="127.0.0.1:8808", help="with --http: host:port to serve on"
     )
     p.add_argument(
-        "--grace", type=float, default=DEFAULT_GRACE_S,
-        help="seconds the server gets to exit before it is stopped (default 5)",
+        "--grace", type=float, default=None,
+        help="seconds the server gets to exit after SIGTERM before it is killed "
+        "(default: the mandate file's x-stop_grace_s, else 5)",
+    )
+    p.add_argument(
+        "--on-suspend", action="append", default=[], metavar="MODULE:FUNCTION",
+        help="call this function when the agent is suspended in Coriqo, to stop "
+        "workers coriqo-mcp does not own (your queue, your workflow engine). "
+        "Repeatable. The module must be importable",
+    )
+    p.add_argument(
+        "--on-suspend-timeout", type=float, default=30.0, metavar="SECONDS",
+        help="how long each --on-suspend function gets before it is recorded as "
+        "timed out (default 30)",
     )
     p.add_argument("-v", "--verbose", action="store_true", help="log decisions to stderr")
     p.add_argument("command", nargs=argparse.REMAINDER, help="-- then the server command")
@@ -911,10 +1068,35 @@ def _split_command(argv: list[str]) -> tuple[list[str], list[str]]:
     return argv, []
 
 
-def _build_gate(args: argparse.Namespace) -> tuple[MandateGate, str, str | None]:
-    """The gate, a line describing its mandate, and the id Coriqo knows the
-    agent by (--coriqo-agent-id, or the file's agent.id; a file with only
-    agent.name has none)."""
+def mandate_grace_s(document: Any, where: str = "the mandate file") -> float | None:
+    """The file's ``x-stop_grace_s``, if it sets a usable one.
+
+    An ``x-`` field is an extension under MANDATE_SPEC.md §3: readers may
+    ignore it, and it is not part of the document hash.
+    """
+    if not isinstance(document, dict) or "x-stop_grace_s" not in document:
+        return None
+    value = document["x-stop_grace_s"]
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not 0 < value <= MAX_GRACE_S
+    ):
+        log.warning(
+            "coriqo-mcp: %s: x-stop_grace_s must be a number of seconds above 0 and "
+            "at most %g; ignoring it",
+            where, MAX_GRACE_S,
+        )
+        return None
+    return float(value)
+
+
+def _build_gate(
+    args: argparse.Namespace,
+) -> tuple[MandateGate, str, str | None, float | None]:
+    """The gate, a line describing its mandate, the id Coriqo knows the agent
+    by (--coriqo-agent-id, or the file's agent.id; a file with only agent.name
+    has none), and the file's x-stop_grace_s."""
     if args.mandate:
         from ..recorder.mandate_file import file_mandate_gate
 
@@ -923,7 +1105,7 @@ def _build_gate(args: argparse.Namespace) -> tuple[MandateGate, str, str | None]
             log.warning("coriqo-mcp: %s: %s", args.mandate, warning)
         return gate, (
             f"mandate {args.mandate} (sha256:{loaded.sha256[:12]}), mode {loaded.mode}"
-        ), loaded.agent_id
+        ), loaded.agent_id, mandate_grace_s(loaded.document, args.mandate)
     from ..recorder.mandate import mandate_gate
 
     gate = mandate_gate(args.coriqo_agent_id, environment=args.environment)
@@ -932,7 +1114,26 @@ def _build_gate(args: argparse.Namespace) -> tuple[MandateGate, str, str | None]
             "no Coriqo identity on this device, so there is no mandate to fetch for "
             f"agent {args.coriqo_agent_id}. Enroll it (byoai-recorder-enroll) or use --mandate."
         )
-    return gate, f"agent {args.coriqo_agent_id}'s mandate from Coriqo", args.coriqo_agent_id
+    return gate, f"agent {args.coriqo_agent_id}'s mandate from Coriqo", args.coriqo_agent_id, None
+
+
+def load_hook(spec: str) -> SuspendHook:
+    """``package.module:function`` to the function. Raises ``ValueError``."""
+    module_name, sep, attr = spec.partition(":")
+    if not sep or not module_name or not attr:
+        raise ValueError(f"--on-suspend {spec!r}: write it as module:function")
+    try:
+        target: Any = importlib.import_module(module_name)
+    except ImportError as exc:
+        raise ValueError(f"--on-suspend {spec!r}: cannot import {module_name}: {exc}") from exc
+    for part in attr.split("."):
+        try:
+            target = getattr(target, part)
+        except AttributeError as exc:
+            raise ValueError(f"--on-suspend {spec!r}: {module_name} has no {attr}") from exc
+    if not callable(target):
+        raise ValueError(f"--on-suspend {spec!r}: {attr} is not callable")
+    return cast(SuspendHook, target)
 
 
 #: How often decisions waiting in the outbox are sent to Coriqo.
@@ -998,7 +1199,9 @@ class _Record:
                 await self._client.close()
         if self._outbox is not None:
             self._outbox.close()
-        self.recorder.close()
+        # A suspension's worker_stop_ack is written moments before exit; send
+        # it now rather than leave it for the next run.
+        self.recorder.close(final_ship=True)
 
 
 def _build_recorder(args: argparse.Namespace, agent_id: str | None) -> _Record | None:
@@ -1061,10 +1264,18 @@ async def _amain(args: argparse.Namespace, command: list[str]) -> int:
     from ..recorder.verdicts import set_verdict_recorder
 
     try:
-        gate, source, coriqo_agent_id = _build_gate(args)
-    except ByoAIError as exc:
+        gate, source, coriqo_agent_id, file_grace = _build_gate(args)
+        hooks = [(spec, load_hook(spec)) for spec in args.on_suspend]
+    except (ByoAIError, ValueError) as exc:
         print(f"coriqo-mcp: {exc}", file=sys.stderr)
         return 2
+    grace = args.grace if args.grace is not None else (file_grace or DEFAULT_GRACE_S)
+    # Registered before the first fetch: a mandate that is already suspended
+    # when coriqo-mcp starts must reach the hooks too.
+    for spec, hook in hooks:
+        gate.add_suspend_hook(hook, name=spec, timeout_s=args.on_suspend_timeout)
+    stopper = ChildStopper(grace)
+    gate.add_suspend_hook(stopper, name="mcp-server", timeout_s=grace + 15.0)
     try:
         record = _build_recorder(args, coriqo_agent_id)
     except ModuleNotFoundError as exc:
@@ -1083,16 +1294,47 @@ async def _amain(args: argparse.Namespace, command: list[str]) -> int:
             sent = ", and sending decisions to Coriqo" if record.shipping else ""
             print(f"coriqo-mcp: recording to {where}{sent}", file=sys.stderr)
             record.start()
+        snap = gate.snapshot
+        if snap is not None and snap.suspended:
+            print(
+                f"coriqo-mcp: agent {coriqo_agent_id} is suspended in Coriqo "
+                f"(status {snap.status!r}); not starting the server. Resume the agent "
+                "in Coriqo, on its Enforcement tab, to run it again.",
+                file=sys.stderr,
+            )
+            return EXIT_SUSPENDED
         if args.http:
-            return await _serve_http(args, command, interposer)
-        return await run_stdio(command, interposer, grace_s=args.grace)
+            code = await _serve_http(args, command, interposer, grace, stopper)
+        else:
+            code = await run_stdio(command, interposer, grace_s=grace, stopper=stopper)
+        if stopper.triggered:
+            ack = stopper.ack
+            how = f" ({ack.outcome}, {ack.signal}, after {ack.elapsed_s:.2f}s)" if (
+                ack is not None and ack.signal) else ""
+            print(
+                f"coriqo-mcp: agent {coriqo_agent_id} was suspended in Coriqo; the "
+                f"server was stopped{how}",
+                file=sys.stderr,
+            )
+            return EXIT_SUSPENDED
+        return code
     finally:
+        # The hooks write their acknowledgements to the record; let them
+        # finish before it closes.
+        if not await gate.suspend_hooks.wait(max(args.on_suspend_timeout, grace + 15.0) + 5.0):
+            log.warning("coriqo-mcp: an on_suspend hook was still running at exit")
         await gate.stop()
         if record is not None:
             await record.close()
 
 
-async def _serve_http(args: argparse.Namespace, command: list[str], interposer: Interposer) -> int:
+async def _serve_http(
+    args: argparse.Namespace,
+    command: list[str],
+    interposer: Interposer,
+    grace_s: float = DEFAULT_GRACE_S,
+    stopper: ChildStopper | None = None,
+) -> int:
     try:
         import uvicorn
     except ModuleNotFoundError:
@@ -1105,6 +1347,8 @@ async def _serve_http(args: argparse.Namespace, command: list[str], interposer: 
     if command:
         # The server is ours: it starts with us and stops with us.
         proc = await asyncio.create_subprocess_exec(*command, start_new_session=os.name == "posix")
+        if stopper is not None:
+            stopper.attach(proc)
     host, _, port = args.listen.rpartition(":")
     app = HttpInterposer(interposer, args.upstream)
     config = uvicorn.Config(app, host=host or "127.0.0.1", port=int(port), log_level="warning",
@@ -1124,7 +1368,7 @@ async def _serve_http(args: argparse.Namespace, command: list[str], interposer: 
         code = 0
         if proc is not None:
             _signal_child(proc, signal.SIGTERM)
-            code = await stop_child(proc, grace_s=args.grace)
+            code = await stop_child(proc, grace_s=grace_s)
     return code
 
 

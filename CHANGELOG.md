@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Suspension reaches the workers the gate cannot see (TI-25).**
+  `MandateGate(on_suspend=...)` (also `mandate_gate(...)` and
+  `gate.add_suspend_hook()`) calls your hooks once when a snapshot moves the
+  agent into `suspended`, so you can stop your own queue's consumers or
+  workflow runs: Redis, NATS, Celery revoke, Temporal cancel. Examples are in
+  `byoai.recorder.suspend`; none of those libraries is a dependency. Hooks may
+  be sync or async; each one's return, failure or time-out is written to the
+  ledger as a `worker_stop_ack` event (new `EventKind.WORKER_STOP_ACK`) with
+  when it was called and when it answered. A gate with no hook behaves as
+  before.
+- `coriqo-mcp` stops the server it started when the agent is suspended:
+  SIGTERM to its process group, then SIGKILL to anything left after the grace
+  period (`--grace`, else the mandate file's `x-stop_grace_s` extension, else
+  5 seconds), and records the exit as a `worker_stop_ack`. An agent already
+  suspended at start-up never has its server started. Either way
+  `coriqo-mcp` exits with status 3. New flags: `--on-suspend MODULE:FUNCTION`
+  (repeatable) and `--on-suspend-timeout`. On the way out, `coriqo-mcp` now
+  sends the ledger's unsent entries once more (`Recorder.close(final_ship=True)`),
+  so the record of the stop reaches Coriqo in the same run instead of waiting
+  for the next one.
 - **`coriqo-mcp`: check an MCP server's tool calls against a mandate.**
   `coriqo-mcp --mandate coriqo.mandate.yaml -- <server command>` (stdio) or
   `--http --upstream <url>` (streamable HTTP and SSE). Each `tools/call` goes
