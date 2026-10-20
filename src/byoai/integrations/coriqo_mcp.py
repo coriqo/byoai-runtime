@@ -481,13 +481,38 @@ class ChildStopper:
     # the hook stays inside its timeout budget (grace + 15s).
     START_WAIT_S = 2.0
 
-    def __init__(self, grace_s: float = DEFAULT_GRACE_S) -> None:
-        self.grace_s = grace_s
+    def __init__(
+        self,
+        grace_s: float | None = DEFAULT_GRACE_S,
+        *,
+        mandate_grace: Callable[[], float | None] | None = None,
+        fallback_s: float = DEFAULT_GRACE_S,
+    ) -> None:
+        # ``grace_s`` is an explicit local setting (--grace) and wins. Without
+        # one, the mandate's stop_grace_s is read when the suspension lands
+        # (the snapshot that carries the suspension carries it too), then
+        # ``fallback_s`` (a file's legacy x-stop_grace_s, or 5 seconds).
+        self._explicit = grace_s
+        self._mandate_grace = mandate_grace
+        self._fallback = fallback_s
         self.triggered = False
         self.ack: WorkerAck | None = None
         self._proc: asyncio.subprocess.Process | None = None
         self._attached = asyncio.Event()
         self._late_stop: asyncio.Task | None = None
+
+    @property
+    def grace_s(self) -> float:
+        if self._explicit is not None:
+            return self._explicit
+        from_mandate = self._mandate_grace() if self._mandate_grace is not None else None
+        return from_mandate if from_mandate is not None else self._fallback
+
+    @property
+    def hook_timeout_s(self) -> float:
+        """The hook's timeout budget: the grace period plus 15s, sized for the
+        longest grace a mandate may set when the grace comes from the mandate."""
+        return (self._explicit if self._explicit is not None else MAX_GRACE_S) + 15.0
 
     def attach(self, proc: asyncio.subprocess.Process) -> None:
         """The server is running. If the suspension already arrived and the
@@ -1043,7 +1068,7 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--grace", type=float, default=None,
         help="seconds the server gets to exit after SIGTERM before it is killed "
-        "(default: the mandate file's x-stop_grace_s, else 5)",
+        "(default: the mandate's stop_grace_s, else the file's x-stop_grace_s, else 5)",
     )
     p.add_argument(
         "--on-suspend", action="append", default=[], metavar="MODULE:FUNCTION",
@@ -1069,23 +1094,26 @@ def _split_command(argv: list[str]) -> tuple[list[str], list[str]]:
 
 
 def mandate_grace_s(document: Any, where: str = "the mandate file") -> float | None:
-    """The file's ``x-stop_grace_s``, if it sets a usable one.
-
-    An ``x-`` field is an extension under MANDATE_SPEC.md §3: readers may
-    ignore it, and it is not part of the document hash.
+    """The file's stop grace period, if it sets a usable one: the v1.1 field
+    ``stop_grace_s`` (sealed in the document hash), else the older
+    ``x-stop_grace_s`` extension, which readers may ignore and which is not
+    part of the hash (MANDATE_SPEC.md §3).
     """
-    if not isinstance(document, dict) or "x-stop_grace_s" not in document:
+    if not isinstance(document, dict):
         return None
-    value = document["x-stop_grace_s"]
+    key = "stop_grace_s" if document.get("stop_grace_s") is not None else "x-stop_grace_s"
+    if key not in document:
+        return None
+    value = document[key]
     if (
         isinstance(value, bool)
         or not isinstance(value, (int, float))
         or not 0 < value <= MAX_GRACE_S
     ):
         log.warning(
-            "coriqo-mcp: %s: x-stop_grace_s must be a number of seconds above 0 and "
+            "coriqo-mcp: %s: %s must be a number of seconds above 0 and "
             "at most %g; ignoring it",
-            where, MAX_GRACE_S,
+            where, key, MAX_GRACE_S,
         )
         return None
     return float(value)
@@ -1269,13 +1297,20 @@ async def _amain(args: argparse.Namespace, command: list[str]) -> int:
     except (ByoAIError, ValueError) as exc:
         print(f"coriqo-mcp: {exc}", file=sys.stderr)
         return 2
+    # Normal shutdown (stdin closed) uses the local setting, the file's legacy
+    # x-stop_grace_s, then 5s. A suspension uses the stopper's own rule, which
+    # puts the mandate's stop_grace_s ahead of the file extension.
     grace = args.grace if args.grace is not None else (file_grace or DEFAULT_GRACE_S)
     # Registered before the first fetch: a mandate that is already suspended
     # when coriqo-mcp starts must reach the hooks too.
     for spec, hook in hooks:
         gate.add_suspend_hook(hook, name=spec, timeout_s=args.on_suspend_timeout)
-    stopper = ChildStopper(grace)
-    gate.add_suspend_hook(stopper, name="mcp-server", timeout_s=grace + 15.0)
+    stopper = ChildStopper(
+        args.grace,
+        mandate_grace=lambda: gate.snapshot.stop_grace_s if gate.snapshot is not None else None,
+        fallback_s=file_grace or DEFAULT_GRACE_S,
+    )
+    gate.add_suspend_hook(stopper, name="mcp-server", timeout_s=stopper.hook_timeout_s)
     try:
         record = _build_recorder(args, coriqo_agent_id)
     except ModuleNotFoundError as exc:
@@ -1321,7 +1356,7 @@ async def _amain(args: argparse.Namespace, command: list[str]) -> int:
     finally:
         # The hooks write their acknowledgements to the record; let them
         # finish before it closes.
-        if not await gate.suspend_hooks.wait(max(args.on_suspend_timeout, grace + 15.0) + 5.0):
+        if not await gate.suspend_hooks.wait(max(args.on_suspend_timeout, stopper.hook_timeout_s) + 5.0):
             log.warning("coriqo-mcp: an on_suspend hook was still running at exit")
         await gate.stop()
         if record is not None:

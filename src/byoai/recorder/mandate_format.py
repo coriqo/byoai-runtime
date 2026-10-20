@@ -1,4 +1,4 @@
-"""Reference reader for the Coriqo mandate file, `coriqo.mandate.yaml` v1.
+"""Reference reader for the Coriqo mandate file, `coriqo.mandate.yaml` v1 (revision 1.1).
 
 MANDATE_SPEC.md is the format. This module is its reference implementation:
 what a document must look like, the defaults a reader applies, and the
@@ -26,7 +26,7 @@ from typing import Any
 
 SPEC_NAME = "coriqo.mandate"
 SPEC_MAJOR = 1
-SPEC_MINOR = 0  # the newest v1 revision this reader knows
+SPEC_MINOR = 1  # the newest v1 revision this reader knows
 SPEC_ID = f"{SPEC_NAME}/v{SPEC_MAJOR}"
 MAX_FILE_BYTES = 256 * 1024
 
@@ -46,10 +46,12 @@ MAX_STEPS = 1_000_000
 MAX_COST_USD = Decimal("999999.999999")
 MAX_TOOLS = 500
 MAX_MANDATE_CHARS = 20000
+MIN_STOP_GRACE_S, MAX_STOP_GRACE_S = 1, 600  # v1.1
 
 # What a reader that enforces from the file alone applies to a field the file
 # leaves out. A field missing here (environment, mandate, tools.allowed, the
-# two budgets) has no default: absent means "not set" (no allow-list, no limit).
+# two budgets, stop_grace_s) has no default: absent means "not set" (no
+# allow-list, no limit, the runtime's own grace period).
 DEFAULTS: dict[str, Any] = {
     "mode": "shadow",
     "on_stale_snapshot": "fail_open",
@@ -65,6 +67,7 @@ _TOP_KEYS = (
     "spec", "agent", "environment", "mandate", "mode", "on_stale_snapshot",
     "max_staleness_s", "tools", "max_steps_per_run", "max_cost_usd",
     "delegation", "output_inspection", "on_violation",
+    "stop_grace_s",  # v1.1
 )
 _AGENT_KEYS = ("name", "id", "external_id")
 
@@ -249,6 +252,9 @@ def check(doc: Any) -> tuple[list[str], list[str]]:
                 if key in oi:
                     _enum(oi[key], f"output_inspection.{key}", allowed_values, errors)
             _unknown(oi, tuple(INSPECTION_SWITCHES), "output_inspection", newer, errors, warnings)
+
+    if doc.get("stop_grace_s") is not None:
+        _int_range(doc["stop_grace_s"], "stop_grace_s", MIN_STOP_GRACE_S, MAX_STOP_GRACE_S, errors)
     return errors, warnings
 
 
@@ -278,14 +284,18 @@ def normalise(doc: dict) -> dict:
     Call on a document check() accepted. Tool lists are sorted with
     duplicates removed, mandate text has its line endings turned into \\n and
     trailing whitespace removed, max_cost_usd becomes a decimal string, and
-    x- extension fields and fields from a newer revision are dropped."""
+    x- extension fields and fields from a newer revision are dropped.
+
+    A field added after v1.0 (stop_grace_s) is in the result only when the
+    document sets it, so a document that leaves it out hashes exactly as it
+    did under v1.0."""
     agent = doc.get("agent") or {}
     tools = doc.get("tools") or {}
     dele = {**DEFAULTS["delegation"], **(doc.get("delegation") or {})}
     oi = {**DEFAULTS["output_inspection"], **{
         k: v for k, v in (doc.get("output_inspection") or {}).items() if k in INSPECTION_SWITCHES
     }}
-    return {
+    out = {
         "spec": SPEC_ID,
         "agent": {
             "name": agent.get("name"),
@@ -307,6 +317,9 @@ def normalise(doc: dict) -> dict:
         "output_inspection": oi,
         "on_violation": doc.get("on_violation", DEFAULTS["on_violation"]),
     }
+    if doc.get("stop_grace_s") is not None:
+        out["stop_grace_s"] = doc["stop_grace_s"]
+    return out
 
 
 def merge(current: dict, incoming: dict) -> dict:
@@ -329,7 +342,9 @@ def merge(current: dict, incoming: dict) -> dict:
 def changes(before: dict, after: dict) -> list[dict]:
     """The mandate fields that differ between two valid documents, compared in
     normalised form, as [{"field": "tools.prohibited", "old": ..., "new": ...}]
-    in the order of section 6.1. Identity (spec, agent) is not compared."""
+    in the order of section 6.1. Identity (spec, agent) is not compared. A
+    field only one side has (one added after v1.0, set on that side alone)
+    is compared too, with None for the side that leaves it out."""
     def flat(doc: dict) -> dict:
         out: dict = {}
         for key, value in normalise(doc).items():
@@ -341,7 +356,8 @@ def changes(before: dict, after: dict) -> list[dict]:
                 out[key] = value
         return out
     a, b = flat(before), flat(after)
-    return [{"field": k, "old": a[k], "new": b[k]} for k in a if a[k] != b[k]]
+    keys = list(a) + [k for k in b if k not in a]
+    return [{"field": k, "old": a.get(k), "new": b.get(k)} for k in keys if a.get(k) != b.get(k)]
 
 
 def canonical_bytes(obj: Any) -> bytes:

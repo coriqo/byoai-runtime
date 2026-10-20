@@ -255,3 +255,25 @@ def test_proposed_action_with_ti20_snapshot_keeps_budget_order():
     second = g.decide(ProposedAction(tool="search", trajectory_id="t", step_index=1))
     assert isinstance(second, Deny)
     assert second.reason == Reason.BUDGET_STEP_LIMIT_EXCEEDED
+
+
+def test_stop_grace_s_is_read_from_the_snapshot_and_bad_values_are_ignored():
+    from byoai.recorder.mandate import MandateSnapshot
+
+    def snap(**extra):
+        return MandateSnapshot.from_payload({"allowed_tools": None, **extra}, received_at=0.0)
+
+    assert snap().stop_grace_s is None  # absent: the runtime's default applies
+    assert snap(stop_grace_s=45).stop_grace_s == 45.0
+    for bad in (0, 601, -1, True, "10"):
+        assert snap(stop_grace_s=bad).stop_grace_s is None
+
+
+def test_a_files_stop_grace_s_reaches_the_snapshot_payload():
+    from byoai.recorder.mandate_file import snapshot_payload
+
+    base = {"mode": "enforce", "on_stale_snapshot": "fail_open", "max_staleness_s": 300,
+            "tools": {"allowed": None, "prohibited": []}, "on_violation": "deny",
+            "delegation": {"policy": "none", "max_depth": 3}, "output_inspection": {}}
+    assert "stop_grace_s" not in snapshot_payload(base, sha256="0" * 64)
+    assert snapshot_payload({**base, "stop_grace_s": 30}, sha256="0" * 64)["stop_grace_s"] == 30

@@ -122,6 +122,8 @@ def snapshot_payload(normalised: Mapping[str, Any], *, sha256: str) -> dict[str,
         "environment": normalised.get("environment"),
         "on_violation": normalised["on_violation"],
         "output_inspection": dict(normalised.get("output_inspection") or {}),
+        # v1.1: present in the normalised document only when the file sets it.
+        **({"stop_grace_s": normalised["stop_grace_s"]} if normalised.get("stop_grace_s") is not None else {}),
         "status": "active",
         "scope_source": "mandate_file",
     }

@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from byoai.recorder import mandate_format
-from byoai.recorder.mandate import Allow, Deny, Flag, MandateError, Posture, Reason
+from byoai.recorder.mandate import Allow, Deny, Flag, MandateError, MandateGate, Posture, Reason
 from byoai.recorder.mandate_file import (
     file_mandate_gate,
     file_mandate_source,
@@ -22,7 +22,7 @@ from .test_mandate import FakeClock
 #: SHA-256 of seal-verifier/mandate_format.py in the coriqo repo at the
 #: version copied here. The reader is copied byte-for-byte; to update it,
 #: re-copy the file and change this constant in the same commit.
-REFERENCE_READER_SHA256 = "5155c5ba571e279c751e9c5287fc982c1b968875959ca1ef448247201c7dab89"
+REFERENCE_READER_SHA256 = "848461da509fe1ab0229849fc1ab38cac7f8382fef696ef108672e7acdd722fb"
 
 VENDORED = Path(mandate_format.__file__)
 
@@ -190,3 +190,19 @@ def test_yaml_off_must_be_quoted():
     with pytest.raises(MandateError) as info:
         load_mandate_text(MINIMAL + "output_inspection:\n  pii: off\n")
     assert "quotes" in str(info.value)
+
+
+def test_a_v1_1_file_carries_stop_grace_s_into_the_gate():
+    from byoai.integrations.coriqo_mcp import mandate_grace_s
+    from byoai.recorder.mandate_file import load_mandate_text
+
+    text = "spec: coriqo.mandate/v1.1\nagent:\n  name: loan-bot\nstop_grace_s: 20\n"
+    loaded = load_mandate_text(text)
+    assert loaded.normalised["stop_grace_s"] == 20
+    gate = MandateGate(lambda _etag: None, agent_id="loan-bot")
+    gate.apply_snapshot(loaded.payload(), etag=loaded.sha256)
+    assert gate.snapshot.stop_grace_s == 20.0
+    assert mandate_grace_s(loaded.document) == 20.0
+    # Unset: absent from the normalised document, so the v1.0 hash is unchanged.
+    plain = load_mandate_text("spec: coriqo.mandate/v1\nagent:\n  name: loan-bot\n")
+    assert "stop_grace_s" not in plain.normalised and "stop_grace_s" not in plain.payload()

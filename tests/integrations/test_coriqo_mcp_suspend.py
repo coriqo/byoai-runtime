@@ -258,3 +258,33 @@ def test_cli_refuses_a_hook_it_cannot_load(tmp_path):
     )
     assert proc.returncode == 2
     assert b"no_such_module_ti25" in proc.stderr
+
+
+# -- the grace period the bank set (mandate format v1.1 stop_grace_s) --------
+
+
+@posix_only
+async def test_the_mandates_stop_grace_is_used_when_no_local_one_is_given():
+    proc = await _spawn(STUBBORN)
+    stopper = ChildStopper(None, mandate_grace=lambda: 0.5, fallback_s=30.0)
+    stopper.attach(proc)
+    ack = await stopper(NOTICE)
+    assert ack.outcome == WorkerOutcome.KILLED and ack.grace_s == 0.5
+    assert ack.elapsed_s is not None and 0.5 <= ack.elapsed_s < 5
+
+
+def test_grace_precedence_and_hook_budget():
+    assert ChildStopper(2.0, mandate_grace=lambda: 9.0).grace_s == 2.0  # --grace wins
+    assert ChildStopper(None, mandate_grace=lambda: 9.0, fallback_s=4.0).grace_s == 9.0
+    assert ChildStopper(None, mandate_grace=lambda: None, fallback_s=4.0).grace_s == 4.0
+    assert ChildStopper(None).grace_s == coriqo_mcp.DEFAULT_GRACE_S
+    # The budget fits the longest grace a mandate may set, unless --grace fixed it.
+    assert ChildStopper(2.0).hook_timeout_s == 17.0
+    assert ChildStopper(None).hook_timeout_s == coriqo_mcp.MAX_GRACE_S + 15.0
+
+
+def test_a_files_stop_grace_field_wins_over_the_extension():
+    assert coriqo_mcp.mandate_grace_s({"stop_grace_s": 12, "x-stop_grace_s": 40}) == 12.0
+    assert coriqo_mcp.mandate_grace_s({"x-stop_grace_s": 40}) == 40.0
+    assert coriqo_mcp.mandate_grace_s({"stop_grace_s": 9999}) is None
+    assert coriqo_mcp.mandate_grace_s({}) is None
