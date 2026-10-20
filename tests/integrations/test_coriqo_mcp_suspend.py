@@ -111,9 +111,37 @@ async def test_whatever_the_server_started_is_stopped_too():
 
 
 async def test_nothing_running_is_recorded_as_such():
-    ack = await ChildStopper()(NOTICE)
+    stopper = ChildStopper()
+    stopper.START_WAIT_S = 0.05
+    ack = await stopper(NOTICE)
     assert ack.outcome == WorkerOutcome.NOT_RUNNING
     assert ack.worker == "mcp-server"
+    assert ack.detail and "stopped the moment it starts" in ack.detail
+
+
+@posix_only
+async def test_a_server_still_starting_is_waited_for_then_stopped():
+    stopper = ChildStopper(grace_s=0.5)
+    hook = asyncio.create_task(stopper(NOTICE))
+    await asyncio.sleep(0.1)  # the suspension lands before the server is attached
+    proc = await _spawn(STUBBORN)
+    stopper.attach(proc)
+    ack = await hook
+    assert ack.outcome == WorkerOutcome.KILLED and ack.signal == "SIGKILL"
+    assert ack.worker == f"mcp-server pid {proc.pid}"
+
+
+@posix_only
+async def test_a_server_that_starts_after_the_hook_answered_gets_the_full_stop():
+    stopper = ChildStopper(grace_s=0.5)
+    stopper.START_WAIT_S = 0.05
+    first = await stopper(NOTICE)
+    assert first.outcome == WorkerOutcome.NOT_RUNNING
+    proc = await _spawn(STUBBORN)  # ignores SIGTERM: only SIGKILL stops it
+    stopper.attach(proc)
+    late = await stopper._late_stop
+    assert late.outcome == WorkerOutcome.KILLED and late.signal == "SIGKILL"
+    assert proc.returncode == -signal.SIGKILL
 
 
 # -- end to end over stdio ---------------------------------------------------

@@ -477,24 +477,37 @@ class ChildStopper:
     and the last signal sent, which the gate records to the ledger.
     """
 
+    # How long the hook waits for a server that is still starting. Short, so
+    # the hook stays inside its timeout budget (grace + 15s).
+    START_WAIT_S = 2.0
+
     def __init__(self, grace_s: float = DEFAULT_GRACE_S) -> None:
         self.grace_s = grace_s
         self.triggered = False
         self.ack: WorkerAck | None = None
         self._proc: asyncio.subprocess.Process | None = None
+        self._attached = asyncio.Event()
+        self._late_stop: asyncio.Task | None = None
 
     def attach(self, proc: asyncio.subprocess.Process) -> None:
-        """The server is running. If the suspension already arrived, it is
-        stopped straight away."""
+        """The server is running. If the suspension already arrived and the
+        hook has answered, the server gets the full stop now (SIGTERM, then
+        SIGKILL after the grace period), not a bare SIGTERM."""
         self._proc = proc
-        if self.triggered:
-            _signal_child(proc, signal.SIGTERM)
+        self._attached.set()
+        if self.triggered and self.ack is not None:
+            self._late_stop = asyncio.ensure_future(self._stop(proc, utc_now()))
 
     async def __call__(self, notice: SuspendNotice) -> WorkerAck:
         self.triggered = True
         notified_at = utc_now()
-        started = time.monotonic()
         proc = self._proc
+        if proc is None:
+            # Starting: wait briefly for attach() rather than record "not
+            # running" for a server about to run.
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self._attached.wait(), self.START_WAIT_S)
+            proc = self._proc
         if proc is None or proc.returncode is not None:
             self.ack = WorkerAck(
                 worker="mcp-server" if proc is None else f"mcp-server pid {proc.pid}",
@@ -505,6 +518,8 @@ class ChildStopper:
                 elapsed_s=0.0,
                 exit_code=None if proc is None else proc.returncode,
                 grace_s=self.grace_s,
+                detail=("not started yet; it is stopped the moment it starts"
+                        if proc is None else None),
             )
             return self.ack
         print(
@@ -512,6 +527,12 @@ class ChildStopper:
             f"the server (SIGTERM, then SIGKILL after {self.grace_s:g}s)",
             file=sys.stderr,
         )
+        self.ack = await self._stop(proc, notified_at)
+        return self.ack
+
+    async def _stop(self, proc: asyncio.subprocess.Process, notified_at: Any) -> WorkerAck:
+        """SIGTERM the group, SIGKILL whatever is left after the grace period."""
+        started = time.monotonic()
         deadline = started + self.grace_s
         last = "SIGTERM"
         _signal_child(proc, signal.SIGTERM)
@@ -539,7 +560,7 @@ class ChildStopper:
             # moment so "acknowledged" means the whole group is gone.
             await _wait_group_gone(proc.pid, time.monotonic() + 2.0)
         exited = proc.returncode is not None
-        self.ack = WorkerAck(
+        return WorkerAck(
             worker=f"mcp-server pid {proc.pid}",
             kind="process",
             outcome=WorkerOutcome.KILLED if killed else WorkerOutcome.EXITED,
@@ -555,7 +576,6 @@ class ChildStopper:
                 if killed and leader_exited else None
             ),
         )
-        return self.ack
 
 
 def _install_stop_signals(
