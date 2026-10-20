@@ -184,6 +184,7 @@ def ledger_payload(
     argument_count: int | None = None,
     decided_at: str | None = None,
     effective_scope: EffectiveScope | None = None,
+    arguments_sha256: str | None = None,
 ) -> dict[str, Any]:
     """The fuller local record: the wire fields plus what only an operator sees.
 
@@ -191,6 +192,11 @@ def ledger_payload(
     as a repeat rather than as another first denial, and ``detail`` is the
     operator sentence that is deliberately kept away from the model.
     ``argument_count`` is a count and never the arguments.
+
+    ``arguments_sha256`` (TI-21) is the SHA-256 of the canonical JSON of the
+    arguments, for a caller that hashes them (``coriqo-mcp`` does). The key is
+    added only when a hash is given, so every record written without one keeps
+    exactly the payload it had before.
 
     ``run_id``/``principal`` are passed in rather than read off ``latched``,
     which only exists for denials. An allow that did not name its run cannot be
@@ -238,6 +244,8 @@ def ledger_payload(
             "on_behalf_of": on_behalf_of,
         }
     )
+    if arguments_sha256 is not None:
+        payload["arguments_sha256"] = arguments_sha256
     return payload
 
 
@@ -448,9 +456,16 @@ class VerdictRecorder:
         device_id: str | None = None,
         session_id: str = "mandate",
         trace_id: str | None = None,
+        checkpointer: Any | None = None,
     ) -> None:
+        """``checkpointer`` (TI-21) is a
+        :class:`~byoai.recorder.checkpoint.Checkpointer` over the same ledger.
+        When given, every verdict appended is noted to it, so verdicts get the
+        device-signed checkpoints that the recorder's own events get. Without
+        one, nothing changes."""
         self._ledger = ledger
         self._outbox = outbox
+        self._checkpointer = checkpointer
         self._device_id = device_id or (ledger.device_id if ledger else "unknown-device")
         self._session_id = session_id
         self._trace_id = trace_id or new_trace_id()
@@ -473,6 +488,7 @@ class VerdictRecorder:
         principal: str | None = None,
         argument_count: int | None = None,
         effective_scope: EffectiveScope | None = None,
+        arguments_sha256: str | None = None,
     ) -> LedgerEntry | None:
         """Record one verdict. Returns the ledger entry, if one was written.
 
@@ -497,8 +513,11 @@ class VerdictRecorder:
                 argument_count=argument_count,
                 decided_at=decided_at,
                 effective_scope=effective_scope,
+                arguments_sha256=arguments_sha256,
             )
             entry = self._append(verdict, payload)
+            if entry is not None and self._checkpointer is not None:
+                self._checkpointer.note(entry.seq)
             self._enqueue(agent_id, verdict, decided_at)
             return entry
         except Exception:  # noqa: BLE001 - policy: recording never breaks a call

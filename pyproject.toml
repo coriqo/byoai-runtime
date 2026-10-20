@@ -68,7 +68,11 @@ shield = ["cryptography>=42"]
 # `cryptography` (also in `shield`) to sign policy envelopes.
 shield-server = ["fastapi>=0.100", "uvicorn>=0.30", "cryptography>=42"]
 receipts = ["coriqo-agents[receipts]"]
-all = ["byoai-runtime[fastapi,robyn,mcp,flask,perf,semantic,redis,pgvector,otel,bedrock,bedrock-agent,vertex,agent-context-cache,shield-server,recorder,shield]"]
+# `coriqo-mcp`: the MCP interposer. `cryptography` signs its ledger with the
+# device key, PyYAML reads a coriqo.mandate.yaml (a JSON mandate needs neither),
+# and uvicorn serves --http mode.
+coriqo-mcp = ["cryptography>=42", "pyyaml>=6", "uvicorn>=0.30"]
+all = ["byoai-runtime[fastapi,robyn,mcp,flask,perf,semantic,redis,pgvector,otel,bedrock,bedrock-agent,vertex,agent-context-cache,shield-server,coriqo-mcp,recorder,shield]"]
 docs = ["mkdocs-material>=9.5", "mkdocstrings[python]>=0.25"]
 dev = [
     "pytest>=8.0",
@@ -91,6 +95,7 @@ byoai-recorder-enroll = "byoai.recorder.enroll:enroll_cli"
 byoai-recorder-rotate-key = "byoai.recorder.rotation:rotate_cli"
 byoai-shield = "byoai.integrations.shield_launcher:main"
 byoai-shield-server = "byoai.shield_server.cli:main"
+coriqo-mcp = "byoai.integrations.coriqo_mcp:main"
 
 [project.urls]
 Homepage = "https://github.com/ravikings/byoai-runtime"
@@ -128,3 +133,8 @@ src = ["src", "tests"]
 select = ["E", "F", "I", "UP", "B", "ASYNC"]
 # B008: `Depends(...)` in argument defaults is the standard FastAPI idiom.
 ignore = ["B008"]
+
+[tool.ruff.lint.per-file-ignores]
+# Copied byte-for-byte from coriqo-seal-verifier's reference reader; a test
+# fails if it drifts, so it is not reformatted here.
+"src/byoai/recorder/mandate_format.py" = ["E501"]

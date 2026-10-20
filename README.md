@@ -276,6 +276,134 @@ byoai-shield examples/mcp_capture/captures.jsonl      # or point it at another l
 | `src/byoai/browser_extension/` | Chrome (MV3) extension that records agent chat sends in the browser (claude.ai, chatgpt.com, gemini.google.com, copilot.microsoft.com) into the same ledger. Load it unpacked from `chrome://extensions` → Developer mode → Load unpacked; it ships text-free facts to `POST /api/browser` on `127.0.0.1:17831` (endpoint configurable, enforced local-only, in the popup). On claude.ai and chatgpt.com it also applies Shield's mode in the page, before the message leaves the browser: what happens comes from the policy's `actions` (see "Privacy-first by default"): by default a detected secret stops the send (a `403`), personal details (emails, card and phone numbers, SSN-like numbers, wallet addresses) become numbered placeholders such as `[EMAIL_1]`, and flag-tier hits are only recorded; in *Record only* (`observe`) the message goes out unchanged. A tier set to *warn* holds the send behind a small bar in the page (*Send redacted*, *Send anyway*, *Cancel*; no answer in 60 s cancels, and the original is never sent on a timeout). The mode, actions and per-app toggles come from the paired Shield's `GET /api/policy` (defaults until it has heard from Shield), and an app switched off there is left alone. The rules are the desktop proxy's own: `shield-rules.js` is generated from `byoai.integrations.shield` by `python scripts/gen_extension_rules.py`, a test fails if it is stale, and `tests/fixtures/shield_redaction_cases.json` is checked against both the Python and the extension code. Gemini and Copilot send form-encoded or websocket traffic the extension can't safely rewrite on the network, so there the network layer records only; the input gate (0.10.0: it checks the message and files when you send, before the page's code runs, and uses `sites.json` for each app's message box and send button) covers them like the others. A file attached in the page is recorded as a fact (`browser.chat.attachment`: type and size), never read or scanned. If three send-looking POSTs to a chat host go unrecognised in ten minutes with none inspected, the extension emits `browser.health.unmatched` (a path prefix, no body) and the popup says Shield may be out of date for that app. The message text itself never leaves the page: what lands in the ledger is "a message was sent, N characters", plus the names of the rules it matched and what was replaced (`flags`, `redactions`, `verdict`; the server keeps only known rule names), sealed like every other row. From a copy of the reply stream it also records which tools the AI ran on its own servers for that reply (`tools`, e.g. `web.run` for ChatGPT's web search, and `sources`, how many sites a search returned), attached to and sealed with the message; Shield shows them as "Web search", "Code run" and so on. That is a record, not a control: those tools run after the message has left, so turning them off is a setting of the ChatGPT or Claude workspace. Version 0.6 asks for agreement again, since rewriting messages is new. Rows obey the per-app policy toggles, the queue survives service-worker restarts (session storage, 50-row cap), and retries are deduped by row id. Unpacked, it has a fixed extension ID (`jbbongpiablbbmfflcaafjbeejeododc`, set by the `key` in its manifest), so `BYOAI_SHIELD_EXTENSION_IDS` can be set once for every install; a Chrome Web Store copy gets the store's own ID, which the popup shows under Details. `python scripts/package_extension.py --minify` (or `npm run build:extension` from `web/`) builds the store zip, `dist/coriqo-shield-<version>.zip`, with every script minified and no sourcemaps; the readable source stays in this repo. Nothing is recorded until you agree: installing opens a welcome page that says exactly what is noted, and capture stays off until you choose *Agree and turn on capture* (the popup's *Turn capture off* reverses it and clears anything waiting). It pairs with your Shield the first time it connects (Shield signs a fresh nonce with its device key; the extension pins the public key), and afterwards refuses to send anything to a different program listening on the same port. If Shield's sealed count is ever lower than the extension remembers, the popup warns and keeps warning (badge `!`) until you press Accept, even when the count later catches up. A Shield too old to answer the pairing check is retried every 30 seconds and recovers on its own once updated and restarted. Its popup shows reachability, whether it is talking to *your* Shield, when the last message on the current tab was noted, the seal chain height, the id to pin trust, and a direct link to the Shield UI (`/shield`), which is where the full experience lives (the extension itself has no timeline by design — the local server already has one). See its data-protection record in `src/byoai/browser_extension/PRIVACY.md`; real-browser end-to-end tests live in `web/tests/extension/` (they skip themselves unless a Chromium is available — see `CHROMIUM_PATH` in CONFIGURATION.md). |
 | `examples/ui/keepalive.sh` | launchd-friendly supervisor for the three surfaces (MCP gateway, capture proxy, shield): runs them as a group and exits nonzero if any dies, so `com.coriqo.keepalive` (see the script header) restarts what's missing — survives crashes and reboots. |
 
+### `coriqo-mcp` — check an MCP server's tool calls against a mandate
+
+`coriqo-mcp` sits between an MCP host (Claude Desktop, an agent framework, your
+own client) and an MCP server. Each `tools/call` is checked against a mandate
+file before the server sees it, each decision is written to the device-signed
+ledger, and under `enforce` a call outside the mandate is answered with an
+error and never reaches the server. It runs on your machine, from this
+open-source package. Coriqo's service is not on the path of a call: the
+mandate is a local file (or a cached copy of the approved mandate, refreshed
+in the background), and the check reads memory.
+
+**Install**
+
+```bash
+pip install --pre "byoai-runtime[coriqo-mcp]"
+```
+
+**Run it.** Put `coriqo-mcp --mandate <file> --` in front of the command you
+already use to start the server:
+
+```bash
+coriqo-mcp --mandate coriqo.mandate.yaml -- npx -y @modelcontextprotocol/server-filesystem ~/work
+```
+
+In an MCP host's config, that means `command: "coriqo-mcp"` and the rest as
+`args`. `coriqo-mcp` starts the server as its child process, relays stdio, and
+stops the server (SIGTERM, then SIGKILL after `--grace` seconds) when the host
+disconnects or `coriqo-mcp` is told to stop.
+
+For a server you reach over HTTP (streamable HTTP or SSE), relay it instead:
+
+```bash
+coriqo-mcp --mandate coriqo.mandate.yaml --http \
+  --upstream http://127.0.0.1:9000 --listen 127.0.0.1:8808
+# point the host at http://127.0.0.1:8808/mcp (same path as the server's)
+```
+
+Add `-- <server command>` to have `coriqo-mcp` start and stop that server too.
+
+**The mandate file** is `coriqo.mandate.yaml` v1, the open format published
+with the Coriqo seal verifier (`MANDATE_SPEC.md`). A short one:
+
+```yaml
+spec: coriqo.mandate/v1
+agent:
+  name: payments-assistant
+mode: shadow            # or enforce
+on_stale_snapshot: fail_open
+tools:
+  allowed: [search, get_balance, transfer_funds]
+  prohibited: [delete_account]
+on_violation: deny      # deny | deny_and_halt_run | alert_only
+```
+
+The file is read with the format's reference reader, copied byte-for-byte into
+`byoai/recorder/mandate_format.py`. An invalid file stops `coriqo-mcp` at start
+with every problem listed. It is re-read in the background; if it later becomes
+unreadable, the last good copy is used until it is older than
+`max_staleness_s`, and then `on_stale_snapshot` decides (`fail_closed` refuses
+every call). Exported files from Coriqo work as they are. To use an agent's
+approved mandate from Coriqo instead of a file, pass `--coriqo-agent-id <id>`
+on an enrolled device.
+
+**Shadow and enforce**
+
+| | `mode: shadow` (the default) | `mode: enforce` |
+|---|---|---|
+| Call inside the mandate | goes through, recorded as `allowed` | goes through, recorded as `allowed` |
+| Call outside the mandate | goes through, recorded as `flagged` | `deny`: refused. `deny_and_halt_run`: refused, and every later call in the session is refused too. `alert_only`: goes through, recorded as `flagged` |
+| `tools/list` | unchanged | only the tools the mandate allows, plus tools waiting on approval (unchanged under `alert_only`) |
+
+A refused call gets an MCP error result whose only text is `This action is not
+permitted.`. It does not name the tool, the rule or the mandate, so the model
+has nothing to work around. The operator detail is in the record and in the
+log (`-v`).
+
+**What is recorded.** For each `tools/call`: the tool name, the decision and
+its reason, the mandate's hash (`sha256:…` of the file, as in
+`MANDATE_SPEC.md` §6), the session, the step number and a SHA-256 of the call's
+arguments (RFC 8785 canonical JSON). The arguments themselves are not
+recorded. A hash of short or guessable arguments can be confirmed by someone
+who guesses them, so treat the record as no more public than the arguments.
+Events go to `~/.byoai/recorder/ledger.db` (or `--recorder-dir`), with
+device-signed checkpoints, and `coriqo-verify` checks the ledger offline. On a
+device enrolled with Coriqo (`byoai-recorder-enroll`), and for an agent Coriqo
+knows (`agent.id` in the file, or `--coriqo-agent-id`), each decision is also
+sent to Coriqo's verdict endpoint every few seconds: the tool, the decision,
+the reason, the mandate version and the step. The arguments hash stays in the
+local ledger. Unsent decisions wait in `coriqo_mcp_verdicts.db` next to the
+ledger and go on the next run. Without enrolment, `coriqo-mcp` says at start
+that decisions stay local.
+
+**What is checked, and what is not**
+
+- Checked: every `tools/call` (single or in a batch), against the allow-list,
+  the prohibited list, `max_steps_per_run` (per session), the environment
+  (`--environment` or `BYOAI_MANDATE_ENVIRONMENT`) and the mandate's age. With
+  `--coriqo-agent-id`, also approval-required tools, the call-rate limit and
+  the agent's suspension.
+- Not checked: `max_cost_usd`. An MCP call carries no cost, so there is
+  nothing to count against it.
+- Not checked: resources (`resources/read`), prompts, sampling and elicitation
+  requests from the server, notifications, and the content of a tool's result
+  (`output_inspection` in the file is read and kept, not acted on yet).
+- Not checked: what a tool does once it runs. `coriqo-mcp` decides whether the
+  call reaches the server; it does not watch the server.
+- A host message that is not valid JSON is answered with a parse error and not
+  forwarded, and the server receives the parsed message written out again,
+  never the host's original bytes. Over HTTP, a request body with a
+  `Content-Encoding` is refused, and every request body is gated whatever its
+  HTTP method.
+- The rule covers calls that go through `coriqo-mcp`. A host configured to
+  start the server directly bypasses it.
+
+**Overhead, measured.** `tests/integrations/test_coriqo_mcp_benchmark.py` runs
+in the test suite and prints both numbers with `pytest -s`. On an Apple M2 Pro
+with Python 3.11, five runs of 300 `tools/call` round trips each over stdio,
+with the record on, against a minimal echo server:
+
+| | median per call |
+|---|---|
+| Decision plus ledger write, in process | 0.27 to 1.2 ms |
+| Round trip added by `coriqo-mcp` (direct vs. through it) | 0.5 to 3.2 ms |
+
+The machine was running other work at the time, which is why the ranges are
+wide. These are the only numbers measured so far; run the benchmark on your
+own hardware before relying on them.
+
 ### `byoai-shield` — packaged capture shield (source promotion)
 
 The demo's analyzer, seal chain, and UI backend are promoted into the package

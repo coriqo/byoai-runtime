@@ -85,7 +85,7 @@ from .denial_latch import (
     resolve_principal,
     resolve_run_id,
 )
-from .mandate import Deny, MandateGate, ProposedAction, Verdict
+from .mandate import Deny, MandateGate, ProposedAction, RequireApproval, Verdict
 from .verdicts import verdict_recorder
 
 __all__ = [
@@ -201,6 +201,20 @@ def _check(gate: MandateGate | None, action: ProposedAction) -> Verdict | None:
         raise _denial(latched.verdict, run_id=run_id, latched=latched)
 
     verdict = gate.decide(action)
+    if isinstance(verdict, RequireApproval):
+        # Waiting on a human: refused for now, not latched (the approval can
+        # arrive on a later snapshot), and reported so it reaches the queue.
+        # Before this branch a RequireApproval was returned as if allowed,
+        # because it is neither an Allow nor a Deny, and the tool ran.
+        gate.report_approval_request(verdict)
+        _record(gate, verdict, action, run_id, principal)
+        log.warning(
+            "coriqo: tool call waiting on approval - tool=%r request_id=%s run_id=%s",
+            verdict.tool,
+            verdict.request_id,
+            run_id,
+        )
+        raise MandateDeniedError(verdict)  # type: ignore[arg-type]
     if verdict.allowed or not isinstance(verdict, Deny):
         _record(gate, verdict, action, run_id, principal)
         return verdict

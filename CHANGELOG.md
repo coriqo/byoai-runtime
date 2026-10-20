@@ -8,6 +8,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`coriqo-mcp`: check an MCP server's tool calls against a mandate.**
+  `coriqo-mcp --mandate coriqo.mandate.yaml -- <server command>` (stdio) or
+  `--http --upstream <url>` (streamable HTTP and SSE). Each `tools/call` goes
+  through `MandateGate` and the denial latch; the decision and a SHA-256 of
+  the arguments go to the device-signed ledger; a refused call gets an MCP
+  error result with the fixed sentence and never reaches the server; under
+  `enforce`, `tools/list` shows only allowed tools. Default `mode: shadow`
+  refuses nothing. New extra: `byoai-runtime[coriqo-mcp]`. A benchmark test
+  measures the overhead; the README quotes the measured numbers.
+- The runtime reads `coriqo.mandate.yaml` v1 directly
+  (`byoai.recorder.mandate_file`), with the reference reader vendored
+  byte-for-byte as `byoai/recorder/mandate_format.py` and a test that fails if
+  the copy drifts.
+- Mandate snapshots act on `prohibited_tools`, `on_violation`
+  (`deny`, `deny_and_halt_run`, `alert_only`) and `environment`
+  (`BYOAI_MANDATE_ENVIRONMENT`), and keep `output_inspection` for later. A
+  snapshot without them decides exactly as before.
+- `VerdictRecorder(checkpointer=...)` and `arguments_sha256` on verdict
+  records (added only when a caller passes one).
+
+### Fixed
+- A tool on `approval_required_tools` ran at the proxy seam and through
+  `@governed_tool` while it waited for approval: `RequireApproval` is neither
+  an `Allow` nor a `Deny`, and both seams treated anything that was not a
+  `Deny` as allowed. Both now refuse the call, report the request once, and do
+  not latch it.
+
 ### Changed
 - **Behaviour change: in the default `redact` mode a detected secret now stops
   the send (`403`) instead of being replaced.** Shield's policy has a new

@@ -1,0 +1,5 @@
+spec: coriqo.mandate/v1
+agent:
+  name: payments-assistant
+tools:
+  prohibited: [delete_account]

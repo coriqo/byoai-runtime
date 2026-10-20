@@ -235,6 +235,44 @@ Do not read proxy coverage as total coverage. It covers the tools the model
 chooses, which for a model-driven agent is most of them, and it covers them
 without touching the agent's source. The rest is `@governed_tool`.
 
+## Enforcing in front of an MCP server
+
+`coriqo-mcp` is a third seam, for tools an agent reaches through MCP. It starts
+the MCP server as its own child process and relays the pipe between the host
+and the server, so neither has to change:
+
+```bash
+pip install --pre "byoai-runtime[coriqo-mcp]"
+coriqo-mcp --mandate coriqo.mandate.yaml -- node server.js
+coriqo-mcp --mandate coriqo.mandate.yaml --http --upstream http://127.0.0.1:9000
+```
+
+Each `tools/call` goes through the same `MandateGate`, denial latch and verdict
+recorder as the other two seams. A refused call is answered by `coriqo-mcp`
+with an MCP error result carrying only the fixed sentence, and the server never
+receives it. Under `enforce`, `tools/list` answers are cut down to what the
+mandate allows. Each decision is written to the ledger with a SHA-256 of the
+call's arguments (never the arguments).
+
+`--mandate` reads a `coriqo.mandate.yaml` (v1) directly, so this works with no
+Coriqo account: `mode: shadow` becomes `observe`, `mode: enforce` becomes
+`enforce`, and `mandate_version_id` is the file's document hash. The README's
+`coriqo-mcp` section lists what is and is not checked, and the measured
+overhead.
+
+## Fields a mandate file adds
+
+A snapshot built from a mandate file, or sent by Coriqo for an agent whose
+approved mandate came from one, can carry four more fields. A snapshot without
+them behaves exactly as before; a test pins that.
+
+| Field | Effect |
+|---|---|
+| `prohibited_tools` | Outside the mandate whatever else is allowed, including with no allow-list. Wins over `approval_required_tools`. |
+| `on_violation` | Under `enforce`: `deny` (default) refuses; `deny_and_halt_run` refuses and halts the run on the first denial; `alert_only` allows the call and records it as `flagged` with reason `out_of_scope`. `observe` blocks nothing whatever this says. An unknown value reads as `deny`. |
+| `environment` | Compared only when the gate is told where it runs (`MandateGate(environment=...)`, `--environment`, or `BYOAI_MANDATE_ENVIRONMENT`). A mismatch is decided by posture, with reason `environment_mismatch`. |
+| `output_inspection` | Read and kept, not acted on yet. |
+
 ## Denials do not come back as tool errors
 
 A denied call raises `MandateDeniedError`, which is deliberately not shaped like a failure
@@ -490,5 +528,7 @@ discover them in a demo:
 - **Tool arguments are not part of the record.** `capture_arguments=True` binds
   them onto the `ProposedAction`, but the verdict record keeps only how many
   were captured and never a key or a value, locally or on the wire, because
-  nothing redacts them yet. Until it does, the record says which tool was
-  attempted, not with what.
+  nothing redacts them yet. `coriqo-mcp` adds a SHA-256 of the arguments to the
+  local record, which lets you show a given call was the one recorded. The
+  hash is not salted: anyone who can guess short arguments can confirm the
+  guess against it, so keep the record as private as the arguments.

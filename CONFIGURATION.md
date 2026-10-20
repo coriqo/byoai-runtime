@@ -1445,9 +1445,29 @@ credential that could widen the agent's own mandate is not.
 | --- | --- | --- |
 | `BYOAI_MANDATE_POSTURE` | `fail_open` | `fail_open` or `fail_closed`, used only until the first snapshot names the tenant's own posture |
 | `BYOAI_MANDATE_MAX_STALENESS_S` | `300` | staleness budget used until a snapshot names its own `max_staleness_s` |
+| `BYOAI_MANDATE_ENVIRONMENT` | *(unset)* | where this runtime runs, e.g. `production`. When set, a snapshot whose `environment` names somewhere else is treated as no mandate and the posture decides (reason `environment_mismatch`). Unset: not compared. `MandateGate(environment=...)` overrides it |
 
-Both are bootstrap values for the window before the first snapshot lands; after
-that Coriqo's values win. `MandateGate(default_posture=…,
+The first two are bootstrap values for the window before the first snapshot
+lands; after that Coriqo's values win.
+
+**Fields from a mandate file (TI-20).** A snapshot carries `prohibited_tools`,
+`on_violation`, `environment` and `output_inspection` only when the agent's
+approved mandate came from a `coriqo.mandate.yaml` that set them. Absent, each
+reproduces the behaviour from before it existed. `prohibited_tools` are outside
+the mandate even with no allow-list, and win over `approval_required_tools`.
+`on_violation` under `enforce`: `deny` (default), `deny_and_halt_run` (the
+first scope denial halts the run), `alert_only` (allowed, recorded as
+`flagged` with reason `out_of_scope`); unknown values read as `deny`.
+`output_inspection` is kept and not acted on yet.
+
+**Running from a mandate file** (`byoai.recorder.mandate_file`).
+`file_mandate_gate(path)` builds a gate from a `coriqo.mandate.yaml` with no
+Coriqo account: `mode: shadow`/`enforce` map to `observe`/`enforce`,
+`on_stale_snapshot` to the posture, and `mandate_version_id` is
+`sha256:<document hash>`. The file is read by the reference reader, vendored
+byte-for-byte as `byoai/recorder/mandate_format.py` (YAML needs PyYAML; JSON
+needs nothing), and re-read on the refresh schedule; an unreadable or invalid
+file keeps the last good copy until it is stale. `MandateGate(default_posture=…,
 default_max_staleness_s=…)` overrides them in code.
 
 #### `@governed_tool` — enforcing at the call site (`byoai.recorder.governed_tool`)
@@ -1596,6 +1616,37 @@ The OpenAI-compat bridge (`OPENAI_COMPAT_MODELS`) is gated too. It is a separate
 handler that returns before the Anthropic path's enforcement point, so it needs
 its own hook — but it translates the upstream response into Anthropic shape
 either way, so the same enforcer runs on it unchanged, buffered and streaming.
+
+#### Gating an MCP server (`coriqo-mcp`, `byoai.integrations.coriqo_mcp`)
+
+`pip install --pre "byoai-runtime[coriqo-mcp]"` adds `cryptography` (the
+signed ledger), PyYAML (YAML mandate files) and uvicorn (`--http`).
+
+```bash
+coriqo-mcp --mandate coriqo.mandate.yaml -- <server command>          # stdio
+coriqo-mcp --mandate coriqo.mandate.yaml --http --upstream http://127.0.0.1:9000
+```
+
+| Flag | Default | Purpose |
+| --- | --- | --- |
+| `--mandate FILE` | — | the `coriqo.mandate.yaml` (v1) to enforce. An invalid file stops start-up (exit 2) and lists each problem |
+| `--coriqo-agent-id ID` | — | instead of a file: this agent's approved mandate, fetched from Coriqo and cached (enrolled device only) |
+| `--environment ENV` | `$BYOAI_MANDATE_ENVIRONMENT` | where this runs; see `BYOAI_MANDATE_ENVIRONMENT` |
+| `--recorder-dir DIR` | `$BYOAI_RECORDER_DIR` or `~/.byoai/recorder` | ledger, device key and the outbox of decisions waiting to go to Coriqo (`coriqo_mcp_verdicts.db`) |
+| `--no-record` | off | decide calls but write nothing (no `cryptography` needed) |
+| `--http` | off | relay an HTTP MCP server (streamable HTTP or SSE) instead of a stdio child |
+| `--upstream URL` | — | with `--http`: the server's base URL. Requests keep their path and query |
+| `--listen HOST:PORT` | `127.0.0.1:8808` | with `--http`: where `coriqo-mcp` listens |
+| `--grace SECONDS` | `5` | how long the server gets to exit before SIGTERM, then SIGKILL, to its process group |
+| `-v` | off | log each decision's operator detail to stderr |
+
+The server command goes after `--`. On stdio, `coriqo-mcp` owns it: it runs in
+its own process group and is stopped when the host disconnects or
+`coriqo-mcp` gets SIGTERM, SIGINT or SIGHUP. Protocol traffic is the only thing
+written to stdout; everything else goes to stderr. Decisions are sent to
+Coriqo's verdict endpoint every 5 seconds when the device is enrolled and the
+agent has a Coriqo id (`agent.id` in the file, or `--coriqo-agent-id`). The
+README's `coriqo-mcp` section lists what is and is not checked.
 
 #### The denial latch — repeats and the halt (`byoai.recorder.denial_latch`)
 
