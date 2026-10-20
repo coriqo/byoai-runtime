@@ -127,6 +127,20 @@ def arguments_sha256(arguments: Any) -> str:
         return "py:" + hashlib.sha256(fallback.encode("utf-8")).hexdigest()
 
 
+def _checkable_arguments(arguments: Any) -> bool:
+    """True when a call's ``arguments`` are absent or an object canonical JSON
+    can represent, so the gate can read and hash them without raising."""
+    if arguments is None:
+        return True
+    if not isinstance(arguments, dict):
+        return False
+    try:
+        canonicalize(arguments)
+    except Exception:  # noqa: BLE001 - any failure means the gate cannot read it
+        return False
+    return True
+
+
 def _id_key(message_id: Any) -> str:
     # 1 and "1" are different JSON-RPC ids.
     return json.dumps(message_id, sort_keys=True)
@@ -195,22 +209,39 @@ class Interposer:
         response to send back to the host instead (``None`` for a refused
         notification, which has no id to answer).
         """
+        if not isinstance(msg, dict):
+            # A batch element that is not an object (a nested array, a string)
+            # is not a JSON-RPC message this side can gate, and a server with
+            # a looser parser might still run it. Never forwarded.
+            log.warning("coriqo-mcp: refused a message that is not a JSON object")
+            return False, {"jsonrpc": "2.0", "id": None,
+                           "error": {"code": -32600, "message": "Invalid Request"}}
         if not _is_request(msg, "tools/call"):
             return True, None
         params = msg.get("params")
         if not isinstance(params, dict) or not isinstance(params.get("name"), str):
             # No tool name this side can read is no tool name it can check.
             log.warning("coriqo-mcp: refused a tools/call with no readable tool name")
-            if "id" not in msg:
-                return False, None
-            return False, {"jsonrpc": "2.0", "id": msg["id"],
-                           "error": {"code": -32602, "message": "Invalid params"}}
+            return self._invalid_params(msg)
+        if not _checkable_arguments(params.get("arguments")):
+            # Arguments the gate cannot read (not an object, nested too deep,
+            # a lone surrogate) would make the check raise, and a raised check
+            # follows the fail-open posture. Refused here instead.
+            log.warning("coriqo-mcp: refused a tools/call whose arguments cannot be checked")
+            return self._invalid_params(msg)
         decision = self.decide_call(msg, session=session)
         if decision.allowed:
             return True, None
         if "id" not in msg:
             return False, None
         return False, {"jsonrpc": "2.0", "id": msg["id"], "result": dict(DENIAL_RESULT)}
+
+    @staticmethod
+    def _invalid_params(msg: dict[str, Any]) -> tuple[bool, dict[str, Any] | None]:
+        if "id" not in msg:
+            return False, None
+        return False, {"jsonrpc": "2.0", "id": msg["id"],
+                       "error": {"code": -32602, "message": "Invalid params"}}
 
     # -- server -> host ----------------------------------------------------
 

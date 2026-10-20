@@ -616,3 +616,30 @@ async def test_http_session_ids_the_server_never_issued_share_one_run():
     # deny_and_halt_run ended the run; a new invented session id is not a new run.
     assert second.json()["result"] == DENIAL_RESULT
     assert upstream.seen == []
+
+
+def test_batch_elements_that_are_not_objects_are_never_forwarded():
+    # A nested array or a bare value inside a batch is not a message this side
+    # can gate; a looser server parser might still run it.
+    out: list[bytes] = []
+    session = _StdioSession(Interposer(file_gate(ENFORCE)), out.append)
+    batch = [call("search", 1), [call("delete_account", 2)], "tools/call"]
+    forwarded = session.from_host(json.dumps(batch).encode())
+    assert [m["id"] for m in json.loads(forwarded)] == [1]
+    replies = json.loads(out[0])
+    assert [r["error"]["code"] for r in replies] == [-32600, -32600]
+
+
+def test_arguments_the_gate_cannot_read_are_refused_not_failed_open():
+    # In shadow mode an unreadable check would go through; these are refused
+    # before the check, whatever the mode.
+    interposer = Interposer(file_gate(SHADOW))
+    surrogate = json.loads('{"jsonrpc":"2.0","id":5,"method":"tools/call",'
+                           '"params":{"name":"search","arguments":{"q":"\\ud800"}}}')
+    forward, reply = interposer.gate_request(surrogate)
+    assert forward is False and reply["error"]["code"] == -32602
+    not_object = {"jsonrpc": "2.0", "id": 6, "method": "tools/call",
+                  "params": {"name": "search", "arguments": ["x"]}}
+    forward, reply = interposer.gate_request(not_object)
+    assert forward is False and reply["error"]["code"] == -32602
+    assert interposer.gate_request(call("search", 7, q="fine")) == (True, None)
