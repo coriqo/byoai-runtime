@@ -61,6 +61,9 @@ each one reproduces the behaviour from before it existed:
   for another environment as no mandate at all, so the posture decides. A gate
   told nothing does not compare.
 - ``output_inspection``: parsed and kept, not acted on yet.
+- ``stop_grace_s`` (mandate format v1.1): seconds a worker the runtime started
+  gets to stop on its own after a suspension, before it is killed. Absent
+  means the runtime's own default (5 seconds in ``coriqo-mcp``).
 
 ``allowed_tools``: null is not empty
 ------------------------------------
@@ -467,6 +470,10 @@ def _coerce_float(value: Any, fallback: float) -> float:
     return number if number > 0 else fallback
 
 
+#: Longest stop grace period a mandate may set (MANDATE_SPEC.md v1.1).
+MAX_STOP_GRACE_S = 600.0
+
+
 @dataclass(frozen=True, slots=True)
 class MandateSnapshot:
     """One immutable copy of what Coriqo said this agent's mandate is.
@@ -513,6 +520,9 @@ class MandateSnapshot:
     environment: str | None = None
     #: Parsed and kept for TI-24; nothing reads it yet.
     output_inspection: Mapping[str, Any] = field(default_factory=dict)
+    #: Mandate format v1.1: the stop grace period the bank set, in seconds.
+    #: None when the mandate does not set one.
+    stop_grace_s: float | None = None
     #: Monotonic reading from when this snapshot was received. Monotonic, not
     #: wall clock, so an NTP correction mid-run cannot make a snapshot look
     #: fresher (or older) than it is.
@@ -569,6 +579,20 @@ class MandateSnapshot:
         raw_inspection = payload.get("output_inspection")
         inspection = dict(raw_inspection) if isinstance(raw_inspection, Mapping) else {}
 
+        stop_grace = payload.get("stop_grace_s")
+        if stop_grace is not None and (
+            isinstance(stop_grace, bool)
+            or not isinstance(stop_grace, (int, float))
+            or not 0 < stop_grace <= MAX_STOP_GRACE_S
+        ):
+            # Ignored, not fatal: the runtime's default still stops the worker.
+            log.warning(
+                "coriqo: stop_grace_s %r in the mandate snapshot is not a number of "
+                "seconds above 0 and at most %g; using the runtime's default",
+                stop_grace, MAX_STOP_GRACE_S,
+            )
+            stop_grace = None
+
         resolved: dict[str, str] = {}
         raw_resolved = payload.get("resolved_approvals")
         if isinstance(raw_resolved, Mapping):
@@ -600,6 +624,7 @@ class MandateSnapshot:
             on_violation=on_violation,
             environment=_opt_str(payload.get("environment")),
             output_inspection=inspection,
+            stop_grace_s=None if stop_grace is None else float(stop_grace),
             received_at=received_at,
             raw=dict(payload),
         )

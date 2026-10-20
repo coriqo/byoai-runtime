@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **The stop grace period is a mandate setting.** `stop_grace_s` (mandate
+  format v1.1) comes from the agent's mandate in Coriqo or a v1.1 file, is read
+  when the suspension lands, and sits between `--grace` and the older
+  `x-stop_grace_s` extension. Unset, nothing changes.
 - **Suspension reaches the workers the gate cannot see (TI-25).**
   `MandateGate(on_suspend=...)` (also `mandate_gate(...)` and
   `gate.add_suspend_hook()`) calls your hooks once when a snapshot moves the

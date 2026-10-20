@@ -1637,7 +1637,7 @@ coriqo-mcp --mandate coriqo.mandate.yaml --http --upstream http://127.0.0.1:9000
 | `--http` | off | relay an HTTP MCP server (streamable HTTP or SSE) instead of a stdio child |
 | `--upstream URL` | — | with `--http`: the server's base URL. Requests keep their path and query |
 | `--listen HOST:PORT` | `127.0.0.1:8808` | with `--http`: where `coriqo-mcp` listens |
-| `--grace SECONDS` | the file's `x-stop_grace_s`, else `5` | how long the server gets to exit after SIGTERM before SIGKILL goes to its process group |
+| `--grace SECONDS` | the mandate's `stop_grace_s`, else the file's `x-stop_grace_s`, else `5` | how long the server gets to exit after SIGTERM before SIGKILL goes to its process group |
 | `--on-suspend MODULE:FUNCTION` | none | a function to call when the agent is suspended in Coriqo, to stop workers `coriqo-mcp` does not own. Repeatable. The module must be importable; one that is not stops start-up (exit 2) |
 | `--on-suspend-timeout SECONDS` | `30` | how long each `--on-suspend` function gets before it is recorded as timed out |
 | `-v` | off | log each decision's operator detail to stderr |
@@ -1661,16 +1661,25 @@ function is called at the same time and recorded the same way. `coriqo-mcp`
 then exits with status 3. If the agent is already suspended at start-up, the
 server is never started and the exit status is also 3.
 
-A mandate file has no status, so with `--mandate` none of this fires. The
-file can still set the grace period:
+The grace period is a mandate field from mandate format v1.1: `stop_grace_s`,
+whole seconds from 1 to 600. A bank sets it on the agent's mandate in Coriqo
+(it is sealed with the mandate and approved like any change), and the snapshot
+carries it. It is read when the suspension arrives, so a value approved after
+`coriqo-mcp` started still applies. A mandate file can set it too:
 
 ```yaml
-x-stop_grace_s: 20   # seconds; above 0, at most 600
+spec: coriqo.mandate/v1.1
+stop_grace_s: 20
 ```
 
-`x-` fields are extensions under `MANDATE_SPEC.md` §3: they are not part of
-the document hash, so two files that differ only here hash the same. An
-invalid value is ignored with a warning. `--grace` overrides it.
+`--grace` overrides it on this host. Without either, the file's older
+`x-stop_grace_s` extension is still read (it is not part of the document hash,
+so prefer the field), then 5 seconds. A value outside the range is ignored with
+a warning.
+
+A mandate file has no status, so with `--mandate` the suspension itself never
+fires; the file's grace period then applies to a normal shutdown, in the same
+order.
 
 #### Suspend hooks (`on_suspend`, `byoai.recorder.suspend`)
 

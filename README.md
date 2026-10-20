@@ -318,8 +318,9 @@ Add `-- <server command>` to have `coriqo-mcp` start and stop that server too.
 **When the agent is suspended.** With `--coriqo-agent-id`, a suspension in
 Coriqo reaches `coriqo-mcp` on its next mandate fetch. From then on every call
 is refused, and the server it started gets SIGTERM to its process group, then
-SIGKILL after the grace period (`--grace`, or `x-stop_grace_s` in the mandate
-file, default 5 seconds). The stop is written to the ledger with its times
+SIGKILL after the grace period: `--grace` if you pass it, else the
+mandate's `stop_grace_s` (set in Coriqo, or in a v1.1 mandate file), else 5
+seconds. The stop is written to the ledger with its times
 and exit code, and `coriqo-mcp` exits with status 3. To stop workers it does
 not own, pass `--on-suspend mypkg.workers:stop_all`; the function is called
 with the suspension notice and its answer is recorded too. Details:
