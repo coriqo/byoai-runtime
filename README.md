@@ -1322,17 +1322,18 @@ see [SECURITY.md](SECURITY.md) rather than opening a public issue.
 
 ## 📄 License & Enterprise Security
 
-`byoai-runtime` is distributed under the **[Apache License 2.0](LICENSE)**.
+`byoai-runtime` is distributed under the **[Apache License 2.0](LICENSE)**, which includes an explicit patent grant.
 
-* **Enterprise Safe:** Permissive license with explicit patent grants and trademark protections. Pre-approved for enterprise compliance scanners (Snyk, FOSSA, Mend).
-* **Data Privacy:** Runs strictly in-process within your infrastructure. Zero data is transmitted to external servers beyond your configured model and database providers.
+* **Where data goes:** it runs in your own process and infrastructure. It talks to the model and database providers you configure and, once you enrol a device with Coriqo, sends that device's signed decisions and ledger entries to your Coriqo tenant. Nothing else leaves.
+* **Security reports:** privately, as [SECURITY.md](SECURITY.md) describes. Not in a public issue.
+* **Names:** the licence covers the code, not the names. "Coriqo", "Coriqo Shield", "Verified by Coriqo" and the seal mark are Coriqo's trademarks; a fork needs its own name. See [TRADEMARKS.md](TRADEMARKS.md).
 
 ---
 
 ## 🌐 Community & Documentation
 
 * **Documentation:** [ravikings.github.io/byoai-runtime](https://ravikings.github.io/byoai-runtime/)
-* **GitHub Repository:** [github.com/ravikings/byoai-runtime](https://github.com/ravikings/byoai-runtime)
+* **GitHub Repository:** [github.com/coriqo/byoai-runtime](https://github.com/coriqo/byoai-runtime)
 * **PyPI Package:** [pypi.org/project/byoai-runtime](https://pypi.org/project/byoai-runtime)
 * **Changelog:** [CHANGELOG.md](CHANGELOG.md)
 * **Contributing:** [CONTRIBUTING.md](CONTRIBUTING.md)
