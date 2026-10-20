@@ -1,0 +1,9 @@
+spec: coriqo.mandate/v1
+agent:
+  name: payments-assistant
+mode: enforce
+on_stale_snapshot: fail_closed
+tools:
+  allowed: [search, transfer_funds]
+  prohibited: [delete_account]
+on_violation: deny

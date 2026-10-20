@@ -327,7 +327,9 @@ class DenialLatch:
             attempts = self._attempts.get(key, 0) + 1
             self._attempts[key] = attempts
             self._first.setdefault(key, verdict)
-            halted = attempts >= self._threshold
+            # TI-20 on_violation: deny_and_halt_run ends the run on the first
+            # scope denial rather than at the repeat threshold.
+            halted = attempts >= self._threshold or verdict.halt_run
             if halted:
                 self._halted.setdefault(run_id, (principal, tool, attempts))
             self._touch(run_id)

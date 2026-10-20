@@ -51,6 +51,7 @@ from .mandate import (
     Posture,
     ProposedAction,
     Reason,
+    RequireApproval,
     Verdict,
 )
 from .verdicts import verdict_recorder
@@ -284,10 +285,20 @@ class ProxyEnforcer:
         *,
         arguments: dict[str, Any] | None = None,
         step_index: int | None = None,
+        arguments_sha256: str | None = None,
     ) -> ProxyDecision:
-        """Allow, flag or deny one ``tool_use`` block. Never raises."""
+        """Allow, flag or deny one ``tool_use`` block. Never raises.
+
+        ``arguments_sha256``, when given, is written on the verdict's ledger
+        record (``coriqo-mcp`` passes one; the provider proxy does not).
+        """
         try:
-            decision = self._decide(tool, arguments=arguments, step_index=step_index)
+            decision = self._decide(
+                tool,
+                arguments=arguments,
+                step_index=step_index,
+                arguments_sha256=arguments_sha256,
+            )
         except Exception:  # noqa: BLE001 - enforcement must not break the proxy
             log.exception("coriqo: proxy enforcement failed deciding %r", tool)
             decision = self._unresolved(tool, step_index, "enforcement raised")
@@ -302,6 +313,7 @@ class ProxyEnforcer:
         *,
         arguments: dict[str, Any] | None,
         step_index: int | None,
+        arguments_sha256: str | None = None,
     ) -> ProxyDecision:
         if self._gate is None:
             return self._unresolved(tool, step_index, self._unresolved_detail)
@@ -316,18 +328,27 @@ class ProxyEnforcer:
         principal = str(self._gate.agent_id or "unidentified-agent")
         version = self._gate.latch_version
 
+        digest = arguments_sha256
         latched = latch.check(self._run_id, principal, tool, version)
         if latched is not None:
-            self._record(latched.verdict, action, principal, latched=latched)
+            self._record(latched.verdict, action, principal, latched=latched, digest=digest)
             return ProxyDecision(latched.verdict, allowed=False, halted=latched.halted)
 
         verdict = self._gate.decide(action)
+        if isinstance(verdict, RequireApproval):
+            # Waiting on a human: withheld, not latched (a later snapshot can
+            # carry the approval), and reported so it reaches the queue. Before
+            # this branch a RequireApproval fell into the allow path below,
+            # because it is neither an Allow nor a Deny.
+            self._gate.report_approval_request(verdict)
+            self._record(verdict, action, principal, digest=digest)
+            return ProxyDecision(verdict, allowed=False)
         if isinstance(verdict, Allow) or not isinstance(verdict, Deny):
-            self._record(verdict, action, principal)
+            self._record(verdict, action, principal, digest=digest)
             return ProxyDecision(verdict, allowed=True)
 
         recorded = latch.record(self._run_id, principal, verdict, version)
-        self._record(verdict, action, principal, latched=recorded)
+        self._record(verdict, action, principal, latched=recorded, digest=digest)
         log.warning(
             "coriqo: withheld a tool_use block at the proxy - %s run=%s attempts=%d%s",
             _operator_detail(verdict),
@@ -376,6 +397,7 @@ class ProxyEnforcer:
         principal: str,
         *,
         latched: LatchedDenial | None = None,
+        digest: str | None = None,
     ) -> None:
         recorder = verdict_recorder()
         if recorder is None or self._gate is None:
@@ -387,6 +409,7 @@ class ProxyEnforcer:
             run_id=self._run_id,
             principal=principal,
             argument_count=None if action.arguments is None else len(action.arguments),
+            arguments_sha256=digest,
         )
 
     def _record_unresolved(self, verdict: Verdict) -> None:

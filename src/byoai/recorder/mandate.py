@@ -43,6 +43,25 @@ a request failed would turn every blip into an outage; this one keeps serving
 the snapshot it has until that snapshot is older than the tenant said it may
 be.
 
+Fields a mandate file adds (TI-20)
+----------------------------------
+A snapshot carries four more keys when the agent's approved mandate came from
+a ``coriqo.mandate.yaml`` that set them, and leaves them out otherwise. Absent,
+each one reproduces the behaviour from before it existed:
+
+- ``prohibited_tools``: tools that are outside the mandate whatever else is
+  allowed, including when there is no allow-list (``allowed_tools: null``).
+  Absent means none.
+- ``on_violation``: what a scope violation does under ``enforce``. ``deny``
+  (absent) refuses the call; ``deny_and_halt_run`` refuses it and ends the run
+  on the first attempt rather than the latch's threshold; ``alert_only``
+  allows it and flags it. ``observe`` still blocks nothing, whatever this says.
+- ``environment``: where the mandate applies. A gate told which environment it
+  runs in (``environment=`` or ``BYOAI_MANDATE_ENVIRONMENT``) treats a mandate
+  for another environment as no mandate at all, so the posture decides. A gate
+  told nothing does not compare.
+- ``output_inspection``: parsed and kept, not acted on yet.
+
 ``allowed_tools``: null is not empty
 ------------------------------------
 ``null`` means **unrestricted** — no scope constraint on this agent.
@@ -95,6 +114,7 @@ __all__ = [
     "Reason",
     "RequireApproval",
     "Verdict",
+    "ViolationAction",
     "approval_request_id",
     "coriqo_mandate_source",
     "mandate_gate",
@@ -197,6 +217,19 @@ class Reason:
     BUDGET_COST_EXCEEDED = "budget_cost_exceeded"
     BUDGET_CALL_RATE_EXCEEDED = "budget_call_rate_exceeded"
     BUDGET_STEP_LIMIT_EXCEEDED = "budget_step_limit_exceeded"
+    #: TI-20: the snapshot names an ``environment`` and this gate was told it
+    #: runs somewhere else. That mandate is not for here, so the gate has
+    #: nothing it can stand behind and the posture decides, as for
+    #: NO_SNAPSHOT.
+    ENVIRONMENT_MISMATCH = "environment_mismatch"
+
+
+class ViolationAction:
+    """TI-20 ``on_violation``: what a scope violation does under ``enforce``."""
+
+    DENY = "deny"
+    DENY_AND_HALT_RUN = "deny_and_halt_run"
+    ALERT_ONLY = "alert_only"
 
 
 class DelegationPolicy:
@@ -267,6 +300,10 @@ class Verdict:
     step_index: int | None = None
     #: Operator-facing only. Never put this in a string bound for the model.
     detail: str | None = None
+    #: TI-20: set on a scope denial under ``on_violation: deny_and_halt_run``.
+    #: The denial latch reads it and halts the run on this first attempt
+    #: instead of waiting for its repeat threshold.
+    halt_run: bool = False
 
     def __repr__(self) -> str:
         """Never renders ``detail``.
@@ -467,6 +504,13 @@ class MandateSnapshot:
     #: False, the same "nothing to see here" reading as its absence. See
     #: Reason.REASSESSMENT_REQUIRED and the TODO on MandateGate.decide().
     reassessment_required: bool = False
+    #: TI-20 fields, present on the wire only when a mandate file set them.
+    #: Their defaults are the behaviour from before they existed.
+    prohibited_tools: tuple[str, ...] = ()
+    on_violation: str = ViolationAction.DENY
+    environment: str | None = None
+    #: Parsed and kept for TI-24; nothing reads it yet.
+    output_inspection: Mapping[str, Any] = field(default_factory=dict)
     #: Monotonic reading from when this snapshot was received. Monotonic, not
     #: wall clock, so an NTP correction mid-run cannot make a snapshot look
     #: fresher (or older) than it is.
@@ -495,6 +539,34 @@ class MandateSnapshot:
         if raw_approval_tools:
             approval_tools = tuple(str(tool) for tool in raw_approval_tools)
 
+        prohibited: tuple[str, ...] = ()
+        raw_prohibited = payload.get("prohibited_tools")
+        if raw_prohibited is not None:
+            if isinstance(raw_prohibited, str) or not isinstance(raw_prohibited, Iterable):
+                raise MandateError(
+                    "prohibited_tools must be a list, got "
+                    f"{type(raw_prohibited).__name__}"
+                )
+            prohibited = tuple(str(tool) for tool in raw_prohibited)
+
+        on_violation = _opt_str(payload.get("on_violation")) or ViolationAction.DENY
+        if on_violation not in {
+            ViolationAction.DENY,
+            ViolationAction.DENY_AND_HALT_RUN,
+            ViolationAction.ALERT_ONLY,
+        }:
+            # An unknown word must not loosen anything: read it as the strictest
+            # plain answer, refuse the call, and say so to the operator.
+            log.warning(
+                "coriqo: unknown on_violation %r in the mandate snapshot; "
+                "treating it as deny",
+                on_violation,
+            )
+            on_violation = ViolationAction.DENY
+
+        raw_inspection = payload.get("output_inspection")
+        inspection = dict(raw_inspection) if isinstance(raw_inspection, Mapping) else {}
+
         resolved: dict[str, str] = {}
         raw_resolved = payload.get("resolved_approvals")
         if isinstance(raw_resolved, Mapping):
@@ -522,6 +594,10 @@ class MandateSnapshot:
             max_delegation_depth=_opt_int(payload.get("max_delegation_depth")),
             served_at=_opt_str(payload.get("served_at")),
             reassessment_required=bool(payload.get("reassessment_required", False)),
+            prohibited_tools=prohibited,
+            on_violation=on_violation,
+            environment=_opt_str(payload.get("environment")),
+            output_inspection=inspection,
             received_at=received_at,
             raw=dict(payload),
         )
@@ -545,10 +621,33 @@ class MandateSnapshot:
     def is_stale(self, now: float) -> bool:
         return self.age_s(now) > self.max_staleness_s
 
+    def prohibits(self, tool: str) -> bool:
+        """TI-20: on the mandate's prohibited list, whatever else is allowed."""
+        return tool in self.prohibited_tools
+
     def permits(self, tool: str) -> bool:
+        if self.prohibits(tool):
+            return False
         if self.allowed_tools is None:
             return True
         return tool in self.allowed_tools
+
+    @property
+    def enforcing_scope(self) -> bool:
+        """Whether a scope violation is refused rather than flagged: ``enforce``
+        and an ``on_violation`` other than ``alert_only``."""
+        return not self.observing and self.on_violation != ViolationAction.ALERT_ONLY
+
+    def offers(self, tool: str) -> bool:
+        """Whether a tool should be shown to the model at all.
+
+        In scope, or waiting on a human (an approval-required tool can still
+        run once approved). Static: no budget, staleness or suspension, which
+        are decided per call.
+        """
+        return self.permits(tool) or (
+            self.requires_approval(tool) and not self.prohibits(tool)
+        )
 
     def requires_approval(self, tool: str) -> bool:
         """AD-10: checked BEFORE permits() in decide() — a tool named here is
@@ -657,6 +756,7 @@ class MandateGate:
         on_suspend_observed: Callable[["MandateSnapshot"], None] | None = None,
         report_approval_request: Callable[["RequireApproval"], None] | None = None,
         report_capability_snapshot: Callable[[dict[str, Any]], None] | None = None,
+        environment: str | None = None,
     ) -> None:
         """``default_posture`` and ``default_max_staleness_s`` apply only until
         the first snapshot lands; after that the tenant's own values, which
@@ -700,6 +800,14 @@ class MandateGate:
         self._trajectory_steps: "OrderedDict[str, set[int]]" = OrderedDict()
         self._trajectory_costs: "OrderedDict[str, float]" = OrderedDict()
         self._agent_id = agent_id
+        # TI-20: where this runtime runs. None (the default, and an unset
+        # BYOAI_MANDATE_ENVIRONMENT) means the snapshot's environment is not
+        # compared, which is how every gate behaved before the field existed.
+        self._environment = (
+            environment
+            if environment is not None
+            else (os.getenv("BYOAI_MANDATE_ENVIRONMENT") or "").strip() or None
+        )
         self._clock = clock
         self._sleep = sleep or asyncio.sleep
         self._default_posture = default_posture or _env_posture()
@@ -727,6 +835,37 @@ class MandateGate:
     @property
     def agent_id(self) -> str | None:
         return self._agent_id
+
+    @property
+    def environment(self) -> str | None:
+        """The environment this gate was told it runs in, if any."""
+        return self._environment
+
+    def offered_tools(self, names: Iterable[str]) -> list[str]:
+        """The subset of ``names`` a model should be shown, in order.
+
+        Everything when the gate is a no-op, or when the mandate in hand only
+        flags violations (``observe`` / ``alert_only``): hiding a tool there
+        would block it, and those settings block nothing. With no snapshot,
+        or one for another environment, the posture decides, as it does for a
+        call: ``fail_closed`` shows nothing.
+        """
+        names = list(names)
+        if self._source is None:
+            return names
+        snapshot = self.snapshot
+        if snapshot is None or self._environment_mismatch(snapshot):
+            return [] if self.posture == Posture.FAIL_CLOSED else names
+        if not snapshot.enforcing_scope:
+            return names
+        return [name for name in names if snapshot.offers(name)]
+
+    def _environment_mismatch(self, snapshot: MandateSnapshot) -> bool:
+        return (
+            self._environment is not None
+            and snapshot.environment is not None
+            and snapshot.environment != self._environment
+        )
 
     @property
     def snapshot(self) -> MandateSnapshot | None:
@@ -853,6 +992,23 @@ class MandateGate:
                 detail=f"agent status is {snapshot.status!r}",
             )
 
+        # TI-20: a mandate written for another environment is not a mandate
+        # for this one. Suspension above still applies (it names the agent,
+        # not the environment); past here, the posture decides.
+        if self._environment_mismatch(snapshot):
+            return self._unevaluable(
+                action,
+                reason=Reason.ENVIRONMENT_MISMATCH,
+                age=age,
+                version=snapshot.mandate_version_id,
+                enforcement=snapshot.mandate_enforcement,
+                posture=snapshot.enforcement_posture,
+                detail=(
+                    f"the mandate applies to environment {snapshot.environment!r}; "
+                    f"this runtime is {self._environment!r}"
+                ),
+            )
+
         # W-7 TODO: this is deliberately coarse. `reassessment_required` is a
         # single boolean on the snapshot, not a list of which tools drifted
         # — Coriqo's schema for naming the specific drift-introduced tools
@@ -932,7 +1088,9 @@ class MandateGate:
         # every approval-required call would defeat the one thing AD-10
         # exists for; it denies under both postures, the same as
         # AGENT_SUSPENDED above.
-        if snapshot.requires_approval(action.tool):
+        # TI-20: a prohibited tool is outside the mandate even when it is also
+        # named for approval — no human sign-off makes a prohibited call fine.
+        if snapshot.requires_approval(action.tool) and not snapshot.prohibits(action.tool):
             request_id = approval_request_id(
                 action.tool, action.trajectory_id, action.step_index, action.arguments,
             )
@@ -1000,20 +1158,36 @@ class MandateGate:
             "trajectory_id": action.trajectory_id,
             "step_index": action.step_index,
         }
-        if snapshot.observing:
+        why = (
+            f"{action.tool!r} is on the mandate's prohibited list"
+            if snapshot.prohibits(action.tool)
+            else f"{action.tool!r} is not in the agent's approved scope"
+        )
+        if snapshot.observing or snapshot.on_violation == ViolationAction.ALERT_ONLY:
             # Still permitted to run (Flag < Allow) — same budget gate as
             # the in-scope Allow path above, for the same reason.
             budget_verdict = self._check_budgets(action, snapshot, age, now)
             if budget_verdict is not None:
                 return budget_verdict
+            if snapshot.observing:
+                return Flag(
+                    reason=Reason.OUT_OF_SCOPE_OBSERVED,
+                    detail=f"{why}; enforcement is observe",
+                    **common,
+                )
+            # TI-20 alert_only: enforcing, and the tenant chose to be told
+            # rather than to refuse. The reason stays out_of_scope so the
+            # record says this was a real violation, not a rollout.
             return Flag(
-                reason=Reason.OUT_OF_SCOPE_OBSERVED,
-                detail=f"{action.tool!r} is outside the mandate; enforcement is observe",
+                reason=Reason.OUT_OF_SCOPE,
+                detail=f"{why}; on_violation is alert_only",
                 **common,
             )
+        halt = snapshot.on_violation == ViolationAction.DENY_AND_HALT_RUN
         return Deny(
             reason=Reason.OUT_OF_SCOPE,
-            detail=f"{action.tool!r} is not in the agent's approved scope",
+            detail=f"{why}; on_violation is deny_and_halt_run" if halt else why,
+            halt_run=halt,
             **common,
         )
 
