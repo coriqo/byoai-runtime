@@ -260,6 +260,46 @@ Coriqo account: `mode: shadow` becomes `observe`, `mode: enforce` becomes
 `coriqo-mcp` section lists what is and is not checked, and the measured
 overhead.
 
+## Stopping your other workers when an agent is suspended
+
+A suspension denies every call the gate decides. Work your own queue already
+handed to other workers does not pass through that gate. Register a hook and
+send the stop over the queue you already run; Coriqo does not run a broadcast
+of its own, so it never sits in your agent's path:
+
+```python
+from byoai.recorder.mandate import mandate_gate
+
+def stop_my_workers(notice):
+    # Redis pub/sub: each worker subscribes and stops itself.
+    redis_client.publish("agents.stop", json.dumps(notice.to_dict()))
+
+gate = mandate_gate("agt_123", on_suspend=stop_my_workers)
+```
+
+Other shapes, none of them a dependency of this package:
+
+```python
+async def stop_nats(notice):            # NATS
+    await nc.publish("agents.stop", json.dumps(notice.to_dict()).encode())
+
+def revoke_celery(notice):              # Celery
+    for task_id in task_ids_for(notice.agent_id):
+        celery_app.control.revoke(task_id, terminate=True, signal="SIGTERM")
+
+async def cancel_temporal(notice):      # Temporal
+    await temporal_client.get_workflow_handle(workflow_id_for(notice.agent_id)).cancel()
+
+gate.add_suspend_hook(stop_nats, name="nats agents.stop")
+```
+
+Hooks run once per suspension, concurrently, and never hold up the gate. Each
+one's result goes to the ledger as a `worker_stop_ack` event: when it was
+called, when it returned (or raised, or timed out), and how long it took.
+`coriqo-mcp` does the same for the MCP server it started: SIGTERM to the
+process group, SIGKILL after the grace period, and the exit on the record.
+CONFIGURATION.md, "Suspend hooks", has every field.
+
 ## Fields a mandate file adds
 
 A snapshot built from a mandate file, or sent by Coriqo for an agent whose

@@ -536,8 +536,9 @@ async def test_record_drains_the_outbox_on_close(tmp_path):
     class FakeRecorder:
         closed = False
 
-        def close(self) -> None:
+        def close(self, *, final_ship: bool = False) -> None:
             FakeRecorder.closed = True
+            FakeRecorder.final_ship = final_ship
 
     shipper = FakeShipper()
     record = _Record(FakeRecorder(), None, shipper)
@@ -545,6 +546,8 @@ async def test_record_drains_the_outbox_on_close(tmp_path):
     await record.close()
     assert shipper.pending == 0
     assert FakeRecorder.closed
+    # TI-25: the ledger's last entries (a worker_stop_ack) go out before exit.
+    assert FakeRecorder.final_ship is True
 
 
 def test_unenrolled_device_keeps_decisions_local(tmp_path, capsys, monkeypatch):
@@ -574,7 +577,7 @@ def test_coriqo_agent_id_comes_from_the_file_agent_id_only(tmp_path):
     with_id = tmp_path / "m.yaml"
     with_id.write_text(ENFORCE.read_text().replace(
         "  name: payments-assistant", "  name: payments-assistant\n  id: agt_42"))
-    gate, _, agent_id = _build_gate(argparse.Namespace(
+    gate, _, agent_id, _grace = _build_gate(argparse.Namespace(
         mandate=str(with_id), coriqo_agent_id=None, environment=None))
     assert agent_id == "agt_42" and gate.agent_id == "agt_42"
 

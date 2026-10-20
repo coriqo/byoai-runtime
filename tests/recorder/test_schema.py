@@ -99,6 +99,8 @@ class TestEventKind:
             # Added with the Bedrock Agent seam: a third party's guardrail
             # firing mid-run is neither our verdict nor a failure.
             "guardrail_intervention",
+            # TI-25: a worker acknowledging a suspension (hook or process).
+            "worker_stop_ack",
         }
 
 

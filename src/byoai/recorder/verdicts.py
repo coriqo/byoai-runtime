@@ -524,6 +524,39 @@ class VerdictRecorder:
             log.exception("coriqo: failed to record a mandate verdict")
             return None
 
+    def record_worker_ack(self, notice: Any, ack: Any) -> LedgerEntry | None:
+        """TI-25: seal one worker's acknowledgement of a suspension.
+
+        ``notice`` is a :class:`~byoai.recorder.suspend.SuspendNotice` and
+        ``ack`` a :class:`~byoai.recorder.suspend.WorkerAck`. Written as a
+        ``worker_stop_ack`` ledger event, which ships with the rest of the
+        ledger; the verdict outbox is not involved, because this is not a
+        verdict. Never raises, same as :meth:`record`.
+        """
+        if self._ledger is None:
+            return None
+        try:
+            payload: dict[str, Any] = {
+                "agent_id": notice.agent_id,
+                "status": notice.status,
+                "mandate_version_id": notice.mandate_version_id,
+                "observed_at": notice.observed_at,
+                **ack.to_dict(),
+            }
+            entry = self._append_event(
+                EventKind.WORKER_STOP_ACK,
+                payload,
+                ts_device=ack.acknowledged_at or now_ts_device(),
+                tool_name=None,
+                session_id=f"suspend-{notice.agent_id or 'agent'}",
+            )
+            if entry is not None and self._checkpointer is not None:
+                self._checkpointer.note(entry.seq)
+            return entry
+        except Exception:  # noqa: BLE001 - recording never undoes the stop
+            log.exception("coriqo: failed to record a worker's suspend acknowledgement")
+            return None
+
     def _append(self, verdict: Verdict, payload: dict[str, Any]) -> LedgerEntry | None:
         """Seal the ``AgentEvent`` for one verdict.
 
@@ -550,19 +583,36 @@ class VerdictRecorder:
         get the new keys, and their digest is computed once, at write time,
         over whatever ``payload`` holds then.
         """
+        return self._append_event(
+            EventKind.MANDATE_VERDICT,
+            payload,
+            ts_device=payload["decided_at"],
+            tool_name=verdict.tool,
+            session_id=payload.get("run_id") or self._session_id,
+        )
+
+    def _append_event(
+        self,
+        kind: EventKind,
+        payload: dict[str, Any],
+        *,
+        ts_device: str,
+        tool_name: str | None,
+        session_id: str,
+    ) -> LedgerEntry | None:
         if self._ledger is None:
             return None
         event = AgentEvent(
             schema_version=EVENT_SCHEMA_VERSION,
             event_id=new_event_id(),
             device_id=self._device_id,
-            session_id=payload.get("run_id") or self._session_id,
+            session_id=session_id,
             seq=0,  # the ledger assigns the real one
-            kind=EventKind.MANDATE_VERDICT.value,
-            ts_device=payload["decided_at"],
+            kind=kind.value,
+            ts_device=ts_device,
             ts_monotonic_ns=now_monotonic_ns(),
             tool_use_id=None,
-            tool_name=verdict.tool,
+            tool_name=tool_name,
             payload=payload,
             payload_hash=sha256_hex(canonicalize(payload)),
             model=None,

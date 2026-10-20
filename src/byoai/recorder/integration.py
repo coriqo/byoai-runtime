@@ -146,7 +146,15 @@ class Recorder:
             self._shipper_stop = None
             self._shipper_thread = None
 
-    def close(self) -> None:
+    def close(self, *, final_ship: bool = False) -> None:
+        """Stop the shipper and close the ledger.
+
+        ``final_ship`` sends what is still unsent once more after the shipper
+        thread has stopped. Without it, an entry written in the last few
+        seconds before exit waits on disk for the next run. A process that
+        writes its last word on the way out (coriqo-mcp's record of stopping
+        its server, TI-25) passes True. A failure is logged, not raised.
+        """
         if self._receipt_fetcher is not None:
             self._receipt_fetcher.stop()  # closes its client once the thread has exited
         try:
@@ -154,6 +162,18 @@ class Recorder:
                 self._shipper_stop.set()
             if self._shipper_thread is not None:
                 self._shipper_thread.join(timeout=5.0)
+            if (
+                final_ship
+                and self._shipper is not None
+                and not (self._shipper_thread is not None and self._shipper_thread.is_alive())
+            ):
+                try:
+                    self._shipper.ship_once()
+                except Exception as exc:  # noqa: BLE001 - unsent entries stay on disk
+                    log.warning(
+                        "recorder: last send before exit failed (%s); the entries "
+                        "stay in the ledger and go with the next run", exc,
+                    )
             if self._shipper is not None:
                 self._shipper.close()
         finally:

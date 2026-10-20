@@ -69,6 +69,11 @@ class EventKind(str, Enum):
     #: MANDATE_VERDICT because the decision was not ours and carries none of
     #: our reason codes; distinct from API_ERROR because nothing failed.
     GUARDRAIL_INTERVENTION = "guardrail_intervention"
+    #: TI-25: one worker's acknowledgement that the agent was suspended — an
+    #: ``on_suspend`` hook returning, or a child process exiting after
+    #: SIGTERM/SIGKILL. Written by byoai.recorder.verdicts from
+    #: byoai.recorder.suspend.
+    WORKER_STOP_ACK = "worker_stop_ack"
 
 
 @dataclass(frozen=True, slots=True)
