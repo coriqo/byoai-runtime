@@ -1130,14 +1130,12 @@ repeating: it sees exactly what the trace says, and a caller who invokes
 without `enableTrace` leaves nothing behind — see
 **[CONFIGURATION.md](CONFIGURATION.md#managed-agents-you-cannot-intercept-byoairecorderbedrock_agent)**.
 
-The ledger is designed to also sync to a Coriqo instance rather than staying
-local-only. **The client side of that is built; the server side does not exist
-yet** — no released Coriqo serves the `/v1/enroll` and `/v1/ingest/batch`
-endpoints `byoai-recorder-enroll` and the background shipper are written
-against, so enrollment has nothing to talk to today. The wire contract is
-exercised only against the mock server under `tests/recorder/`. Until a real
-server ships, the recorder stays local-only — no loss for verification, since
-`coriqo-verify` never needed the network. Details and the full env var
+The ledger also syncs to Coriqo once the device is enrolled. Coriqo serves
+`/v1/enroll`, `/v1/ingest/batch` and `/v1/checkpoints/batch`, and Coriqo's
+`scripts/e2e_agent_enforcement.py` runs `byoai-recorder-enroll`, `coriqo-mcp`
+and the shippers against a real Coriqo stack. Without enrolment the recorder
+stays local-only, which loses nothing for verification: `coriqo-verify` never
+needed the network. Details and the full env var
 reference in
 **[CONFIGURATION.md](CONFIGURATION.md#agent-recorder--tamper-evident-capture-byoairecorder)**.
 
