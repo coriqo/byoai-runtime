@@ -1134,9 +1134,18 @@ def _build_gate(
         return gate, (
             f"mandate {args.mandate} (sha256:{loaded.sha256[:12]}), mode {loaded.mode}"
         ), loaded.agent_id, mandate_grace_s(loaded.document, args.mandate)
+    from ..recorder.identity import resolve_identity
     from ..recorder.mandate import mandate_gate
 
-    gate = mandate_gate(args.coriqo_agent_id, environment=args.environment)
+    # The device enrolled into --recorder-dir fetches the mandate, as it is the
+    # one that records. Without key_dir the identity came only from
+    # $BYOAI_RECORDER_DIR or ~/.byoai/recorder, so a device enrolled with
+    # --key-dir elsewhere read as "no Coriqo identity".
+    gate = mandate_gate(
+        args.coriqo_agent_id,
+        identity=resolve_identity(key_dir=args.recorder_dir),
+        environment=args.environment,
+    )
     if not gate.enabled:
         raise MandateError(
             "no Coriqo identity on this device, so there is no mandate to fetch for "

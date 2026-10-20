@@ -582,6 +582,30 @@ def test_coriqo_agent_id_comes_from_the_file_agent_id_only(tmp_path):
     assert agent_id == "agt_42" and gate.agent_id == "agt_42"
 
 
+def test_coriqo_agent_id_uses_the_device_enrolled_in_recorder_dir(tmp_path, monkeypatch):
+    """--recorder-dir names where the device key and enrolment live. The gate
+    used to resolve its identity from $BYOAI_RECORDER_DIR or ~/.byoai/recorder
+    only, so a device enrolled into --recorder-dir (byoai-recorder-enroll
+    --key-dir) was told it had no Coriqo identity. Found end to end against a
+    real Coriqo."""
+    import argparse
+
+    from byoai.integrations.coriqo_mcp import _build_gate
+    from byoai.recorder.enroll import EnrollmentState, _write_enrollment_state
+    from byoai.recorder.keys import load_or_create_device_key
+
+    monkeypatch.setenv("BYOAI_RECORDER_DIR", str(tmp_path / "elsewhere"))
+    monkeypatch.delenv("BYOAI_CORIQO_API_KEY", raising=False)
+    rec = tmp_path / "rec"
+    key = load_or_create_device_key(rec)
+    _write_enrollment_state(rec, EnrollmentState(
+        device_id=key.device_id, coriqo_base_url="http://127.0.0.1:1",
+        enrolled_at="2026-10-20T00:00:00Z", tenant_slug="acme_bank"))
+    gate, *_ = _build_gate(argparse.Namespace(
+        mandate=None, coriqo_agent_id="agt_42", environment=None, recorder_dir=str(rec)))
+    assert gate.enabled and gate.agent_id == "agt_42"
+
+
 def test_tools_call_without_a_readable_name_is_refused():
     interposer = Interposer(file_gate(SHADOW))
     forward, reply = interposer.gate_request(

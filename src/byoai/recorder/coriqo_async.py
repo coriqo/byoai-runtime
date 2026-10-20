@@ -60,6 +60,7 @@ import gzip
 import hashlib
 import json
 import logging
+import math
 import os
 import random
 import uuid
@@ -235,6 +236,24 @@ def device_headers(
 def new_batch_key() -> str:
     """A fresh device-chosen idempotency key for one verdict batch."""
     return "vb_" + uuid.uuid4().hex
+
+
+def _wire_batch_verdict(verdict: Mapping[str, Any]) -> dict[str, Any]:
+    """One verdict as Coriqo's batch endpoint accepts it.
+
+    ``snapshot_age_s`` is a float locally (a monotonic difference), and Coriqo
+    takes whole seconds: a fractional value is a 422 for the whole batch, and
+    a 422 batch is parked, not resent. So every batch carrying a real age was
+    refused until this rounded it. Rounded up, so the age sent is never
+    younger than the snapshot was, which is what Coriqo's staleness check
+    compares. Done here, on the way out, so verdicts already waiting in an
+    outbox ship too, and the local ledger keeps the exact value.
+    """
+    out = dict(verdict)
+    age = out.get("snapshot_age_s")
+    if isinstance(age, float) and math.isfinite(age):
+        out["snapshot_age_s"] = max(0, math.ceil(age))
+    return out
 
 
 def _parse_retry_after(value: str | None) -> float | None:
@@ -488,7 +507,10 @@ class AsyncCoriqoAgentsClient:
             except httpx.HTTPError as exc:
                 # Connect/read failures: nothing was necessarily durable, and
                 # this only runs for requests the caller marked idempotent.
-                last_error = CoriqoAgentsError(None, f"request to {path} failed: {exc}")
+                # httpx's connect errors often have an empty message; the class
+                # name ("ConnectError") is then the only thing that says why.
+                why = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+                last_error = CoriqoAgentsError(None, f"request to {path} failed: {why}")
             else:
                 if response.status_code not in retry_statuses:
                     if collect_headers is not None:
@@ -880,7 +902,7 @@ class AsyncCoriqoAgentsClient:
             f"{ENFORCEMENT_PREFIX}/agents/{coriqo_agent_id}/verdicts/batch",
             json_body={
                 "batch_key": batch_key or new_batch_key(),
-                "verdicts": [dict(v) for v in verdicts],
+                "verdicts": [_wire_batch_verdict(v) for v in verdicts],
             },
             signed=True,
             idempotent=True,

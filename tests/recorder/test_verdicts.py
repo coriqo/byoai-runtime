@@ -312,6 +312,45 @@ async def test_an_over_cap_batch_is_refused_before_it_is_sent(tmp_path):
     await client.close()
 
 
+async def test_snapshot_age_goes_out_in_whole_seconds(tmp_path):
+    """Coriqo takes ``snapshot_age_s`` as an integer and refuses a fractional
+    one with a 422 for the whole batch, which the shipper parks for good. Found
+    running coriqo-mcp against a real Coriqo: every batch with a real age was
+    lost. Rounded up on the way out; the ledger keeps the exact float."""
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(201, json={"recorded": 3})
+
+    client = _device_client(handler, tmp_path)
+    await client.record_verdict_batch(
+        _AGENT,
+        verdicts=[
+            {"tool": "a", "verdict": "allowed", "snapshot_age_s": 1.4},
+            {"tool": "b", "verdict": "allowed", "snapshot_age_s": 0.0},
+            {"tool": "c", "verdict": "allowed", "snapshot_age_s": None},
+        ],
+    )
+    await client.close()
+    ages = [v["snapshot_age_s"] for v in sent[0]["verdicts"]]
+    assert ages == [2, 0, None]
+    assert all(type(a) is int for a in ages[:2])
+
+
+async def test_a_connect_error_names_its_kind(tmp_path):
+    """httpx's ConnectError often has an empty message; the operator log used
+    to read "request to ... failed: " with nothing after it."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("", request=request)
+
+    client = _device_client(handler, tmp_path)
+    with pytest.raises(CoriqoAgentsError, match="failed: ConnectError"):
+        await client.fetch_mandate(_AGENT)
+    await client.close()
+
+
 async def test_a_reasonless_block_is_refused_before_it_is_sent(tmp_path):
     def handler(_request: httpx.Request) -> httpx.Response:  # pragma: no cover
         raise AssertionError("a reasonless blocked verdict should not be sent")
