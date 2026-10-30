@@ -70,7 +70,7 @@ from __future__ import annotations
 import functools
 import inspect
 import logging
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, TypeAlias, TypeVar, overload
@@ -99,6 +99,11 @@ __all__ = [
 ]
 
 log = logging.getLogger(__name__)
+
+#: DA-2: how a governed tool declares it moves an asset. See ``governed_tool``.
+AssetSource: TypeAlias = (
+    Mapping[str, Any] | Callable[[dict[str, Any]], Mapping[str, Any] | None] | None
+)
 
 #: A gate, something that produces one, or nothing.
 GateSource: TypeAlias = "MandateGate | Callable[[], MandateGate | None] | None"
@@ -172,6 +177,22 @@ def _arguments(
         # Let the wrapped function raise the real, well-worded TypeError.
         return None
     return dict(bound.arguments)
+
+
+def _asset(
+    source: AssetSource, named: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """The asset details for one call, or ``None`` (not checked).
+
+    A callable that raises is not caught: the tool's call fails before it runs,
+    which is the safe side for a payment tool, rather than going unchecked.
+    """
+    if source is None:
+        return None
+    if not callable(source):
+        return dict(source)
+    result = source(named or {})
+    return None if result is None else dict(result)
 
 
 def _check(gate: MandateGate | None, action: ProposedAction) -> Verdict | None:
@@ -309,6 +330,7 @@ def governed_tool(
     name: str | None = ...,
     gate: GateSource = ...,
     capture_arguments: bool = ...,
+    asset: AssetSource = ...,
 ) -> Callable[[F], F]: ...
 
 
@@ -318,6 +340,7 @@ def governed_tool(
     name: str | None = None,
     gate: GateSource = None,
     capture_arguments: bool = False,
+    asset: AssetSource = None,
 ) -> Any:
     """Enforce the agent's approved mandate around a tool function.
 
@@ -346,6 +369,13 @@ def governed_tool(
             ``recorder/redact.py`` — until then the verdict carries the tool
             name, which is what the mandate decision is actually about.
 
+        asset: declare this tool moves an asset, so the mandate's asset class,
+            venue and payment limits apply. Either a mapping with any of
+            ``asset_class``, ``venue`` and ``amount_usd`` (fixed values), or a
+            callable taking the call's named arguments (a dict) and returning
+            such a mapping, or ``None`` to leave this call unchecked. A tool
+            with no ``asset`` is never checked against asset scope or limits.
+
     Raises:
         MandateDeniedError: the mandate denied the call. The wrapped function
             was not invoked.
@@ -354,7 +384,7 @@ def governed_tool(
     def decorate(target: F) -> F:
         tool = name or target.__name__
         signature: inspect.Signature | None = None
-        if capture_arguments:
+        if capture_arguments or callable(asset):
             try:
                 signature = inspect.signature(target)
             except (TypeError, ValueError):  # pragma: no cover - exotic callables
@@ -364,12 +394,15 @@ def governed_tool(
 
             @functools.wraps(target)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                named = _arguments(signature, args, kwargs)
+                captured = named if capture_arguments else None
                 _check(
                     _resolve_gate(gate),
                     ProposedAction(
                         tool=tool,
                         trajectory_id=current_run_id(),
-                        arguments=_arguments(signature, args, kwargs),
+                        arguments=captured,
+                        asset=_asset(asset, named),
                     ),
                 )
                 return await target(*args, **kwargs)
@@ -379,12 +412,15 @@ def governed_tool(
 
             @functools.wraps(target)
             def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+                named = _arguments(signature, args, kwargs)
+                captured = named if capture_arguments else None
                 _check(
                     _resolve_gate(gate),
                     ProposedAction(
                         tool=tool,
                         trajectory_id=current_run_id(),
-                        arguments=_arguments(signature, args, kwargs),
+                        arguments=captured,
+                        asset=_asset(asset, named),
                     ),
                 )
                 return target(*args, **kwargs)

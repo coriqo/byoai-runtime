@@ -105,6 +105,44 @@ that triggers the fail-closed branch, not network reachability: a failed refresh
 still-valid snapshot in place, so one blip does not take your agent offline. The failure is
 bounded by a number you configured rather than by whatever the network did.
 
+## Asset scope and payment limits
+
+A mandate can name the asset classes and venues an agent may use, and cap payments:
+`max_transaction_usd` (one call) and `max_transaction_usd_per_day` (a rolling 24 hours). The
+gate checks these only for a call that says what asset it moves. Declare that on the tool:
+
+```python
+@governed_tool(asset=lambda a: {
+    "asset_class": "stablecoin",
+    "venue": "acme_exchange",
+    "amount_usd": a["usd"],
+})
+def transfer(usd: float, to: str): ...
+```
+
+`asset` may also be a plain mapping of fixed values. To decide directly, pass
+`ProposedAction(tool=..., asset={"asset_class": ..., "venue": ..., "amount_usd": ...})`; every
+key is optional.
+
+Checks run in this order, and the first breach denies the call:
+
+| Reason | Denied when |
+|---|---|
+| `asset_class_not_allowed` | the mandate lists asset classes and the call's class is missing or not listed |
+| `venue_not_allowed` | the mandate lists venues and the call's venue is missing or not listed |
+| `transaction_limit_exceeded` | `amount_usd` is over `max_transaction_usd`, or missing or unusable while a payment limit is set |
+| `daily_transaction_limit_exceeded` | allowed spend in the last 24 hours plus `amount_usd` is over `max_transaction_usd_per_day` |
+
+Things to know:
+
+- A call with no asset details is **not checked**. Tools you do not declare are unaffected, so
+  declare every tool that moves value.
+- A call that declares an asset but no usable `amount_usd` (missing, not a number, negative, NaN or infinite) is refused with `transaction_limit_exceeded` when the mandate sets either payment limit. With no payment limit set, the amount is not needed; the class and venue checks still run.
+- Only allowed calls count toward the daily total, and the total is held in this process: a
+  restart or a second worker starts from zero.
+- A mandate with no asset scope or limits allows any asset call, as before.
+- Like the run budgets, these denials apply under `observe` too.
+
 ## Reading a verdict directly
 
 Most code should use the decorator. When you want the decision without the raise:
