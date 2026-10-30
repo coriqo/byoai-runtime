@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Asset class, venue and payment limits are enforced from the Coriqo
+  mandate (DA-2).** A call that carries asset details is checked in order
+  against the mandate's asset classes, its venues, `max_transaction_usd` and
+  `max_transaction_usd_per_day` (rolling 24 hours, allowed calls only, in this
+  process). A breach is denied with `asset_class_not_allowed`,
+  `venue_not_allowed`, `transaction_limit_exceeded` or
+  `daily_transaction_limit_exceeded`. Declare the details with
+  `ProposedAction(asset={...})` or `@governed_tool(asset=...)`. A call with no
+  asset details is not checked and behaves as before; so does a mandate with no
+  asset scope or limits. `MandateSnapshot` gains `asset_classes`, `venues`,
+  `max_transaction_usd` and `max_transaction_usd_per_day`, all optional on the
+  wire.
 - **The stop grace period is a mandate setting.** `stop_grace_s` (mandate
   format v1.1) comes from the agent's mandate in Coriqo or a v1.1 file, is read
   when the suspension lands, and sits between `--grace` and the older

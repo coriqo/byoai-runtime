@@ -90,6 +90,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import math
 import os
 import threading
 import time
@@ -148,6 +149,9 @@ _MAX_REPORTED_APPROVAL_REQUESTS = 10_000
 #: 60s rather than derived from the name being configurable, since the wire
 #: field itself is called max_calls_per_minute.
 _CALL_RATE_WINDOW_S = 60.0
+
+#: DA-2: the rolling window max_transaction_usd_per_day is measured over.
+_DAILY_WINDOW_S = 24 * 60 * 60.0
 
 #: AD-11: hard cap on how many distinct trajectories this gate tracks
 #: step/cost state for. A trajectory is not otherwise ever "finished" from
@@ -222,6 +226,12 @@ class Reason:
     BUDGET_COST_EXCEEDED = "budget_cost_exceeded"
     BUDGET_CALL_RATE_EXCEEDED = "budget_call_rate_exceeded"
     BUDGET_STEP_LIMIT_EXCEEDED = "budget_step_limit_exceeded"
+    #: DA-2: asset-aware mandates. Checked only for a call that carries
+    #: ``ProposedAction.asset``; a call without asset details is not checked.
+    ASSET_CLASS_NOT_ALLOWED = "asset_class_not_allowed"
+    VENUE_NOT_ALLOWED = "venue_not_allowed"
+    TRANSACTION_LIMIT_EXCEEDED = "transaction_limit_exceeded"
+    DAILY_TRANSACTION_LIMIT_EXCEEDED = "daily_transaction_limit_exceeded"
     #: TI-20: the snapshot names an ``environment`` and this gate was told it
     #: runs somewhere else. That mandate is not for here, so the gate has
     #: nothing it can stand behind and the posture decides, as for
@@ -264,6 +274,10 @@ class ProposedAction:
     trajectory_id: str | None = None
     step_index: int | None = None
     arguments: Mapping[str, Any] | None = None
+    #: DA-2: optional asset details, ``{"asset_class": str, "venue": str,
+    #: "amount_usd": float}`` (every key optional). Only a call that carries
+    #: this is checked against the mandate's asset scope and payment limits.
+    asset: Mapping[str, Any] | None = None
 
     def __repr__(self) -> str:
         """Never renders ``arguments``.
@@ -523,6 +537,14 @@ class MandateSnapshot:
     #: Mandate format v1.1: the stop grace period the bank set, in seconds.
     #: None when the mandate does not set one.
     stop_grace_s: float | None = None
+    #: DA-2: ``None`` means that dimension is not restricted; a tuple (even an
+    #: empty one is treated as not restricted, as Coriqo never sends it empty)
+    #: is an allow-list.
+    asset_classes: tuple[str, ...] | None = None
+    venues: tuple[str, ...] | None = None
+    #: DA-2: per-transaction and rolling-24h USD limits (mandate format v1.2).
+    max_transaction_usd: float | None = None
+    max_transaction_usd_per_day: float | None = None
     #: Monotonic reading from when this snapshot was received. Monotonic, not
     #: wall clock, so an NTP correction mid-run cannot make a snapshot look
     #: fresher (or older) than it is.
@@ -598,6 +620,9 @@ class MandateSnapshot:
         if isinstance(raw_resolved, Mapping):
             resolved = {str(k): str(v) for k, v in raw_resolved.items()}
 
+        scope = payload.get("asset_scope")
+        scope = scope if isinstance(scope, Mapping) else {}
+
         return cls(
             allowed_tools=tools,
             approval_required_tools=approval_tools,
@@ -625,6 +650,12 @@ class MandateSnapshot:
             environment=_opt_str(payload.get("environment")),
             output_inspection=inspection,
             stop_grace_s=None if stop_grace is None else float(stop_grace),
+            asset_classes=_opt_str_list(scope.get("asset_classes")),
+            venues=_opt_str_list(scope.get("venues")),
+            max_transaction_usd=_opt_limit(payload.get("max_transaction_usd")),
+            max_transaction_usd_per_day=_opt_limit(
+                payload.get("max_transaction_usd_per_day")
+            ),
             received_at=received_at,
             raw=dict(payload),
         )
@@ -732,6 +763,32 @@ def _opt_float(value: Any) -> float | None:
         return None
 
 
+def _opt_str_list(value: Any) -> tuple[str, ...] | None:
+    """An allow-list, or ``None`` (not restricted) for absent, empty or malformed."""
+    if value is None or isinstance(value, str) or not isinstance(value, Iterable):
+        return None
+    items = tuple(str(v) for v in value)
+    return items or None
+
+
+def _opt_limit(value: Any) -> float | None:
+    """A USD limit, or ``None`` when absent or not a number."""
+    if isinstance(value, bool):
+        return None
+    return _opt_float(value)
+
+
+def _opt_amount(value: Any) -> float | None:
+    """The amount on a proposed asset; ``None`` (amount checks skipped, nothing
+    added to the daily total) if unusable. Negative, NaN and infinite amounts
+    are unusable: a negative one would otherwise shrink the rolling-24h total
+    and let later calls past the daily limit."""
+    amount = _opt_limit(value)
+    if amount is None or not math.isfinite(amount) or amount < 0:
+        return None
+    return amount
+
+
 # -- where snapshots come from -----------------------------------------------
 
 #: A refresh: given the ETag of the snapshot in hand (or ``None``), return
@@ -836,6 +893,9 @@ class MandateGate:
         # counts and accumulated cost for the other two. All under self._lock,
         # same as _snapshot, since decide() must stay safe to call off-thread.
         self._call_timestamps: deque[float] = deque()
+        # DA-2: (clock reading, amount_usd) of ALLOWED calls that carried an
+        # asset amount, for the rolling-24h payment limit. Same lock.
+        self._asset_spend: deque[tuple[float, float]] = deque()
         self._trajectory_steps: "OrderedDict[str, set[int]]" = OrderedDict()
         self._trajectory_costs: "OrderedDict[str, float]" = OrderedDict()
         self._agent_id = agent_id
@@ -1414,7 +1474,17 @@ class MandateGate:
             "step_index": action.step_index,
         }
 
+        asset = action.asset
+        amount: float | None = None
         with self._lock:
+            if asset is not None:
+                amount = _opt_amount(asset.get("amount_usd"))
+                asset_verdict = self._check_asset(
+                    asset, amount, snapshot, now, common
+                )
+                if asset_verdict is not None:
+                    return asset_verdict
+
             if snapshot.max_calls_per_minute is not None:
                 window_start = now - _CALL_RATE_WINDOW_S
                 while self._call_timestamps and self._call_timestamps[0] < window_start:
@@ -1458,10 +1528,64 @@ class MandateGate:
             # attempt now, under the same lock, so a concurrent decide() for
             # the same trajectory/window sees it.
             self._call_timestamps.append(now)
+            if amount is not None:
+                self._asset_spend.append((now, amount))
             if trajectory_id is not None and action.step_index is not None:
                 self._mark_trajectory_seen(trajectory_id)
                 self._trajectory_steps.setdefault(trajectory_id, set()).add(action.step_index)
 
+        return None
+
+    def _check_asset(
+        self,
+        asset: Mapping[str, Any],
+        amount: float | None,
+        snapshot: MandateSnapshot,
+        now: float,
+        common: dict[str, Any],
+    ) -> Deny | None:
+        """DA-2: asset class, venue, per-transaction and rolling-24h limits,
+        in that order. Caller holds ``self._lock``. Only called for a call that
+        carries asset details. A missing ``amount_usd`` skips the two amount
+        checks, never the scope checks."""
+        asset_class = asset.get("asset_class")
+        venue = asset.get("venue")
+        if snapshot.asset_classes is not None and asset_class not in snapshot.asset_classes:
+            return Deny(
+                reason=Reason.ASSET_CLASS_NOT_ALLOWED,
+                detail=f"asset class {asset_class!r} is not in the mandate's asset scope",
+                **common,
+            )
+        if snapshot.venues is not None and venue not in snapshot.venues:
+            return Deny(
+                reason=Reason.VENUE_NOT_ALLOWED,
+                detail=f"venue {venue!r} is not in the mandate's asset scope",
+                **common,
+            )
+        if amount is None:
+            return None
+        limit = snapshot.max_transaction_usd
+        if limit is not None and amount > limit:
+            return Deny(
+                reason=Reason.TRANSACTION_LIMIT_EXCEEDED,
+                detail=f"${amount:.2f} is over the ${limit:.2f} per-transaction limit",
+                **common,
+            )
+        daily = snapshot.max_transaction_usd_per_day
+        if daily is not None:
+            cutoff = now - _DAILY_WINDOW_S
+            while self._asset_spend and self._asset_spend[0][0] <= cutoff:
+                self._asset_spend.popleft()
+            spent = sum(a for _, a in self._asset_spend)
+            if spent + amount > daily:
+                return Deny(
+                    reason=Reason.DAILY_TRANSACTION_LIMIT_EXCEEDED,
+                    detail=(
+                        f"${spent:.2f} already allowed in the last 24h; ${amount:.2f} more "
+                        f"would pass the ${daily:.2f} daily limit"
+                    ),
+                    **common,
+                )
         return None
 
     def record_actual_cost(self, trajectory_id: str, cost_usd: float) -> None:
