@@ -130,14 +130,14 @@ Checks run in this order, and the first breach denies the call:
 |---|---|
 | `asset_class_not_allowed` | the mandate lists asset classes and the call's class is missing or not listed |
 | `venue_not_allowed` | the mandate lists venues and the call's venue is missing or not listed |
-| `transaction_limit_exceeded` | `amount_usd` is over `max_transaction_usd` |
+| `transaction_limit_exceeded` | `amount_usd` is over `max_transaction_usd`, or missing or unusable while a payment limit is set |
 | `daily_transaction_limit_exceeded` | allowed spend in the last 24 hours plus `amount_usd` is over `max_transaction_usd_per_day` |
 
 Things to know:
 
 - A call with no asset details is **not checked**. Tools you do not declare are unaffected, so
   declare every tool that moves value.
-- With no `amount_usd`, the two amount checks are skipped; the class and venue checks still run.
+- A call that declares an asset but no usable `amount_usd` (missing, not a number, negative, NaN or infinite) is refused with `transaction_limit_exceeded` when the mandate sets either payment limit. With no payment limit set, the amount is not needed; the class and venue checks still run.
 - Only allowed calls count toward the daily total, and the total is held in this process: a
   restart or a second worker starts from zero.
 - A mandate with no asset scope or limits allows any asset call, as before.

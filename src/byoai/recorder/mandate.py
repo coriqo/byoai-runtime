@@ -1546,8 +1546,9 @@ class MandateGate:
     ) -> Deny | None:
         """DA-2: asset class, venue, per-transaction and rolling-24h limits,
         in that order. Caller holds ``self._lock``. Only called for a call that
-        carries asset details. A missing ``amount_usd`` skips the two amount
-        checks, never the scope checks."""
+        carries asset details. When the mandate sets a payment limit, a missing
+        or unusable ``amount_usd`` is refused (fail closed); with no limit set
+        it is not needed."""
         asset_class = asset.get("asset_class")
         venue = asset.get("venue")
         if snapshot.asset_classes is not None and asset_class not in snapshot.asset_classes:
@@ -1562,16 +1563,25 @@ class MandateGate:
                 detail=f"venue {venue!r} is not in the mandate's asset scope",
                 **common,
             )
-        if amount is None:
-            return None
         limit = snapshot.max_transaction_usd
+        daily = snapshot.max_transaction_usd_per_day
+        if amount is None:
+            # Fail closed: the call declared it moves an asset, and the mandate
+            # caps payments, so an amount we cannot read is refused rather
+            # than let through unchecked.
+            if limit is None and daily is None:
+                return None
+            return Deny(
+                reason=Reason.TRANSACTION_LIMIT_EXCEEDED,
+                detail="the call declares an asset but no usable amount_usd, and the mandate sets a payment limit",
+                **common,
+            )
         if limit is not None and amount > limit:
             return Deny(
                 reason=Reason.TRANSACTION_LIMIT_EXCEEDED,
                 detail=f"${amount:.2f} is over the ${limit:.2f} per-transaction limit",
                 **common,
             )
-        daily = snapshot.max_transaction_usd_per_day
         if daily is not None:
             cutoff = now - _DAILY_WINDOW_S
             while self._asset_spend and self._asset_spend[0][0] <= cutoff:

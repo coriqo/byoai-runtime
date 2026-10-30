@@ -59,9 +59,9 @@ def test_per_transaction_limit():
     assert verdict.reason == "transaction_limit_exceeded"
 
 
-def test_missing_amount_skips_amount_checks():
+def test_missing_amount_is_refused_when_the_mandate_caps_payments():
     gate = gate_with(max_transaction_usd=1, max_transaction_usd_per_day=1)
-    assert isinstance(gate.decide(act(asset_class="fiat")), Allow)
+    assert gate.decide(act(asset_class="fiat")).reason == "transaction_limit_exceeded"
 
 
 def test_daily_limit_counts_only_allowed_calls_and_rolls_off():
@@ -139,18 +139,27 @@ def test_governed_tool_asset_mapping_and_callable():
         ran.append("swap")
 
     with use_gate(gate):
-        pay(10)
         swap(40)
         with pytest.raises(MandateDeniedError):
             swap(60)
-    assert ran == ["pay", "swap"]
+        # pay declares an asset but no amount, and the mandate caps payments:
+        # refused rather than let through unchecked.
+        with pytest.raises(MandateDeniedError):
+            pay(10)
+    assert ran == ["swap"]
 
 
-@pytest.mark.parametrize("bad", [-500, float("nan"), float("inf")])
-def test_unusable_amount_never_shrinks_the_daily_total(bad):
+@pytest.mark.parametrize("bad", [-500, float("nan"), float("inf"), "ten", None])
+def test_unusable_amount_is_refused_when_a_limit_is_set(bad):
     clock = FakeClock()
     gate = gate_with(clock=clock, max_transaction_usd_per_day=100)
     assert isinstance(gate.decide(act(amount_usd=90)), Allow)
-    # Not checked, and not added: a negative amount must not make room.
-    assert isinstance(gate.decide(act(amount_usd=bad)), Allow)
-    assert gate.decide(act(amount_usd=20)).reason == "daily_transaction_limit_exceeded"
+    verdict = gate.decide(act(amount_usd=bad))
+    assert verdict.reason == "transaction_limit_exceeded"
+    # Nothing was added: 10 more still fits.
+    assert isinstance(gate.decide(act(amount_usd=10)), Allow)
+
+
+def test_unusable_amount_is_fine_when_no_limit_is_set():
+    gate = gate_with(asset_scope=SCOPE)
+    assert isinstance(gate.decide(act(asset_class="fiat", venue="acme_exchange")), Allow)
