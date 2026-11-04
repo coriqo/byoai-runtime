@@ -1445,3 +1445,49 @@ def test_a_late_reply_finds_its_own_message_by_send_id(tmp_path):
     assert (a["tools"], a["sources"]) == (["web.run"], 3)
     assert (b["tools"], b["sources"]) == ([], None)
     assert clean_browser_row({"kind": "browser.chat.reply", "send_id": "x y"}).get("send_id") is None
+
+
+def _independent_checkpoint_check(cp: dict) -> bool:
+    """Ed25519 over sha256(0x00 || JCS(checkpoint minus sig)), written without
+    the runtime's helpers: the same rule Coriqo's device-receipt ingest applies."""
+    import base64
+    import hashlib
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+    body = {k: v for k, v in cp.items() if k not in ("sig", "signature")}
+    canon = json.dumps(body, sort_keys=True, separators=(",", ":"),
+                       ensure_ascii=False).encode("utf-8")
+    digest = hashlib.sha256(b"\x00" + canon).digest()
+    sig = base64.b64decode(cp["sig"].removeprefix("ed25519:"))
+    key = Ed25519PublicKey.from_public_bytes(base64.b64decode(cp["public_key_b64"]))
+    try:
+        key.verify(sig, digest)
+        return True
+    except InvalidSignature:
+        return False
+
+
+def test_receipt_checkpoint_signature_verifies_from_receipt_alone(tmp_path):
+    from byoai.recorder.keys import DeviceKey
+    from byoai.recorder.merkle import checkpoint_leaf_hash
+
+    chain = SealChain(make_cfg(tmp_path))
+    s1 = chain.stamp({"interaction": "a", "ts": "14:00"})
+    chain.stamp({"interaction": "b", "ts": "14:05"})
+    cp = chain.receipt(s1)["merkle"]["checkpoint"]
+    assert cp["kind"] == "byoai.shield.checkpoint.v1" and cp["ts"]
+    assert cp == chain.checkpoint                     # byte-for-byte as signed
+
+    def runtime_ok(c):
+        body = {k: v for k, v in c.items() if k != "sig"}
+        return DeviceKey.verify(c["public_key_b64"], checkpoint_leaf_hash(body), c["sig"])
+
+    assert runtime_ok(cp) and _independent_checkpoint_check(cp)
+    for field, value in (("kind", "byoai.shield.checkpoint.v0"),
+                         ("ts", "2000-01-01T00:00:00Z")):
+        bad = dict(cp, **{field: value})
+        assert not runtime_ok(bad) and not _independent_checkpoint_check(bad)
+    for field in ("kind", "ts"):
+        bad = {k: v for k, v in cp.items() if k != field}
+        assert not runtime_ok(bad) and not _independent_checkpoint_check(bad)

@@ -87,6 +87,11 @@ with `x-coriqo-device` and `x-coriqo-signature`.
   redacted.
 - `seal` links the event to the signed chain, so any event can be exported with
   a receipt and checked offline.
+  The receipt (`byoai.receipt.v2`) carries the signed checkpoint exactly as
+  the device signed it: `kind`, `root_hex`, `height`, `ts`, `device_id`,
+  `public_key_b64` and `sig`. The signature is Ed25519 over
+  `sha256(0x00 || JCS(checkpoint without sig))`, so dropping or changing any
+  field, `kind` and `ts` included, fails the check.
 - `person_id` is `null` from the device; Coriqo binds it from the device's
   person, set by the organisation.
 

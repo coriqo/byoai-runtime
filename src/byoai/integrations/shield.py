@@ -1231,11 +1231,9 @@ class SealChain:
             "payload": entry["payload"],
             "merkle": {
                 "proof": self.proof_for(seal),
-                "checkpoint": {
-                    "root_hex": cp["root_hex"], "height": cp["height"],
-                    "device_id": cp["device_id"],
-                    "public_key_b64": cp["public_key_b64"], "sig": cp["sig"],
-                },
+                # Every field the device signed, exactly as signed (kind and
+                # ts included), so the signature checks from the receipt alone.
+                "checkpoint": dict(cp),
                 "note": "Offline verify: sha256(0x00||canonical(payload)) == "
                         "seal; fold leaf + steps → root; unwrap Ed25519 sig over "
                         "the checkpoint (sig excluded) with public_key_b64.",
