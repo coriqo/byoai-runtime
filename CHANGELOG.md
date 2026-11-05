@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Device receipts reach the Coriqo run.** `publish_session(seal_chain=...)`
+  posts each step's sealed Shield row to `.../device-receipts` after the traces
+  and before the close. A 422 is a `device_receipt_refused` finding in the
+  receipt store, any other failure `device_receipt_unsent`; both show in
+  `coriqo-verify --receipts`, and neither loses the run. A row holding a message
+  preview stays on the device (`device_receipt_withheld`).
+- **Shield tool rows can carry `payload_hash` and `mandate_verdict`** in their
+  sealed payload, from the `tool.call` row, so Coriqo attaches a receipt to its
+  step and compares verdicts. A row without them seals as before.
+- **`coriqo-verify receipt <file> --pubkey <key>`** runs the seal, inclusion and
+  signature checks on one device receipt. Exit 0 verified, 1 failed, 2 unreadable.
 - **Asset class, venue and payment limits are enforced from the Coriqo
   mandate (DA-2).** A call that carries asset details is checked in order
   against the mandate's asset classes, its venues, `max_transaction_usd` and

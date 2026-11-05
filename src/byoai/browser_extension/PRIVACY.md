@@ -191,6 +191,9 @@ None of this contains message text, and none of it leaves your computer.
   now* (`POST /api/privacy/scrub`). Sealed entries stay, because removing
   them would break the seal; they hold only the fields listed above.
 - **Access:** `/api/receipt/<seal>` on Shield exports a verifiable receipt.
+  Agent runs published to Coriqo with Shield's seal chain send the receipt of
+  each agent tool call. Receipts of chat messages are never sent, and a row
+  holding a message preview stays on this computer.
 
 ## The record Shield keeps
 

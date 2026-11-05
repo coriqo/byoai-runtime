@@ -3,9 +3,11 @@
 Usage::
 
     coriqo-verify <ledger.db> [--pubkey B64] [--json]
+    coriqo-verify receipt <file> --pubkey KEY [--json]
 
 Exit code 0 means the record verified clean. Exit code 1 means the record
-cannot be relied upon and the reasons are printed.
+cannot be relied upon and the reasons are printed. Exit code 2 means the input
+could not be read.
 """
 
 from __future__ import annotations
@@ -14,7 +16,12 @@ import argparse
 import json
 import sys
 
-from byoai.recorder.verify import VerifyError, VerifyReport, verify_ledger
+from byoai.recorder.verify import (
+    VerifyError,
+    VerifyReport,
+    verify_device_receipt,
+    verify_ledger,
+)
 
 _EXIT_OK = 0
 _EXIT_FAILED = 1
@@ -269,7 +276,49 @@ def _parse_device_pubkeys(raw: list[str]) -> dict[str, str]:
     return device_public_keys
 
 
+def _receipt_main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="coriqo-verify receipt",
+        description="Check one device receipt offline: seal, inclusion, signature.",
+    )
+    parser.add_argument("file", help="path to the device receipt (JSON)")
+    parser.add_argument(
+        "--pubkey",
+        required=True,
+        help="the device's enrolled Ed25519 public key, hex or base64. Get it from "
+        "your own record of the device, not from the receipt",
+    )
+    parser.add_argument("--json", dest="as_json", action="store_true",
+                        help="emit the result as machine-readable JSON")
+    args = parser.parse_args(argv)
+    try:
+        with open(args.file, encoding="utf-8") as fh:
+            doc = json.load(fh)
+    except (OSError, ValueError) as exc:
+        print(f"coriqo-verify: cannot read {args.file}: {exc}", file=sys.stderr)
+        return _EXIT_UNREADABLE
+    try:
+        result = verify_device_receipt(doc, args.pubkey)
+    except ValueError as exc:
+        print(f"coriqo-verify: --pubkey: {exc}", file=sys.stderr)
+        return _EXIT_UNREADABLE
+    if args.as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(f"Device receipt {result['seal'] or '(no seal)'}")
+        for name, check in result["checks"].items():
+            print(f"  {'PASS' if check['ok'] else 'FAIL'}  {name}: {check['detail']}")
+        print("")
+        print("VERDICT: receipt verified." if result["ok"]
+              else "VERDICT: receipt CANNOT be relied upon.")
+    return _EXIT_OK if result["ok"] else _EXIT_FAILED
+
+
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    # A ledger file named "receipt" is still reachable as ./receipt.
+    if argv and argv[0] == "receipt":
+        return _receipt_main(argv[1:])
     args = _build_parser().parse_args(argv)
     device_public_keys = _parse_device_pubkeys(args.device_pubkeys)
     receipt_pem = None

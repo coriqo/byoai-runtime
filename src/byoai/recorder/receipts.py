@@ -322,6 +322,40 @@ class ReceiptStore:
                 return
             row["rejected"] = {"status": status, "at": utc_now().isoformat()}
 
+    def note_device_receipt(
+        self,
+        session_id: str,
+        step_index: Any,
+        finding: str,
+        reason: str,
+        *,
+        status: int | None = None,
+        seal: str | None = None,
+        trajectory_id: str | None = None,
+    ) -> None:
+        """A step's device receipt did not reach Coriqo. ``finding`` is one of
+        ``device_receipt_refused`` (422, the receipt failed Coriqo's checks),
+        ``device_receipt_unsent`` (any other failure; sending it again is safe)
+        or ``device_receipt_withheld`` (the sealed row holds message text)."""
+        key = row_key(session_id, step_index, trajectory_id)
+        with self._txn() as rows:
+            row = rows.get(key)
+            if row is not None:
+                row["device_receipt"] = {
+                    "finding": finding, "reason": reason, "status": status,
+                    "seal": seal, "at": utc_now().isoformat(),
+                }
+
+    def clear_device_receipt(
+        self, session_id: str, step_index: Any, trajectory_id: str | None = None
+    ) -> None:
+        """Coriqo holds this step's receipt now, so an earlier finding is over."""
+        key = row_key(session_id, step_index, trajectory_id)
+        with self._txn() as rows:
+            row = rows.get(key)
+            if row is not None:
+                row.pop("device_receipt", None)
+
     def forget(self, key: str) -> bool:
         """Drop a row (used to waive a rejected batch). True if it existed."""
         with self._txn() as rows:

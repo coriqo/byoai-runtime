@@ -1225,12 +1225,32 @@ class SealChain:
         if entry is None:
             return None
         cp = self.sign_checkpoint()  # fresh, so the root covers this entry
+        return self._build_receipt(entry, cp, self.verify_chain()["tamper_evident"])
+
+    def receipts_for_payload_hashes(self, digests) -> dict[str, dict]:
+        """A receipt for each tool row sealed with one of ``digests``, keyed by
+        digest, under one fresh checkpoint. If a digest was sealed more than
+        once (the same arguments again), the newest row answers."""
+        wanted = set(digests)
+        with self._lock:
+            found = {}
+            for entry, _problem in self._scan_log():
+                digest = ((entry or {}).get("payload") or {}).get("payload_hash")
+                if digest in wanted:
+                    found[digest] = entry
+            if not found:
+                return {}
+            cp = self._sign_checkpoint()
+            intact = self._verify_chain()["tamper_evident"]
+            return {d: self._build_receipt(e, cp, intact) for d, e in found.items()}
+
+    def _build_receipt(self, entry: dict, cp: dict, chain_intact: bool) -> dict:
         return {
             "kind": "byoai.receipt.v2",
             "seal": entry["seal"], "height": entry["height"],
             "payload": entry["payload"],
             "merkle": {
-                "proof": self.proof_for(seal),
+                "proof": self.proof_for(entry["seal"]),
                 # Every field the device signed, exactly as signed (kind and
                 # ts included), so the signature checks from the receipt alone.
                 "checkpoint": dict(cp),
@@ -1240,7 +1260,7 @@ class SealChain:
             },
             "self_check": {
                 "entry_hash_ok": self._leaf(entry["payload"]).hex()[:16] == entry["seal"],
-                "chain_intact": self.verify_chain()["tamper_evident"],
+                "chain_intact": chain_intact,
                 "chain_height": self.height,
                 "verified_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             },
@@ -2014,6 +2034,7 @@ class Feed:
                       flags_box=flags_box, text_hmac=r.get("text_hmac"),
                       chars=chars)
             self.items[0]["call_id"] = r.get("call_id")
+            self.items[0]["_seal_payload"].update(_tool_join_keys(r))
         elif kind in ("tool.result", "tool.error"):
             # Seal on completion, so the seal binds the outcome too (and a
             # finished row always carries a seal).
@@ -2267,11 +2288,29 @@ _ATTACH_VERDICT = re.compile(
 _STAGES = frozenset({"input", "network"})
 _GATE_REASONS = frozenset({"rewrite_failed", "send_retry_needed"})
 _SHA256 = re.compile(r"[0-9a-f]{64}")
+# A tool call's ledger digest, with or without the ledger's "sha256:" prefix.
+_PAYLOAD_HASH = re.compile(r"(?:sha256:)?[0-9a-f]{64}")
+_MANDATE_VERDICTS = frozenset({"allowed", "flagged", "blocked", "pending_approval"})
 _NAME_HASH = re.compile(r"hmac-sha256:[0-9a-f]{64}")
 _RULES_VERSION = re.compile(r"[0-9a-f]{12}")
 _TOOL_NAME = re.compile(r"[A-Za-z0-9_.:-]{1,48}")
 _MIME = re.compile(r"[A-Za-z0-9!#$&^_.+-]{1,60}/[A-Za-z0-9!#$&^_.+-]{1,80}")
 _SEND_ID = re.compile(r"[A-Za-z0-9-]{8,64}")
+
+
+def _tool_join_keys(row: dict) -> dict:
+    """What ties a sealed tool row to its step in Coriqo: the ledger's digest of
+    the call (a hash, never the call's content) and the device's mandate word.
+    A row without them seals exactly as it always did, so an old row replayed
+    after an upgrade keeps its seal. A value of the wrong shape is dropped."""
+    keys: dict = {}
+    digest = row.get("payload_hash")
+    if isinstance(digest, str) and _PAYLOAD_HASH.fullmatch(digest):
+        keys["payload_hash"] = digest
+    verdict = row.get("mandate_verdict")
+    if isinstance(verdict, str) and verdict in _MANDATE_VERDICTS:
+        keys["mandate_verdict"] = verdict
+    return keys
 
 
 def clean_browser_row(row: object) -> dict | None:
