@@ -10,6 +10,7 @@ It never opens a network connection and never writes to the ledger.
 
 from __future__ import annotations
 
+import base64
 import json
 import sqlite3
 from collections.abc import Iterable
@@ -462,6 +463,9 @@ def verify_receipts(
         "failed": [],
         "malformed": [],
         "not_checked": [],
+        "device_receipt_refused": [],
+        "device_receipt_unsent": [],
+        "device_receipt_withheld": [],
         "unpinned": False,
         "store_error": None,
         "reasons": [],
@@ -506,6 +510,13 @@ def verify_receipts(
             )
             continue
         overdue = age >= overdue_after_seconds
+        device = row.get("device_receipt")
+        if isinstance(device, dict) and device.get("finding") in (
+            "device_receipt_refused", "device_receipt_unsent", "device_receipt_withheld",
+        ):
+            out[device["finding"]].append(
+                {"key": key, "seal": device.get("seal"), "reason": device.get("reason")}
+            )
         event_hash = row.get("event_hash")
         if not event_hash:
             if row.get("rejected"):
@@ -573,6 +584,8 @@ def verify_receipts(
         ("content_mismatch", "echoed record differs from what was sent"),
         ("failed", "receipt bundle(s) failed verification"),
         ("malformed", "malformed store row(s)"),
+        ("device_receipt_unsent", "device receipt(s) that could not be sent: "
+                                  "call send_device_receipts again; a repeat is safe"),
     ):
         if out[name]:
             if name == "receipt_overdue" and allow_pending:
@@ -581,6 +594,13 @@ def verify_receipts(
                 )
             else:
                 reasons.append(f"{len(out[name])} {msg}")
+    for item in out["device_receipt_refused"]:
+        reasons.append(f"device receipt on {item['key']} refused: {item['reason']}")
+    if out["device_receipt_withheld"]:
+        out["notes"].append(
+            f"{len(out['device_receipt_withheld'])} device receipt(s) kept on this device "
+            "because the sealed row holds a message preview"
+        )
     if not allow_unchecked:
         if out["not_checked"]:
             reasons.append(
@@ -594,6 +614,116 @@ def verify_receipts(
             )
     out["ok"] = not reasons
     return out
+
+
+def _pubkey_b64(public_key: str) -> str:
+    """A device key as base64. Coriqo shows them as 64 hex characters, Shield as
+    base64; both are accepted. Raises ValueError for anything else."""
+    text = public_key.strip()
+    try:
+        raw = bytes.fromhex(text) if len(text) == 64 else base64.b64decode(text, validate=True)
+    except ValueError as exc:
+        raise ValueError("the public key is neither hex nor base64") from exc
+    if len(raw) != 32:
+        raise ValueError(f"an Ed25519 public key is 32 bytes, this one is {len(raw)}")
+    return base64.b64encode(raw).decode("ascii")
+
+
+def _receipt_inclusion(leaf: bytes | None, proof: Any, checkpoint: dict) -> str | None:
+    """Why the entry is not in the signed tree, or None when it is."""
+    if leaf is None:
+        return "the payload could not be hashed, so its place in the tree cannot be checked"
+    if not isinstance(proof, dict):
+        return "the receipt has no inclusion proof"
+    try:
+        built = InclusionProof(
+            leaf_index=0,
+            leaf_hash=leaf,
+            steps=tuple(
+                ProofStep(sibling=bytes.fromhex(s["sibling"]), side=s["side"])
+                for s in proof.get("steps") or []
+            ),
+            root=bytes.fromhex(proof["root_hex"]),
+        )
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return "the inclusion proof is not in the receipt format"
+    if any(s.side not in ("left", "right") for s in built.steps):
+        return "a proof step has no side"
+    if not verify_inclusion(built):
+        return "the proof does not lead to its root: the entry is not in the signed tree"
+    if str(checkpoint.get("root_hex") or "").lower() != built.root.hex():
+        return "the signed checkpoint is for a different tree than the proof"
+    return None
+
+
+def verify_device_receipt(doc: Any, public_key: str) -> dict[str, Any]:
+    """The three checks on one Shield receipt (``byoai.receipt.v2``), offline.
+
+    1. seal: ``sha256(0x00 || canonical(payload))`` starts with ``seal``;
+    2. inclusion: that leaf, folded through the proof, is the checkpoint's root;
+    3. signature: the checkpoint without ``sig`` is signed by ``public_key``,
+       which the caller holds. The key inside the file is never trusted.
+
+    All three always run and each reports on its own. ``doc`` may also be the
+    row Coriqo stores, which holds the device's receipt unchanged under
+    ``receipt``. Raises ValueError for an unusable ``public_key``.
+    """
+    from byoai.recorder.keys import DeviceKey
+
+    pinned = _pubkey_b64(public_key)
+    nested = doc.get("receipt") if isinstance(doc, dict) else None
+    receipt = nested if isinstance(nested, dict) else doc
+    if not isinstance(receipt, dict) or receipt.get("kind") != "byoai.receipt.v2":
+        reason = "this file is not a byoai.receipt.v2 device receipt"
+        return {"ok": False, "seal": None, "checks": {
+            name: {"ok": False, "detail": reason} for name in ("seal", "inclusion", "signature")
+        }}
+    payload, seal = receipt.get("payload"), receipt.get("seal")
+    merkle = receipt.get("merkle") if isinstance(receipt.get("merkle"), dict) else {}
+    checkpoint = merkle.get("checkpoint") if isinstance(merkle.get("checkpoint"), dict) else {}
+
+    leaf: bytes | None = None
+    seal_problem = None
+    try:
+        leaf = checkpoint_leaf_hash(payload)
+    except (CanonicalizationError, TypeError, ValueError):
+        seal_problem = "the payload could not be hashed"
+    if seal_problem is None:
+        if not isinstance(seal, str) or len(seal) != 16:
+            seal_problem = "the seal is not 16 hex characters"
+        elif leaf.hex()[:16] != seal.lower():
+            seal_problem = "the payload does not match its seal: it was changed after sealing"
+    inclusion_problem = _receipt_inclusion(leaf, merkle.get("proof"), checkpoint)
+
+    signature_problem = None
+    body = {k: v for k, v in checkpoint.items() if k != "sig"}
+    if not checkpoint.get("sig"):
+        signature_problem = "the receipt has no signed checkpoint"
+    else:
+        try:
+            signed = checkpoint_leaf_hash(body)
+        except (CanonicalizationError, TypeError, ValueError):
+            signed = b""
+        verified = bool(signed) and DeviceKey.verify(pinned, signed, checkpoint["sig"])
+    if checkpoint.get("sig") and not verified:
+        signature_problem = "the checkpoint signature does not verify with this key"
+        if "kind" not in checkpoint or "ts" not in checkpoint:
+            signature_problem += (
+                ". This receipt was exported by an older Shield that left signed fields "
+                "out of the file; export it again from Shield to get one that verifies"
+            )
+        elif checkpoint.get("public_key_b64") != pinned:
+            signature_problem += ", and the file names a different key"
+
+    def _check(problem: str | None, passed: str) -> dict[str, Any]:
+        return {"ok": problem is None, "detail": problem or passed}
+
+    checks = {
+        "seal": _check(seal_problem, "the payload hashes to its seal"),
+        "inclusion": _check(inclusion_problem, "the entry is in the signed tree"),
+        "signature": _check(signature_problem, "the checkpoint is signed by this key"),
+    }
+    return {"ok": all(c["ok"] for c in checks.values()), "seal": seal, "checks": checks}
 
 
 @dataclass

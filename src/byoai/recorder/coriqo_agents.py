@@ -93,12 +93,18 @@ __all__ = [
     "ensure_registered",
     "parse_response",
     "publish_session",
+    "send_device_receipts",
     "read_external_controls",
     "read_tool_steps",
     "trace_body",
 ]
 
 log = logging.getLogger(__name__)
+
+#: Sealed-row fields that hold message text. A receipt carries its payload whole
+#: (the seal covers it), so a row with one of these cannot leave the device.
+_MESSAGE_TEXT_FIELDS = ("text_redacted", "prompt", "preview", "input_preview",
+                        "delta_preview", "output_preview")
 
 _DEFAULT_TIMEOUT = 10.0
 _LIST_PAGE_SIZE = 200  # Coriqo caps `limit` at 200 on GET /api/v1/agents.
@@ -108,6 +114,8 @@ MAX_TRACE_BATCH = 200
 #: Matches Coriqo's own cap on POST .../external-controls. Interventions are
 #: rare next to tool calls, so a smaller batch is not a constraint in practice.
 MAX_EXTERNAL_CONTROLS = 100
+#: Matches Coriqo's cap on POST .../device-receipts.
+MAX_DEVICE_RECEIPTS = 200
 
 #: The ``system`` value on the external grounding anchors this module writes, so
 #: an auditor reading a Coriqo trace knows which store the cited hash lives in.
@@ -263,6 +271,11 @@ class PublishResult:
     #: mandate, the other is somebody else's control firing, and a caller that
     #: added them together would be reporting a number that means neither.
     external_controls: int = 0
+    #: Device receipts Coriqo verified and stored for this run. What did not
+    #: land is a finding in the receipt store, not a failed publish.
+    device_receipts: int = 0
+    #: Steps with no sealed device row to send. Zero when no chain was given.
+    device_receipts_missing: int = 0
 
 
 @dataclass(frozen=True)
@@ -752,6 +765,27 @@ class CoriqoAgentsClient:
             },
         )
 
+    def record_device_receipts(
+        self,
+        coriqo_agent_id: str,
+        trajectory_id: str,
+        receipts: Sequence[Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        """Attaches sealed device rows to a run. Coriqo checks each on arrival
+        and refuses the whole request with 422 if any fails. Sending a receipt
+        it already holds is safe: it is counted as a duplicate."""
+        if not receipts:
+            raise ValueError("receipts must not be empty")
+        if len(receipts) > MAX_DEVICE_RECEIPTS:
+            raise ValueError(
+                f"a request holds at most {MAX_DEVICE_RECEIPTS} receipts, got {len(receipts)}"
+            )
+        return self._request(
+            "POST",
+            f"/api/v1/agents/{coriqo_agent_id}/trajectories/{trajectory_id}/device-receipts",
+            json={"receipts": [dict(r) for r in receipts]},
+        )
+
     def authorize(
         self,
         coriqo_agent_id: str,
@@ -925,6 +959,7 @@ def publish_session(
     started_at: str | None = None,
     ended_at: str | None = None,
     receipt_store: ReceiptStore | None = None,
+    seal_chain: Any | None = None,
 ) -> PublishResult | None:
     """Publishes one recorded session as a trajectory plus a trace per step.
 
@@ -987,6 +1022,11 @@ def publish_session(
     then fills in each acknowledged ``event_hash``; a step with none stays
     unacknowledged and is reported by :mod:`byoai.recorder.receipts` once it is
     old enough. A store failure never fails the publish.
+
+    With ``seal_chain`` (Shield's ``SealChain``), the sealed device row behind
+    each step goes up after the traces and before the close: see
+    :func:`send_device_receipts`. A row holding message text is never sent. A
+    failure here leaves a finding in ``receipt_store`` and the run published.
 
     Raises :class:`CoriqoAgentsError` on any rejection, and
     :class:`AgentSuspendedError` if governance has stopped this agent.
@@ -1134,6 +1174,18 @@ def publish_session(
         ground_in_ledger=ground_in_ledger,
     )
 
+    device_receipts, device_receipts_missing = 0, 0
+    if seal_chain is not None:
+        device_receipts, device_receipts_missing = _publish_device_receipts(
+            client,
+            coriqo_agent_id=coriqo_agent_id,
+            trajectory_id=trajectory_id,
+            session_id=session_id,
+            steps=steps,
+            seal_chain=seal_chain,
+            receipt_store=receipt_store,
+        )
+
     # Note what does NOT go into this: external_controls. A run's status is
     # about the agent's own conduct against its mandate, and a third party's
     # control firing is a different fact — often the opposite one, since a
@@ -1160,6 +1212,8 @@ def publish_session(
         flagged=flagged,
         status=status,
         external_controls=external_controls,
+        device_receipts=device_receipts,
+        device_receipts_missing=device_receipts_missing,
     )
 
 
@@ -1222,3 +1276,138 @@ def _publish_external_controls(
             continue
         published += _as_count(response.get("recorded"))
     return published
+
+
+def _note_device_receipt(store: ReceiptStore, session_id: str, trajectory_id: str,
+                         step_index: Any, finding: str, reason: str, *,
+                         status: int | None = None, seal: str | None = None) -> None:
+    """Log it and keep it in the store, so it is seen even if the store fails."""
+    log.warning(
+        "coriqo: %s for step %s of session %s (seal %s): %s",
+        finding, step_index, session_id, seal, reason,
+    )
+    try:
+        store.note_device_receipt(
+            session_id, step_index, finding, reason,
+            status=status, seal=seal, trajectory_id=trajectory_id,
+        )
+    except Exception as exc:  # noqa: BLE001 - never fail a publish
+        log.warning("coriqo: could not store receipt row: %s", exc)
+
+
+def send_device_receipts(
+    client: CoriqoAgentsClient,
+    *,
+    coriqo_agent_id: str,
+    trajectory_id: str,
+    session_id: str,
+    items: Sequence[Mapping[str, Any]],
+    receipt_store: ReceiptStore,
+) -> int:
+    """POSTs ``{"receipt": ..., "step_index": n}`` items and returns how many
+    Coriqo stored. Never raises.
+
+    The run is complete without these, so a failure must not lose it. A 422 is
+    ``device_receipt_refused``: Coriqo refuses a whole request for one bad
+    receipt, so a refused request is split and resent one by one, and the
+    finding lands on the receipt it names. Any other failure is
+    ``device_receipt_unsent``. Calling this again with the same items is the
+    retry: a receipt Coriqo holds counts as a duplicate, and success clears the
+    step's finding.
+    """
+    stored = 0
+    for start in range(0, len(items), MAX_DEVICE_RECEIPTS):
+        batch = list(items[start : start + MAX_DEVICE_RECEIPTS])
+        try:
+            response = client.record_device_receipts(coriqo_agent_id, trajectory_id, batch)
+        except CoriqoAgentsError as exc:
+            if exc.status_code == 422 and len(batch) > 1:
+                for item in batch:
+                    stored += send_device_receipts(
+                        client,
+                        coriqo_agent_id=coriqo_agent_id,
+                        trajectory_id=trajectory_id,
+                        session_id=session_id,
+                        items=[item],
+                        receipt_store=receipt_store,
+                    )
+                continue
+            refused = exc.status_code == 422
+            finding = "device_receipt_refused" if refused else "device_receipt_unsent"
+            for item in batch:
+                _note_device_receipt(
+                    receipt_store, session_id, trajectory_id, item["step_index"],
+                    finding, str(exc.detail), status=exc.status_code,
+                    seal=item["receipt"].get("seal"),
+                )
+            continue
+        if isinstance(response, dict):
+            stored += _as_count(response.get("stored"))
+        for item in batch:
+            try:
+                receipt_store.clear_device_receipt(
+                    session_id, item["step_index"], trajectory_id=trajectory_id
+                )
+            except Exception as exc:  # noqa: BLE001 - never fail a publish
+                log.warning("coriqo: could not store receipt row: %s", exc)
+    return stored
+
+
+def _publish_device_receipts(
+    client: CoriqoAgentsClient,
+    *,
+    coriqo_agent_id: str,
+    trajectory_id: str,
+    session_id: str,
+    steps: Sequence[ToolStep],
+    seal_chain: Any,
+    receipt_store: ReceiptStore,
+) -> tuple[int, int]:
+    """Finds each step's sealed row by its ledger digest and sends it. Returns
+    ``(stored, steps with no sealed row)``. Never raises."""
+    try:
+        found = seal_chain.receipts_for_payload_hashes({s.args_hash for s in steps})
+    except Exception as exc:  # noqa: BLE001 - the run is already published
+        for step in steps:
+            _note_device_receipt(
+                receipt_store, session_id, trajectory_id, step.index,
+                "device_receipt_unsent", f"could not read the seal chain: {exc}",
+            )
+        return 0, 0
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    missing = 0
+    for step in steps:
+        receipt = found.get(step.args_hash)
+        if receipt is None:
+            missing += 1
+        elif step.args_hash in seen:
+            continue  # identical arguments on a later step: one sealed row
+        elif any(receipt.get("payload", {}).get(f) for f in _MESSAGE_TEXT_FIELDS):
+            seen.add(step.args_hash)
+            _note_device_receipt(
+                receipt_store, session_id, trajectory_id, step.index,
+                "device_receipt_withheld",
+                "the sealed row holds a message preview (Shield's keep_text is on), "
+                "and message text does not leave this device",
+                seal=receipt.get("seal"),
+            )
+        else:
+            seen.add(step.args_hash)
+            items.append({"receipt": receipt, "step_index": step.index})
+    if missing:
+        log.warning(
+            "coriqo: %s of %s steps of session %s have no sealed device row",
+            missing, len(steps), session_id,
+        )
+    if not items:
+        return 0, missing
+    stored = send_device_receipts(
+        client,
+        coriqo_agent_id=coriqo_agent_id,
+        trajectory_id=trajectory_id,
+        session_id=session_id,
+        items=items,
+        receipt_store=receipt_store,
+    )
+    return stored, missing
