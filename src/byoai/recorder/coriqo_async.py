@@ -63,6 +63,7 @@ import logging
 import math
 import os
 import random
+import re
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -92,6 +93,7 @@ __all__ = [
     "AsyncCoriqoAgentsClient",
     "RetryPolicy",
     "SignatureError",
+    "TOKEN_OPS_AGENT_SIGNED_PATH",
     "device_headers",
     "new_batch_key",
     "request_path",
@@ -126,6 +128,14 @@ MAX_VERDICT_BATCH = 200
 #: the server is asking for the retry, not reporting a conflict to give up
 #: on.
 VERDICT_RETRY_STATUSES = frozenset({409})
+
+#: Coriqo's route for an agent's token action, signed with the device tuple
+#: scheme. It sits outside :data:`ENFORCEMENT_PREFIX` but authenticates the
+#: same way (``middleware/device_auth.current_device``, role ``agent:runtime``).
+TOKEN_OPS_AGENT_SIGNED_PATH = "/api/v1/token-ops/actions/agent-signed"
+
+#: Coriqo's ``ActionIn.function_selector`` pattern: a 4-byte EVM selector.
+_SELECTOR_RE = re.compile(r"^0x[0-9a-fA-F]{8}$")
 
 #: Verdict words Coriqo requires a reason for.
 _REASON_REQUIRED = frozenset({"flagged", "blocked"})
@@ -851,6 +861,78 @@ class AsyncCoriqoAgentsClient:
                 "mandate_version_id": mandate_version_id,
             },
             signed=True,
+        )
+
+    async def request_token_action(
+        self,
+        coriqo_agent_id: str,
+        *,
+        program_id: str,
+        kind: str,
+        chain_id: int,
+        function_selector: str,
+        request_id: str,
+        arguments: Mapping[str, Any] | None = None,
+        value: int = 0,
+        nonce: int = 0,
+        basis_ref: str | None = None,
+    ) -> dict[str, Any]:
+        """Request a token action (``mint``, ``burn`` …) as this agent, signed
+        by this host's device key: ``POST /api/v1/token-ops/actions/agent-signed``.
+
+        Coriqo seals the request as ``token.action_requested`` naming the
+        device, its key fingerprint and the signature hash. It refuses, as a
+        :class:`CoriqoAgentsError` carrying the status:
+
+        * 401: the signature did not verify or is outside the 120s/30s window;
+        * 403: the device lacks ``agent:runtime``, holds no live binding for
+          this agent (fetch the mandate first: that creates the binding), the
+          agent is not ``active``, or the tenant has no digital-assets program;
+        * 409: ``request_id`` is pending, denied or already used by an earlier
+          action, or this exact signature was seen in the last 150s;
+        * 422: ``request_id`` is another agent's, or its tool is not ``kind``.
+
+        ``request_id`` is required: it is the agent's approval request
+        (:meth:`request_tool_approval`) a person approved. There is no
+        ``authorization_id``; Coriqo refuses a standing authorization for an
+        agent.
+
+        Retried on 429/502/503/504 and transport errors within the client's
+        :class:`RetryPolicy`, honouring ``Retry-After``. That is safe for this
+        write because Coriqo allows one action per approved ``request_id``: if
+        an earlier attempt did land, the retry comes back 409 naming the
+        action already sealed, never a second action. Each attempt is signed
+        afresh.
+        """
+        if not request_id:
+            raise ValueError("request_id is required: the approved approval request")
+        if not _SELECTOR_RE.match(function_selector):
+            raise ValueError(
+                f"function_selector must be 0x plus 8 hex digits, got {function_selector!r}"
+            )
+        if chain_id < 1:
+            raise ValueError("chain_id must be at least 1")
+        if value < 0 or nonce < 0:
+            raise ValueError("value and nonce must not be negative")
+        body: dict[str, Any] = {
+            "program_id": program_id,
+            "kind": kind,
+            "chain_id": chain_id,
+            "function_selector": function_selector,
+            "arguments": dict(arguments or {}),
+            "value": value,
+            "nonce": nonce,
+            "agent_id": coriqo_agent_id,
+            "request_id": request_id,
+        }
+        if basis_ref is not None:
+            body["basis_ref"] = basis_ref
+        return await self._request(
+            "POST",
+            TOKEN_OPS_AGENT_SIGNED_PATH,
+            json_body=body,
+            signed=True,
+            idempotent=True,
         )
 
     async def record_verdict_batch(
