@@ -1191,6 +1191,20 @@ async with AsyncCoriqoAgentsClient(resolve_identity()) as client:
     mandate = await client.fetch_mandate(agent_id)
 ```
 
+An agent requests a token action (mint, burn, freeze …) the same way, signed by
+its host's device key. Coriqo takes it only for an agent this host is bound to
+(fetch its mandate first) and only against an approval request a person has
+approved; it refuses a second action for the same `request_id` with a 409, so
+the bounded retry on 429/502/503/504 cannot create two actions.
+
+```python
+action = await client.request_token_action(
+    agent_id, program_id=program_id, kind="mint", chain_id=1,
+    function_selector="0x40c10f19", request_id=approved_request_id,
+    arguments={"to": recipient, "amount": "1000"},
+)
+```
+
 Enrolling with `--tenant-slug` records the device's tenant in
 `enrollment.json`, so signed enforcement requests carry `X-Tenant-Slug` from
 the enrolled identity rather than needing the legacy

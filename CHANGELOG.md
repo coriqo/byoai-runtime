@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Agent-signed token actions.** `AsyncCoriqoAgentsClient.request_token_action()`
+  posts an agent's token action to Coriqo's
+  `POST /api/v1/token-ops/actions/agent-signed`, signed with the device tuple
+  scheme. Needs an approved `request_id`; retried on 429/502/503/504 within the
+  client's `RetryPolicy` (a landed first attempt makes the retry a 409, never a
+  second action).
 - **Device receipts reach the Coriqo run.** `publish_session(seal_chain=...)`
   posts each step's sealed Shield row to `.../device-receipts` after the traces
   and before the close. A 422 is a `device_receipt_refused` finding in the
