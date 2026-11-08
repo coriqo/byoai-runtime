@@ -65,6 +65,7 @@ import os
 import random
 import re
 import uuid
+import warnings
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -133,6 +134,11 @@ VERDICT_RETRY_STATUSES = frozenset({409})
 #: scheme. It sits outside :data:`ENFORCEMENT_PREFIX` but authenticates the
 #: same way (``middleware/device_auth.current_device``, role ``agent:runtime``).
 TOKEN_OPS_AGENT_SIGNED_PATH = "/api/v1/token-ops/actions/agent-signed"
+
+#: What :meth:`AsyncCoriqoAgentsClient.request_token_action` returns: the full
+#: action record on 201, or on 200 a replay receipt ``{action_id, state,
+#: event_hash, request_id, replayed: True}``. Check ``replayed`` first.
+TokenActionResult = dict[str, Any]
 
 #: Coriqo's ``ActionIn.function_selector`` pattern: a 4-byte EVM selector.
 _SELECTOR_RE = re.compile(r"^0x[0-9a-fA-F]{8}$")
@@ -865,7 +871,7 @@ class AsyncCoriqoAgentsClient:
 
     async def request_token_action(
         self,
-        coriqo_agent_id: str,
+        coriqo_agent_id: str | None = None,
         *,
         program_id: str,
         kind: str,
@@ -876,9 +882,23 @@ class AsyncCoriqoAgentsClient:
         value: int = 0,
         nonce: int = 0,
         basis_ref: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> TokenActionResult:
         """Request a token action (``mint``, ``burn`` …) as this agent, signed
         by this host's device key: ``POST /api/v1/token-ops/actions/agent-signed``.
+
+        The agent is the one this device's binding names: Coriqo derives it
+        server-side, so no ``agent_id`` is sent. ``coriqo_agent_id`` is
+        deprecated and ignored (a :class:`DeprecationWarning` is issued if
+        passed).
+
+        Returns one of two shapes:
+
+        * 201, a new action: the full action record (``id``, ``state`` …);
+        * 200, a freshly signed identical retry of an action already created:
+          a minimal receipt ``{action_id, state, event_hash, request_id,
+          replayed: True}``. This is success, not an error, but it is *not*
+          the full record; check ``result.get("replayed")`` before reading
+          record fields.
 
         Coriqo seals the request as ``token.action_requested`` naming the
         device, its key fingerprint and the signature hash. It refuses, as a
@@ -886,10 +906,12 @@ class AsyncCoriqoAgentsClient:
 
         * 401: the signature did not verify or is outside the 120s/30s window;
         * 403: the device lacks ``agent:runtime``, holds no live binding for
-          this agent (fetch the mandate first: that creates the binding), the
+          the agent (fetch the mandate first: that creates the binding), the
+          binding names a different agent than the approval request, the
           agent is not ``active``, or the tenant has no digital-assets program;
-        * 409: ``request_id`` is pending, denied or already used by an earlier
-          action, or this exact signature was seen in the last 150s;
+        * 409: a byte-identical resend (the signature is single-use), a
+          different body for the same ``request_id``, or a ``request_id`` that
+          is pending or denied. Never retried on this call.
         * 422: ``request_id`` is another agent's, or its tool is not ``kind``.
 
         ``request_id`` is required: it is the agent's approval request
@@ -900,10 +922,17 @@ class AsyncCoriqoAgentsClient:
         Retried on 429/502/503/504 and transport errors within the client's
         :class:`RetryPolicy`, honouring ``Retry-After``. That is safe for this
         write because Coriqo allows one action per approved ``request_id``: if
-        an earlier attempt did land, the retry comes back 409 naming the
-        action already sealed, never a second action. Each attempt is signed
-        afresh.
+        an earlier attempt did land, the freshly signed retry comes back 200
+        with the replay receipt, never a second action. Each attempt is signed
+        afresh. The verdict-batch 409 retry does not apply here.
         """
+        if coriqo_agent_id is not None:
+            warnings.warn(
+                "request_token_action: coriqo_agent_id is ignored; Coriqo derives "
+                "the agent from this device's binding",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         if not request_id:
             raise ValueError("request_id is required: the approved approval request")
         if not _SELECTOR_RE.match(function_selector):
@@ -922,7 +951,6 @@ class AsyncCoriqoAgentsClient:
             "arguments": dict(arguments or {}),
             "value": value,
             "nonce": nonce,
-            "agent_id": coriqo_agent_id,
             "request_id": request_id,
         }
         if basis_ref is not None:

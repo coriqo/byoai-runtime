@@ -41,7 +41,6 @@ _ACTION_IN = {
     "nonce": (False, lambda v: isinstance(v, int) and v >= 0),
     "basis_ref": (False, lambda v: v is None or len(v) <= 256),
     "authorization_id": (False, lambda v: v is None),  # refused (403) on this route
-    "agent_id": (False, lambda v: isinstance(v, str) and len(v) <= 36),
     "request_id": (False, lambda v: isinstance(v, str) and 1 <= len(v) <= 64),
 }
 
@@ -53,8 +52,9 @@ def _assert_matches_action_in(body: dict) -> None:
             assert name in body, name
         if name in body:
             assert check(body[name]), (name, body[name])
-    # The signed route's own 422s: both must be present.
-    assert body["agent_id"] and body["request_id"]
+    # Coriqo derives the agent from the device binding; request_id is required.
+    assert "agent_id" not in body
+    assert body["request_id"]
 
 
 class RecordingSleep:
@@ -89,7 +89,7 @@ async def _mint(client: AsyncCoriqoAgentsClient, **overrides):
         basis_ref="ticket-42",
     )
     params.update(overrides)
-    return await client.request_token_action(_AGENT, **params)
+    return await client.request_token_action(**params)
 
 
 async def test_request_shape_and_signature_match_coriqo(tmp_path):
@@ -115,7 +115,6 @@ async def test_request_shape_and_signature_match_coriqo(tmp_path):
 
     body = json.loads(request.content)
     _assert_matches_action_in(body)
-    assert body["agent_id"] == _AGENT
     assert "authorization_id" not in body
 
     public_key_hex = base64.b64decode(key.public_key_b64).hex()
@@ -218,3 +217,77 @@ async def test_invalid_input_is_refused_before_sending(tmp_path, overrides):
             await _mint(client, **overrides)
     finally:
         await client.close()
+
+
+async def test_replayed_receipt_is_success_and_returned(tmp_path):
+    receipt = {
+        "action_id": "act-1",
+        "state": "requested",
+        "event_hash": "ab" * 32,
+        "request_id": "apr_123",
+        "replayed": True,
+    }
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=receipt)
+
+    client, _ = _client(handler, tmp_path)
+    try:
+        result = await _mint(client)
+    finally:
+        await client.close()
+    assert result == receipt
+    assert len(seen) == 1
+    assert "agent_id" not in json.loads(seen[0].content)
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "This signature was already used.",
+        "A different action body was already sent for this approval request.",
+    ],
+)
+async def test_409_is_never_retried_even_with_attempts_left(tmp_path, detail):
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(409, json={"detail": detail})
+
+    sleep = RecordingSleep()
+    client, _ = _client(handler, tmp_path, sleep=sleep, retry=RetryPolicy(attempts=5))
+    try:
+        with pytest.raises(CoriqoAgentsError) as info:
+            await _mint(client)
+    finally:
+        await client.close()
+    assert info.value.status_code == 409
+    assert detail in str(info.value.detail)
+    assert len(seen) == 1 and sleep.delays == []
+    assert "agent_id" not in json.loads(seen[0].content)
+
+
+async def test_agent_id_argument_is_deprecated_and_not_sent(tmp_path):
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(201, json={"id": "act-3"})
+
+    client, _ = _client(handler, tmp_path)
+    try:
+        with pytest.warns(DeprecationWarning):
+            await client.request_token_action(
+                _AGENT,
+                program_id="prog-1",
+                kind="mint",
+                chain_id=1,
+                function_selector="0x40c10f19",
+                request_id="apr_9",
+            )
+    finally:
+        await client.close()
+    assert "agent_id" not in json.loads(seen[0].content)
