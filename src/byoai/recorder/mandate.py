@@ -121,6 +121,9 @@ __all__ = [
     "RequireApproval",
     "Verdict",
     "ViolationAction",
+    "approval_amount_usd",
+    "approval_args",
+    "approval_args_enabled",
     "approval_request_id",
     "coriqo_mandate_source",
     "mandate_gate",
@@ -452,6 +455,9 @@ class RequireApproval(Verdict):
 
     _verdict_word = "pending_approval"
     request_id: str = ""
+    #: The call's arguments, so the approval request can carry them to
+    #: Coriqo (see :func:`approval_args`). Never rendered by ``__repr__``.
+    arguments: Mapping[str, Any] | None = field(default=None, compare=False)
 
     @property
     def allowed(self) -> bool:
@@ -743,6 +749,68 @@ def approval_request_id(
     args_part = canonical_dumps(dict(arguments)) if arguments else ""
     key = f"{tool}:{trajectory_id or ''}:{step_index if step_index is not None else ''}:{args_part}"
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:32]
+
+
+#: Set to ``0``/``false``/``no``/``off`` to stop sending a held call's
+#: arguments to Coriqo with its approval request (and recording them on the
+#: approved action's ledger entry). On by default.
+APPROVAL_SEND_ARGS_ENV = "BYOAI_APPROVAL_SEND_ARGS"
+
+
+def approval_args_enabled() -> bool:
+    """Whether approval requests carry the call's arguments (default on)."""
+    raw = os.environ.get(APPROVAL_SEND_ARGS_ENV, "").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _json_args(arguments: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """``arguments`` in the one JSON form both sides hash.
+
+    Coriqo fingerprints the args it receives (sha256 over Python
+    ``json.dumps(sort_keys=True, separators=(",", ":"), ensure_ascii=False)``)
+    and later re-hashes the ``args`` on the ledger entry the same way. Passing
+    both through RFC 8785 first makes them byte-identical JSON values (``1.0``
+    and ``1`` become one number), so the two hashes agree. Arguments that are
+    not JSON (an object, a NaN) give ``None``: nothing is sent rather than a
+    lossy stand-in that could never match."""
+    if arguments is None:
+        return None
+    import json
+
+    from .canonical import canonical_dumps
+
+    try:
+        return json.loads(canonical_dumps(dict(arguments)))
+    except (TypeError, ValueError):
+        log.warning("approval arguments are not JSON; sending none for this call")
+        return None
+
+
+def approval_args(arguments: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """The arguments to send with an approval request and record on the
+    approved action, or ``None`` when sending is off or they are not JSON."""
+    return _json_args(arguments) if approval_args_enabled() else None
+
+
+def approval_amount_usd(args: Mapping[str, Any] | None) -> int | float | None:
+    """The amount an approval covers, read the way Coriqo reads it:
+    ``amount_usd``, else ``asset.amount_usd``. Takes the JSON form
+    :func:`approval_args` returns. Only a finite int or float (not a bool)
+    counts; anything else gives ``None`` and a warning that names the field,
+    never its value."""
+    if not args:
+        return None
+    if "amount_usd" in args:
+        name, raw = "amount_usd", args["amount_usd"]
+    else:
+        asset = args.get("asset")
+        if not isinstance(asset, dict) or "amount_usd" not in asset:
+            return None
+        name, raw = "asset.amount_usd", asset["amount_usd"]
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)) or not math.isfinite(raw):
+        log.warning("approval argument %s is not a finite number; recording no amount", name)
+        return None
+    return raw
 
 
 def _opt_str(value: Any) -> str | None:
@@ -1246,6 +1314,7 @@ class MandateGate:
                 reason=Reason.APPROVAL_REQUIRED,
                 detail=f"{action.tool!r} requires human approval before it may run",
                 request_id=request_id,
+                arguments=action.arguments,
                 **common_approval,
             )
 
@@ -1864,6 +1933,7 @@ def mandate_gate(
                     trajectory_id=verdict.trajectory_id,
                     step_index=verdict.step_index,
                     mandate_version_id=verdict.mandate_version_id,
+                    args=approval_args(verdict.arguments),
                 )
             except Exception:
                 log.exception(

@@ -286,6 +286,7 @@ def _record(
         run_id=run_id,
         principal=principal,
         argument_count=None if action.arguments is None else len(action.arguments),
+        arguments=action.arguments,
         effective_scope=scope,
     )
 

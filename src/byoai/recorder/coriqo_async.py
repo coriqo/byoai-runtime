@@ -845,6 +845,7 @@ class AsyncCoriqoAgentsClient:
         trajectory_id: str | None,
         step_index: int | None,
         mandate_version_id: str,
+        args: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """AD-10: report a tool call the local gate classified as
         approval-required and did not execute. Idempotent on `request_id` —
@@ -855,17 +856,26 @@ class AsyncCoriqoAgentsClient:
         report must never block decide() or the refresh loop. A failed
         report just means the request doesn't appear in Coriqo's queue yet;
         the local denial already applies regardless.
+
+        ``args`` (RP-6) are the call's arguments. Coriqo derives the approved
+        amount and a SHA-256 fingerprint from them and stores only those two
+        values; the run-time sign-off check later matches the approved
+        action's ledger entry against them. Omitted from the body when
+        ``None`` (sending turned off, or no arguments captured).
         """
+        body: dict[str, Any] = {
+            "request_id": request_id,
+            "tool": tool,
+            "trajectory_id": trajectory_id,
+            "step_index": step_index,
+            "mandate_version_id": mandate_version_id,
+        }
+        if args is not None:
+            body["args"] = dict(args)
         return await self._request(
             "POST",
             f"{ENFORCEMENT_PREFIX}/agents/{coriqo_agent_id}/approval-requests",
-            json_body={
-                "request_id": request_id,
-                "tool": tool,
-                "trajectory_id": trajectory_id,
-                "step_index": step_index,
-                "mandate_version_id": mandate_version_id,
-            },
+            json_body=body,
             signed=True,
         )
 

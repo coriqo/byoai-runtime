@@ -386,6 +386,13 @@ that decisions stay local.
   (`--environment` or `BYOAI_MANDATE_ENVIRONMENT`) and the mandate's age. With
   `--coriqo-agent-id`, also approval-required tools, the call-rate limit and
   the agent's suspension.
+- Approval requests send the held call's arguments to Coriqo, which stores
+  only the amount they state and their SHA-256 fingerprint. The approved
+  call's ledger entry carries `approval_id` and `amount_usd`, never the
+  arguments, so Coriqo can check the action stayed within the approved
+  amount. Set `BYOAI_APPROVAL_SEND_ARGS=0` to keep arguments and amounts on
+  the host; approvals then cannot sign off an above-limit action (see
+  [CONFIGURATION.md](CONFIGURATION.md)).
 - Not checked: `max_cost_usd`. An MCP call carries no cost, so there is
   nothing to count against it.
 - Not checked: resources (`resources/read`), prompts, sampling and elicitation

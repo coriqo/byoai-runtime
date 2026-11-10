@@ -89,7 +89,13 @@ from .canonical import canonicalize, sha256_hex
 from .delegation import EffectiveScope
 from .denial_latch import LatchedDenial
 from .ledger import Ledger, LedgerEntry
-from .mandate import Verdict
+from .mandate import (
+    Reason,
+    Verdict,
+    approval_amount_usd,
+    approval_args,
+    approval_request_id,
+)
 from .schema import (
     EVENT_SCHEMA_VERSION,
     AgentEvent,
@@ -185,6 +191,7 @@ def ledger_payload(
     decided_at: str | None = None,
     effective_scope: EffectiveScope | None = None,
     arguments_sha256: str | None = None,
+    arguments: Any = None,
 ) -> dict[str, Any]:
     """The fuller local record: the wire fields plus what only an operator sees.
 
@@ -246,7 +253,31 @@ def ledger_payload(
     )
     if arguments_sha256 is not None:
         payload["arguments_sha256"] = arguments_sha256
+    if verdict.reason == Reason.APPROVAL_GRANTED:
+        payload.update(_approval_fields(verdict, arguments))
     return payload
+
+
+def _approval_fields(verdict: Verdict, arguments: Any) -> dict[str, Any]:
+    """RP-6: what Coriqo's sign-off check reads off an approved action.
+
+    ``approval_id`` is the request id the approval was filed under (the same
+    deterministic id decide() computed). ``amount_usd`` is the amount the
+    arguments state, and Coriqo judges the action on it. The raw arguments are
+    never written here: this ledger is append-only and cannot be redacted, so
+    they go only on the approval request, where Coriqo keeps just the amount
+    and a hash. With ``BYOAI_APPROVAL_SEND_ARGS=0`` no amount is recorded
+    either, so no argument value leaves the process. Keys are added only for
+    an approved call, so every other record keeps the payload it had before."""
+    out: dict[str, Any] = {
+        "approval_id": approval_request_id(
+            verdict.tool or "", verdict.trajectory_id, verdict.step_index, arguments,
+        ),
+    }
+    amount = approval_amount_usd(approval_args(arguments))
+    if amount is not None:
+        out["amount_usd"] = amount
+    return out
 
 
 # -- the outbox --------------------------------------------------------------
@@ -489,6 +520,7 @@ class VerdictRecorder:
         argument_count: int | None = None,
         effective_scope: EffectiveScope | None = None,
         arguments_sha256: str | None = None,
+        arguments: Any = None,
     ) -> LedgerEntry | None:
         """Record one verdict. Returns the ledger entry, if one was written.
 
@@ -514,6 +546,7 @@ class VerdictRecorder:
                 decided_at=decided_at,
                 effective_scope=effective_scope,
                 arguments_sha256=arguments_sha256,
+                arguments=arguments,
             )
             entry = self._append(verdict, payload)
             if entry is not None and self._checkpointer is not None:
