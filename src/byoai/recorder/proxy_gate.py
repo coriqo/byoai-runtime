@@ -409,6 +409,7 @@ class ProxyEnforcer:
             run_id=self._run_id,
             principal=principal,
             argument_count=None if action.arguments is None else len(action.arguments),
+            arguments=action.arguments,
             arguments_sha256=digest,
         )
 

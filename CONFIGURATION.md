@@ -1396,6 +1396,29 @@ in `resolved_approvals` on the gate's next scheduled snapshot fetch, same as
 every other mandate change. The identical call (same `request_id`) then
 gets `Allow` or `Deny` instead of `RequireApproval` on its next `decide()`.
 
+**What the approval covers: the call's arguments.** The approval request
+sends the held call's `arguments` as `args`. Coriqo reads the amount from
+them (`amount_usd`, else `asset.amount_usd`) and stores that amount and a
+SHA-256 fingerprint of the args, never the args themselves. The args are
+passed through RFC 8785 canonical JSON first, so `1250.0` and `1250` are the
+same value. Arguments that are not JSON (an object, a NaN) are not sent.
+
+When the approved call later runs, its ledger entry carries `approval_id` (the
+request id) and `amount_usd`, never the raw arguments: the local ledger is
+append-only and cannot be redacted. Coriqo's sign-off check requires the
+entry's amount to be at most the approved amount. Only a finite number counts
+as an amount; a string, a bool, NaN or infinity records none, with a warning
+that names the field but not its value.
+
+Nothing redacts the arguments sent on the request. With `@governed_tool` they
+exist only for a tool decorated with `capture_arguments=True`; the MCP and
+proxy gates pass the tool call's arguments. To keep them on the host, set
+`BYOAI_APPROVAL_SEND_ARGS=0`: the request goes without `args`, and the ledger
+entry records `approval_id` only, with no `amount_usd`, so no argument value
+leaves the process. **With the flag off, an approval cannot sign off an
+above-limit action in Coriqo**: Coriqo has no approved amount to compare
+against, and the sign-off check reports it as a miss.
+
 **Enforced budgets: cost, call-rate, and step ceilings.** Three more mandate
 fields — `max_run_cost_usd`, `max_calls_per_minute`, `max_run_steps` — are
 checked entirely locally, no I/O, right alongside suspension: a breach
@@ -1446,6 +1469,7 @@ credential that could widen the agent's own mandate is not.
 | `BYOAI_MANDATE_POSTURE` | `fail_open` | `fail_open` or `fail_closed`, used only until the first snapshot names the tenant's own posture |
 | `BYOAI_MANDATE_MAX_STALENESS_S` | `300` | staleness budget used until a snapshot names its own `max_staleness_s` |
 | `BYOAI_MANDATE_ENVIRONMENT` | *(unset)* | where this runtime runs, e.g. `production`. When set, a snapshot whose `environment` names somewhere else is treated as no mandate and the posture decides (reason `environment_mismatch`). Unset: not compared. `MandateGate(environment=...)` overrides it |
+| `BYOAI_APPROVAL_SEND_ARGS` | `1` | send a held call's arguments with its approval request, and record the amount they state on the approved action's ledger entry (never the arguments themselves). `0`, `false`, `no` or `off` sends no arguments and records no amount; approvals then cannot sign off an above-limit action in Coriqo |
 
 The first two are bootstrap values for the window before the first snapshot
 lands; after that Coriqo's values win.
