@@ -3,28 +3,28 @@
 ## Installation
 
 ```bash
-pip install --pre byoai-runtime
+pip install byoai-runtime
 ```
 
-The current release is a pre-release (`0.1.0a1`), so `--pre` is required —
-without it pip reports that no matching distribution was found.
+`byoai-runtime` is a beta (`0.1.x`). The parts that are a stable contract, and the
+parts that may still change, are listed in the [README](https://github.com/coriqo/byoai-runtime#what-is-stable).
 
 Optional integrations are extras — install only what you need:
 
 ```bash
-pip install --pre "byoai-runtime[fastapi]"   # FastAPI integration
-pip install --pre "byoai-runtime[robyn]"     # Robyn integration
-pip install --pre "byoai-runtime[flask]"     # Flask (WSGI) integration
-pip install --pre "byoai-runtime[mcp]"       # MCP tool-server integration
-pip install --pre "byoai-runtime[redis]"     # Redis cache / queue / shared semantic cache
-pip install --pre "byoai-runtime[pgvector]"  # pgvector vector store
-pip install --pre "byoai-runtime[semantic]"  # in-process semantic (intent) cache
-pip install --pre "byoai-runtime[perf]"      # orjson hot-path JSON codec
-pip install --pre "byoai-runtime[otel]"      # OpenTelemetry export
-pip install --pre "byoai-runtime[bedrock]"   # Anthropic on AWS Bedrock
-pip install --pre "byoai-runtime[vertex]"    # Anthropic on Google Vertex AI
-pip install --pre "byoai-runtime[agent-context-cache]"  # the byoai-cache proxy
-pip install --pre "byoai-runtime[all]"       # everything above
+pip install "byoai-runtime[fastapi]"   # FastAPI integration
+pip install "byoai-runtime[robyn]"     # Robyn integration
+pip install "byoai-runtime[flask]"     # Flask (WSGI) integration
+pip install "byoai-runtime[mcp]"       # MCP tool-server integration
+pip install "byoai-runtime[redis]"     # Redis cache / queue / shared semantic cache
+pip install "byoai-runtime[pgvector]"  # pgvector vector store
+pip install "byoai-runtime[semantic]"  # in-process semantic (intent) cache
+pip install "byoai-runtime[perf]"      # orjson hot-path JSON codec
+pip install "byoai-runtime[otel]"      # OpenTelemetry export
+pip install "byoai-runtime[bedrock]"   # Anthropic on AWS Bedrock
+pip install "byoai-runtime[vertex]"    # Anthropic on Google Vertex AI
+pip install "byoai-runtime[agent-context-cache]"  # the byoai-cache proxy
+pip install "byoai-runtime[all]"       # everything above
 ```
 
 The Qdrant and Pinecone vector stores and the Gemini provider need no extra — they're built on
@@ -127,13 +127,13 @@ back. Pick one — fixed at construction, or per-request via `input=`.
 Every adapter is configured with a plain dict (or you can construct adapter objects yourself for
 full control — see each guide). Nothing here requires a schema migration or vector re-index — a
 full worked example wiring Redis, pgvector, and an OpenAI → Azure OpenAI fallback together is in
-the [project README](https://github.com/ravikings/byoai-runtime#-quickstart).
+the [project README](https://github.com/coriqo/byoai-runtime#-quickstart).
 
 For each adapter's individual configuration surface, see
 [Caching](guides/caching.md), [Vector stores](guides/vector-stores.md), and
 [Provider routing](guides/providers.md); the [API reference](reference/api.md) auto-generates
 signatures from docstrings, and
-[CONFIGURATION.md](https://github.com/ravikings/byoai-runtime/blob/main/CONFIGURATION.md) in the
+[CONFIGURATION.md](https://github.com/coriqo/byoai-runtime/blob/main/CONFIGURATION.md) in the
 repository is the authoritative parameter-by-parameter reference across every component.
 
 ## Next steps
@@ -145,5 +145,5 @@ repository is the authoritative parameter-by-parameter reference across every co
 - Add retrieval-augmented generation: [Vector stores — RAG retrieval in the
   pipeline](guides/vector-stores.md#rag-retrieval-in-the-pipeline).
 - Trace executions to your existing observability stack: [Telemetry](guides/telemetry.md).
-- Runnable example apps live in [`examples/`](https://github.com/ravikings/byoai-runtime/tree/main/examples)
+- Runnable example apps live in [`examples/`](https://github.com/coriqo/byoai-runtime/tree/main/examples)
   in the repository.

@@ -1024,7 +1024,7 @@ async def _send_json(send: Any, status: int, value: Any) -> None:
 
 _INSTALL_HINT = (
     "coriqo-mcp signs its record with the 'cryptography' package, which is not installed.\n"
-    'Install it with:  pip install --pre "byoai-runtime[coriqo-mcp]"\n'
+    'Install it with:  pip install "byoai-runtime[coriqo-mcp]"\n'
     "or run without a record (not recommended) with --no-record."
 )
 
@@ -1383,7 +1383,7 @@ async def _serve_http(
         import uvicorn
     except ModuleNotFoundError:
         print(
-            'coriqo-mcp --http needs uvicorn:  pip install --pre "byoai-runtime[coriqo-mcp]"',
+            'coriqo-mcp --http needs uvicorn:  pip install "byoai-runtime[coriqo-mcp]"',
             file=sys.stderr,
         )
         return 2

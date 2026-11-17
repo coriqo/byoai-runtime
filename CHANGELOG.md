@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-17
+
+First release without a pre-release suffix: `pip install byoai-runtime` no longer
+needs `--pre`. PyPI's latest was `0.1.0a4`; `0.1.0a5` to `0.1.0a7` were tagged but
+never published, so this release includes everything listed under them and below.
+
+The package is a beta (`Development Status :: 4 - Beta`). The README lists what is
+a stable contract (the seal format and its verification, the ledger and checkpoint
+ingest wire format, the `coriqo-verify` commands and exit codes, the versioned
+mandate file format) and what is provisional. CI now also runs on pull requests.
+
 ### Added
 - **Signed heartbeat as a chain entry (C2).** The running recorder writes a
   `heartbeat` event (`{last_seq, device_time, interval_s}`) every

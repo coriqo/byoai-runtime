@@ -280,7 +280,7 @@ the MCP server as its own child process and relays the pipe between the host
 and the server, so neither has to change:
 
 ```bash
-pip install --pre "byoai-runtime[coriqo-mcp]"
+pip install "byoai-runtime[coriqo-mcp]"
 coriqo-mcp --mandate coriqo.mandate.yaml -- node server.js
 coriqo-mcp --mandate coriqo.mandate.yaml --http --upstream http://127.0.0.1:9000
 ```
