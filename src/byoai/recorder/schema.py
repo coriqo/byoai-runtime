@@ -75,6 +75,11 @@ class EventKind(str, Enum):
     #: SIGTERM/SIGKILL. Written by byoai.recorder.verdicts from
     #: byoai.recorder.suspend.
     WORKER_STOP_ACK = "worker_stop_ack"
+    #: C2: a liveness entry the long-running recorder process writes on a
+    #: timer. A normal chain entry (next seq, hash-chained, covered by the
+    #: device-signed checkpoints). Payload ``{last_seq, device_time,
+    #: interval_s}``. Written by byoai.recorder.heartbeat.
+    HEARTBEAT = "heartbeat"
 
 
 @dataclass(frozen=True, slots=True)

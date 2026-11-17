@@ -12,9 +12,11 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import sqlite3
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -94,6 +96,13 @@ class VerifyReport:
     # this is NOT folded into `ok`), but reported so a caller pinning a key
     # knows exactly how far signed coverage reaches.
     unsigned_tail: tuple[int, int] | None = None
+    # C2: heartbeat spacing over the caller's policy that no listed gap
+    # accepts (each {from_seq, to_seq, seconds}). Always empty unless the
+    # caller asked for the check; folded into `ok`.
+    heartbeat_silences: list[dict[str, Any]] = field(default_factory=list)
+    clock_findings: list[dict[str, Any]] = field(default_factory=list)
+    no_heartbeats: bool = False
+    heartbeats_checked: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -365,8 +374,23 @@ def verify_ledger(
     receipt_public_key_pem: str | None = None,
     allow_unchecked_receipts: bool = False,
     allow_pending_receipts: bool = False,
+    max_heartbeat_silence_seconds: float | None = None,
+    heartbeat_gaps_allowed: Iterable[Any] | None = None,
+    allow_no_heartbeats: bool = False,
+    strict_clock: bool = False,
+    clock_notes_accepted: Iterable[int] | None = None,
 ) -> VerifyReport:
     """Re-derive and check every hash, signature and sequence in the ledger.
+
+    ``max_heartbeat_silence_seconds`` (default ``None`` = off) turns on the
+    heartbeat checks of ``docs/seal-format.md`` 11.6: spacing between
+    heartbeats, the tail, declared "heartbeats off" windows, clock
+    consistency, and a record with no heartbeats at all. A window is accepted
+    by listing its seq pair in ``heartbeat_gaps_allowed``; an old record with no
+    heartbeats by ``allow_no_heartbeats=True``. A value that is not a finite
+    number > 0 raises :class:`VerifyError`. Clock inconsistencies are advisory
+    notes in ``clock_findings`` (``ok`` unaffected) unless ``strict_clock=True``;
+    ``clock_notes_accepted`` lists reviewed ones by seq.
 
     ``public_key_b64`` checks checkpoint signatures, as before.
     ``device_public_keys`` (device_id -> base64 Ed25519 public key) is used
@@ -375,9 +399,14 @@ def verify_ledger(
     unchecked rather than failed, matching the existing checkpoint
     convention.
     """
+    allowed_gaps = _validate_silence_policy(max_heartbeat_silence_seconds, heartbeat_gaps_allowed)
     conn = _connect(path)
     try:
-        report = _verify(conn, public_key_b64, device_public_keys or {})
+        report = _verify(
+            conn, public_key_b64, device_public_keys or {},
+            max_heartbeat_silence_seconds, allowed_gaps, allow_no_heartbeats,
+            strict_clock, clock_notes_accepted,
+        )
     finally:
         conn.close()
     if receipts_path is not None:
@@ -750,6 +779,270 @@ class _ChainWalk:
     derived: dict[int, str]
     notes: list[str]
     malformed: list[str]
+    #: (seq, payload, ts_device, ts_monotonic_ns) of every ``heartbeat`` entry, in chain order (C2).
+    heartbeats: list[tuple[int, Any, Any, Any]] = field(default_factory=list)
+
+
+_HEARTBEAT_CLOCK_TOLERANCE_S = 1.0
+
+
+GapKey = tuple  # ("sp", from_seq, to_seq) | ("off", marker_seq) | ("tail", last_heartbeat_seq)
+
+
+def _parse_gap(item: Any) -> GapKey:
+    """One accepted window. ``(a, b)`` or ``"a-b"``: the gap between the heartbeats
+    at seq a and b. ``"off:N"``: the window after the heartbeats-off marker at
+    seq N. ``"tail:N"``: the tail after the last heartbeat, at seq N."""
+    if isinstance(item, tuple) and item and item[0] in ("sp", "off", "tail"):
+        return item
+    try:
+        if isinstance(item, str):
+            text = item.strip()
+            if text.startswith("off:"):
+                return ("off", int(text[4:]))
+            if text.startswith("tail:"):
+                return ("tail", int(text[5:]))
+            a, sep, b = text.partition("-")
+            if not sep:
+                raise ValueError
+            return ("sp", int(a), int(b))
+        a, b = item
+        return ("sp", int(a), int(b))
+    except (TypeError, ValueError):
+        raise VerifyError(
+            f"heartbeat gap must be FROM-TO, off:SEQ or tail:SEQ, got {item!r}"
+        ) from None
+
+
+def _validate_silence_policy(
+    max_silence_s: float | None, allowed_gaps: Iterable[Any] | None
+) -> list[GapKey]:
+    """Reject a policy that would silently turn the check off or never fire.
+
+    ``nan``, ``inf``, zero and negative values are refused rather than treated
+    as "no limit". Returns the accepted windows as parsed keys."""
+    if max_silence_s is not None:
+        if (
+            isinstance(max_silence_s, bool)
+            or not isinstance(max_silence_s, (int, float))
+            or not math.isfinite(max_silence_s)
+            or max_silence_s <= 0
+        ):
+            raise VerifyError(
+                f"max heartbeat silence must be a finite number of seconds > 0, "
+                f"got {max_silence_s!r}"
+            )
+    return [_parse_gap(g) for g in (allowed_gaps or [])]
+
+
+def _iso_epoch(value: Any) -> float | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+@dataclass
+class _HeartbeatResult:
+    silences: list[dict[str, Any]] = field(default_factory=list)
+    #: Advisory unless ``strict`` (see ``failed``). Each {seq, reason}.
+    clock_findings: list[dict[str, Any]] = field(default_factory=list)
+    no_heartbeats: bool = False
+    checked: int = 0
+    notes: list[str] = field(default_factory=list)
+    malformed: list[str] = field(default_factory=list)
+    strict: bool = False
+    accepted_clock_seqs: set[int] = field(default_factory=set)
+
+    @property
+    def clock_failed(self) -> bool:
+        return self.strict and any(
+            f["seq"] not in self.accepted_clock_seqs for f in self.clock_findings
+        )
+
+    @property
+    def failed(self) -> bool:
+        return bool(self.silences or self.no_heartbeats or self.clock_failed)
+
+
+def _check_heartbeat_silence(
+    walk: _ChainWalk,
+    max_silence_s: float | None,
+    allowed_gaps: Iterable[Any] | None,
+    *,
+    checkpoints: Iterable[dict[str, Any]] = (),
+    epoch_ends: list[float | None] | None = None,
+    allow_no_heartbeats: bool = False,
+    strict_clock: bool = False,
+    clock_notes_accepted: Iterable[int] | None = None,
+) -> _HeartbeatResult:
+    """Heartbeat checks against a caller policy. Off when ``max_silence_s`` is
+    ``None``, so older records verify as before.
+
+    Failing checks: spacing between consecutive heartbeats; the tail (last
+    heartbeat to the newest signed checkpoint or entry time); windows the
+    recorder declared "heartbeats off" (``interval_s: 0``); no heartbeats in a
+    record longer than the policy (unless ``allow_no_heartbeats``); an invalid
+    ``interval_s``. Advisory clock notes (``clock_findings``): device time going
+    backwards, advancing less than the monotonic counter within one boot, or
+    falling outside the signed checkpoints and tenant epoch that bracket a
+    heartbeat. Honest records trip these (NTP steps, VM resume, a copied host,
+    several writer processes), so they only fail with ``strict_clock``, and a
+    reviewed one is accepted by seq with ``clock_notes_accepted``.
+
+    Every time here is the device's own clock, or a tenant epoch time. This
+    bounds what the device claims. A host that controls its own clock can defeat
+    it; only an external time anchor (a verified TSA or Rekor anchor, or the
+    server's receipt time) bounds it from outside. A window is accepted by name:
+    a gap ``"A-B"`` (the seqs of its two heartbeats), a tail ``"tail:N"`` (N the
+    last heartbeat), a declared-off window ``"off:N"`` (N the marker). Names that
+    do not change as a record grows.
+    """
+    res = _HeartbeatResult(
+        strict=strict_clock, accepted_clock_seqs={int(x) for x in (clock_notes_accepted or [])}
+    )
+    if max_silence_s is None:
+        return res
+    allowed = {_parse_gap(g) for g in (allowed_gaps or [])}
+    tol = _HEARTBEAT_CLOCK_TOLERANCE_S
+
+    def flag(kind: str, key: GapKey, name: str, frm: int, to: int, seconds: float | None) -> None:
+        if key in allowed:
+            res.notes.append(
+                f"heartbeat {kind} window {name}"
+                + (f" ({seconds:.0f}s)" if seconds is not None else "")
+                + " is outside the policy; accepted by the caller"
+            )
+        else:
+            res.silences.append({"kind": kind, "name": name, "from_seq": frm,
+                                 "to_seq": to, "seconds": seconds})
+
+    # (seq, device epoch, interval_s, monotonic ns or None, boot id or None)
+    beats: list[tuple[int, float, float, int | None, str | None]] = []
+    for seq, payload, ts_device, mono in walk.heartbeats:
+        t = _iso_epoch(payload.get("device_time")) if isinstance(payload, dict) else None
+        if t is None:
+            t = _iso_epoch(ts_device)
+        if t is None:
+            res.malformed.append(
+                f"malformed_bundle: heartbeat at seq {seq} has no readable device_time"
+            )
+            continue
+        interval = payload.get("interval_s") if isinstance(payload, dict) else None
+        if (
+            isinstance(interval, bool)
+            or not isinstance(interval, (int, float))
+            or not math.isfinite(interval)
+            or interval < 0
+        ):
+            res.malformed.append(
+                f"malformed_bundle: heartbeat at seq {seq} has an invalid interval_s "
+                f"({interval!r}); it must be a number of seconds >= 0"
+            )
+            continue
+        bid = payload.get("boot_id") if isinstance(payload, dict) else None
+        beats.append((
+            seq, t, float(interval),
+            mono if isinstance(mono, int) and not isinstance(mono, bool) else None,
+            bid if isinstance(bid, str) else None,
+        ))
+    res.checked = len(beats)
+
+    declared = [b[2] for b in beats if b[2] > 0]
+    if declared and max_silence_s < min(declared):
+        res.notes.append(
+            f"the policy ({max_silence_s:.0f}s) is stricter than the interval the device "
+            f"declared ({min(declared):.0f}s); a healthy recorder can fail it"
+        )
+
+    # (seq_start, seq_end, ts, epoch_end), in checkpoint row order
+    cps: list[tuple[int | None, int, float, float | None]] = []
+    for i, cp in enumerate(checkpoints):
+        t = _iso_epoch(cp.get("ts_device")) if isinstance(cp, dict) else None
+        if t is None:
+            continue
+        s_start = cp.get("seq_start")
+        s_start = s_start if isinstance(s_start, int) and not isinstance(s_start, bool) else None
+        end = epoch_ends[i] if epoch_ends is not None and i < len(epoch_ends) else None
+        cps.append((s_start, _safe_seq_end(cp.get("seq_end", -1)), t, end))
+    seq_times = [t for t in (_iso_epoch(v) for v in walk.ts_values) if t is not None]
+    last_seq = max(walk.derived) if walk.derived else 0
+    ref_end = max([*seq_times, *(c[2] for c in cps)], default=None)
+    ref_start = min(seq_times, default=None)
+
+    if not beats:
+        span = (ref_end - ref_start) if (ref_end is not None and ref_start is not None) else 0.0
+        if span > max_silence_s and not allow_no_heartbeats:
+            res.no_heartbeats = True
+        elif span > max_silence_s:
+            res.notes.append(
+                "no heartbeat entries in a record spanning "
+                f"{span:.0f}s; accepted by --allow-no-heartbeats"
+            )
+        else:
+            res.notes.append("no heartbeat entries; the record is shorter than the policy")
+        return res
+
+    def note(seq: int, reason: str) -> None:
+        res.clock_findings.append({"seq": seq, "reason": reason})
+
+    # Clock notes against the signed checkpoints (row order, not seq_end order)
+    # and, in a bundle, the tenant epoch time of every covering checkpoint.
+    for seq, t, _i, _m, _b in beats:
+        before = [c for c in cps if c[1] < seq]
+        after = [c for c in cps if c[1] >= seq]
+        if before and t < before[-1][2] - tol:
+            note(seq, "dated before the signed checkpoint that precedes it")
+        if after and t > after[0][2] + tol:
+            note(seq, "dated after the signed checkpoint that covers it")
+        for s_start, _s_end, _ct, end in after:
+            if (s_start is None or s_start <= seq) and end is not None and t > end + tol:
+                note(seq, "dated after the end of the tenant epoch that holds its checkpoint")
+                break
+
+    prev: tuple[int, float, float, int | None, str | None] | None = None
+    for beat in beats:
+        seq, t, interval, mono, bid = beat
+        if prev is not None:
+            p_seq, p_t, p_int, p_mono, p_bid = prev
+            d_mono = None if (mono is None or p_mono is None or mono < p_mono
+                              or bid != p_bid) else (mono - p_mono) / 1e9
+            if d_mono is not None and (t - p_t) < d_mono - tol - 0.01 * d_mono:
+                # Same boot and the wall clock moved less than the monotonic
+                # counter: the clock was set back. A host that slept shows the
+                # opposite (wall ahead of the counter) and is not noted.
+                note(seq, f"dated {d_mono - (t - p_t):,.0f}s short of the monotonic "
+                          f"counter since seq {p_seq} (device clock set back)")
+            backwards = t < p_t - tol
+            if backwards:
+                note(seq, f"device time went backwards from the heartbeat at seq {p_seq}")
+            # Each rule below stands on its own; a backwards clock never skips one.
+            if p_int == 0:
+                flag("disabled", ("off", p_seq), f"off:{p_seq}", p_seq, seq,
+                     (t - p_t) if t >= p_t else None)
+            elif backwards:
+                if bid is not None and bid == p_bid and d_mono is not None:
+                    # Same boot: the monotonic counter judges the spacing.
+                    if d_mono > max_silence_s:
+                        flag("spacing", ("sp", p_seq, seq), f"{p_seq}-{seq}", p_seq, seq, d_mono)
+                else:
+                    res.notes.append(
+                        f"spacing between seq {p_seq} and seq {seq} across a clock step "
+                        "cannot be judged; pass --strict-clock to fail it"
+                    )
+            elif t - p_t > max_silence_s:
+                flag("spacing", ("sp", p_seq, seq), f"{p_seq}-{seq}", p_seq, seq, t - p_t)
+        prev = beat
+
+    assert prev is not None
+    l_seq, l_t, l_int = prev[0], prev[1], prev[2]
+    if l_int == 0:
+        flag("disabled", ("off", l_seq), f"off:{l_seq}", l_seq, last_seq, None)
+    elif ref_end is not None and ref_end - l_t > max_silence_s:
+        flag("tail", ("tail", l_seq), f"tail:{l_seq}", l_seq, last_seq, ref_end - l_t)
+    return res
 
 
 def _walk_chain(
@@ -815,6 +1108,7 @@ def _walk_chain(
     # ts_device to before the rotation's effective_epoch.
     retired_devices: dict[str, int] = {}
     malformed: list[str] = []
+    heartbeats: list[tuple[int, Any, Any, Any]] = []
 
     have_starting_key = starting_public_key_b64 is not None
     active_key: str | None = starting_public_key_b64
@@ -903,6 +1197,12 @@ def _walk_chain(
                     tool_uses[str(tuid)] = seq
                 elif kind == EventKind.TOOL_RESULT.value and tuid not in tool_results:
                     tool_results[str(tuid)] = seq
+
+            if kind == EventKind.HEARTBEAT.value:
+                heartbeats.append(
+                    (seq, event.get("payload"), event.get("ts_device"),
+                     event.get("ts_monotonic_ns"))
+                )
 
             if have_starting_key:
                 # The live-timeline path (a starting/pinned key was
@@ -1018,6 +1318,7 @@ def _walk_chain(
         derived=derived,
         notes=notes,
         malformed=malformed,
+        heartbeats=heartbeats,
     )
 
 
@@ -1025,6 +1326,11 @@ def _verify(
     conn: sqlite3.Connection,
     public_key_b64: str | None,
     device_public_keys: dict[str, str],
+    max_heartbeat_silence_seconds: float | None = None,
+    heartbeat_gaps_allowed: Iterable[Any] | None = None,
+    allow_no_heartbeats: bool = False,
+    strict_clock: bool = False,
+    clock_notes_accepted: Iterable[int] | None = None,
 ) -> VerifyReport:
     all_columns = _columns(conn, "agent_events")
     if not all_columns:
@@ -1116,7 +1422,13 @@ def _verify(
                 "only by the hash chain, not a signature"
             )
 
-    notes = [*walk.notes, *cp_notes, *walk.malformed]
+    hb = _check_heartbeat_silence(
+        walk, max_heartbeat_silence_seconds, heartbeat_gaps_allowed,
+        checkpoints=checkpoints, allow_no_heartbeats=allow_no_heartbeats,
+        strict_clock=strict_clock, clock_notes_accepted=clock_notes_accepted,
+    )
+    walk.malformed = [*walk.malformed, *hb.malformed]
+    notes = [*walk.notes, *cp_notes, *hb.notes, *walk.malformed]
 
     forged_rotations = _forged_rotations(walk.key_rotations)
 
@@ -1128,6 +1440,7 @@ def _verify(
         or walk.stale_key_usage
         or forged_rotations
         or walk.malformed
+        or hb.failed
         or no_signed_checkpoints
         or unreadable_checkpoints
     )
@@ -1154,6 +1467,10 @@ def _verify(
         no_signed_checkpoints=no_signed_checkpoints,
         unreadable_checkpoints=unreadable_checkpoints,
         unsigned_tail=unsigned_tail,
+        heartbeat_silences=hb.silences,
+        clock_findings=hb.clock_findings,
+        no_heartbeats=hb.no_heartbeats,
+        heartbeats_checked=hb.checked,
     )
 
 
@@ -1456,6 +1773,11 @@ class BundleVerifyReport:
     # covered by any signed checkpoint at all. Each tuple is an inclusive
     # (first_seq, last_seq) range of such entries.
     unsigned_tail: list[tuple[int, int]] = field(default_factory=list)
+    # C2: see VerifyReport.heartbeat_silences.
+    heartbeat_silences: list[dict[str, Any]] = field(default_factory=list)
+    clock_findings: list[dict[str, Any]] = field(default_factory=list)
+    no_heartbeats: bool = False
+    heartbeats_checked: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -1474,6 +1796,11 @@ def verify_bundle(
     pinned_tenant_public_keys_b64: Iterable[str] | None = None,
     require_pinned_anchors: bool = False,
     tsa_trusted_roots_pem: list[str] | None = None,
+    max_heartbeat_silence_seconds: float | None = None,
+    heartbeat_gaps_allowed: Iterable[Any] | None = None,
+    allow_no_heartbeats: bool = False,
+    strict_clock: bool = False,
+    clock_notes_accepted: Iterable[int] | None = None,
 ) -> BundleVerifyReport:
     """Offline verification of an examiner export bundle
     (``docs/seal-format.md`` §13.2).
@@ -1495,6 +1822,12 @@ def verify_bundle(
     tenant_key_mismatches findings on mismatch) closes that gap for a caller
     who obtained those keys some other way (seal-format §11.4).
 
+    ``max_heartbeat_silence_seconds`` (default ``None`` = off, so older
+    bundles verify as before) turns on the heartbeat checks of
+    ``docs/seal-format.md`` 11.6, as in :func:`verify_ledger`; a bundle also
+    cross-checks heartbeat times against the tenant epoch end. A non-finite or
+    non-positive value raises :class:`VerifyError`.
+
     ``require_pinned_anchors=True`` turns an anchor that could only be
     checked against its own claims — a Rekor receipt with no
     ``rekor_public_key_b64``, or an RFC 3161 token whose chain wasn't checked
@@ -1505,6 +1838,7 @@ def verify_bundle(
     ``malformed_bundle`` and never raise: this function's whole job
     is validating untrusted input.
     """
+    _validate_silence_policy(max_heartbeat_silence_seconds, heartbeat_gaps_allowed)
     if not isinstance(bundle, dict):
         # The bundle itself has the wrong shape entirely (e.g. a list or a
         # scalar) — there is nothing to walk at all. Report it as a totally
@@ -1620,9 +1954,43 @@ def verify_bundle(
                 f"malformed_bundle: epoch entry skipped ({exc})"
             )
 
+    epoch_end_by_index: dict[Any, float] = {}
+    for epoch in raw_epochs:
+        if isinstance(epoch, dict):
+            t = _iso_epoch(epoch.get("epoch_end"))
+            idx = epoch.get("epoch_index")
+            if t is not None and isinstance(idx, (int, str)):
+                epoch_end_by_index[idx] = t
+    # One entry per bundle checkpoint, in bundle order (never keyed by seq_end,
+    # which two checkpoints can share).
+    epoch_ends = [
+        epoch_end_by_index.get(bc.get("epoch_index"))
+        if isinstance(bc.get("epoch_index"), (int, str)) else None
+        for bc in bundle_checkpoints
+    ]
+    hb = _check_heartbeat_silence(
+        walk, max_heartbeat_silence_seconds, heartbeat_gaps_allowed,
+        checkpoints=checkpoints, epoch_ends=epoch_ends,
+        allow_no_heartbeats=allow_no_heartbeats,
+        strict_clock=strict_clock, clock_notes_accepted=clock_notes_accepted,
+    )
+    if max_heartbeat_silence_seconds is not None:
+        # With the heartbeat check on, a bundle stripped of its entries or its
+        # checkpoints must not pass for lack of anything to judge.
+        if not walk.entries_checked:
+            malformed_bundle.append(
+                "malformed_bundle: the heartbeat check is on but the bundle has no entries"
+            )
+        if not bundle_checkpoints:
+            malformed_bundle.append(
+                "malformed_bundle: the heartbeat check is on but the bundle has no "
+                "checkpoints, so no heartbeat is covered by a signed checkpoint"
+            )
+    malformed_bundle.extend(hb.malformed)
+
     bad_inclusions: list[int] = []
     inclusions_checked = 0
-    notes = [*walk.notes, *cp_notes, *epoch_notes]
+    notes = [*walk.notes, *cp_notes, *epoch_notes, *hb.notes]
 
     for bc in bundle_checkpoints:
         seq_end = -1
@@ -1796,6 +2164,7 @@ def verify_bundle(
         or walk.orphan_tool_results
         or walk.stale_key_usage
         or forged_rotations
+        or hb.failed
         or device_key_mismatch
         or tenant_key_mismatches
         or malformed_bundle
@@ -1825,4 +2194,8 @@ def verify_bundle(
         tenant_key_mismatches=tenant_key_mismatches,
         malformed_bundle=malformed_bundle,
         unsigned_tail=unsigned_tail,
+        heartbeat_silences=hb.silences,
+        clock_findings=hb.clock_findings,
+        no_heartbeats=hb.no_heartbeats,
+        heartbeats_checked=hb.checked,
     )

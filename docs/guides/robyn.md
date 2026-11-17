@@ -48,5 +48,5 @@ failures). Mid-stream failures on `/stream` arrive as a final
 `data: {"error": ..., "done": true}` SSE event instead of a status code, since headers are
 already on the wire.
 
-See [`examples/robyn_app/main.py`](https://github.com/ravikings/byoai-runtime/blob/main/examples/robyn_app/main.py)
+See [`examples/robyn_app/main.py`](https://github.com/coriqo/byoai-runtime/blob/main/examples/robyn_app/main.py)
 for a runnable example.

@@ -1,8 +1,8 @@
 site_name: ByoAI Runtime
 site_description: The AI execution runtime for Python. Bring your own infrastructure; ByoAI brings the runtime.
-site_url: https://ravikings.github.io/byoai-runtime/
-repo_url: https://github.com/ravikings/byoai-runtime
-repo_name: ravikings/byoai-runtime
+site_url: https://coriqo.github.io/byoai-runtime/
+repo_url: https://github.com/coriqo/byoai-runtime
+repo_name: coriqo/byoai-runtime
 edit_uri: edit/main/docs/
 
 theme:
@@ -68,6 +68,6 @@ nav:
   - Shield Sync protocol: shield-sync-protocol.md
   - Recorder seal format: seal-format.md
   - API Reference: reference/api.md
-  - Configuration Reference: https://github.com/ravikings/byoai-runtime/blob/main/CONFIGURATION.md
-  - Changelog: https://github.com/ravikings/byoai-runtime/blob/main/CHANGELOG.md
-  - Contributing: https://github.com/ravikings/byoai-runtime/blob/main/CONTRIBUTING.md
+  - Configuration Reference: https://github.com/coriqo/byoai-runtime/blob/main/CONFIGURATION.md
+  - Changelog: https://github.com/coriqo/byoai-runtime/blob/main/CHANGELOG.md
+  - Contributing: https://github.com/coriqo/byoai-runtime/blob/main/CONTRIBUTING.md

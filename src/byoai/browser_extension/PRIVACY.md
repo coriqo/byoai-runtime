@@ -204,4 +204,4 @@ popup always shows whether it is on.
 
 ## Contact
 
-Questions or concerns: https://github.com/ravikings/byoai-runtime/issues
+Questions or concerns: https://github.com/coriqo/byoai-runtime/issues

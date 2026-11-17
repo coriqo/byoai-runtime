@@ -35,6 +35,7 @@ from byoai.recorder.ledger import Ledger, LedgerEntry
 from byoai.recorder.schema import EventKind
 
 __all__ = [
+    "runtime_info",
     "AttestationShipResult",
     "CheckpointShipResult",
     "ShipError",
@@ -54,6 +55,25 @@ _INITIAL_BACKOFF_SECONDS = 1.0
 #: for the whole process, matching what `attest_capability_snapshot`'s
 #: `runtime_version` already reports elsewhere.
 _EMITTER = {"kind": "proxy", "vendor": "byoai-runtime", "software_version": __version__}
+
+
+#: Capability signal (C2), a top-level field of both batch bodies. A server
+#: that sees ``heartbeat_chain_v1`` knows this runtime is writing ``heartbeat``
+#: chain entries every ``heartbeat_interval_s`` seconds. It is sent only while
+#: the heartbeat thread is alive (never when heartbeats are off or failed to
+#: start) and omitted otherwise. It is self-asserted: the body signature proves
+#: the device sent it, not that it is true, so a server should treat it as
+#: sticky per device once seen and judge the heartbeat entries themselves.
+#: Servers read the body by key and ignore fields they do not know, so the
+#: released contract (``/v1/ingest/batch``, ``/v1/checkpoints/batch``,
+#: ``rejected`` entries carrying ``seq_end``) is unchanged.
+def runtime_info(heartbeat_interval_s: float) -> dict:
+    interval = float(heartbeat_interval_s)
+    return {
+        "version": __version__,
+        "capabilities": ["heartbeat_chain_v1"],
+        "heartbeat_interval_s": int(interval) if interval.is_integer() else interval,
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,7 +179,11 @@ class Shipper:
         wait: Callable[[float], bool] | None = None,
         attestation_client: AsyncCoriqoAgentsClient | None = None,
         tenant_slug: str | None = None,
+        runtime_info: Callable[[], dict | None] | None = None,
     ) -> None:
+        #: Returns the ``runtime`` capability block to add to each batch, or
+        #: ``None`` to send none. Unset sends none (an older runtime's shape).
+        self._runtime_info = runtime_info
         self._ledger = ledger
         self._key = key
         self._base_url = coriqo_base_url.rstrip("/")
@@ -199,6 +223,16 @@ class Shipper:
         if self._owns_attestation_client and self._attestation_client is not None:
             asyncio.run(self._attestation_client.close())
 
+    def _add_runtime(self, body: dict) -> None:
+        if self._runtime_info is None:
+            return
+        try:
+            info = self._runtime_info()
+        except Exception:  # noqa: BLE001 - a status read never blocks shipping
+            info = None
+        if info:
+            body["runtime"] = info
+
     # -- single batch attempt ------------------------------------------------
 
     def ship_once(self) -> ShipResult | None:
@@ -235,6 +269,7 @@ class Shipper:
             total_bytes += entry_bytes
 
         body = {"device_id": self._key.device_id, "entries": batch}
+        self._add_runtime(body)
         resp_body = self._post_signed_batch(_INGEST_PATH, body)
 
         accepted = int(resp_body.get("accepted", 0))
@@ -274,6 +309,7 @@ class Shipper:
             return None
 
         body = {"device_id": self._key.device_id, "checkpoints": checkpoints}
+        self._add_runtime(body)
         resp_body = self._post_signed_batch(_CHECKPOINT_INGEST_PATH, body)
 
         accepted = int(resp_body.get("accepted", 0))

@@ -14,11 +14,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
+from typing import Any
 
 from byoai.recorder.verify import (
     VerifyError,
     VerifyReport,
+    verify_bundle,
     verify_device_receipt,
     verify_ledger,
 )
@@ -75,6 +78,10 @@ def format_report(report: VerifyReport, pubkey_b64: str | None = None) -> str:
         f"{report.checkpoints_checked} checkpoint(s) examined"
         + ("" if report.signatures_verified else "; signatures not checked")
     )
+    if report.heartbeats_checked:
+        lines.append(
+            f"  {report.heartbeats_checked} heartbeat(s) checked against the allowed spacing"
+        )
     lines.append("")
 
     if report.ok and not report.unpaired_tool_uses:
@@ -149,6 +156,8 @@ def format_report(report: VerifyReport, pubkey_b64: str | None = None) -> str:
             "the device signature or the sealed chain head is not authentic."
         )
 
+    lines.extend(_heartbeat_findings(report))
+
     for tool_use_id in report.orphan_tool_results:
         lines.append(
             f"  - tool result `{tool_use_id}` has no preceding tool_use: the client "
@@ -170,6 +179,95 @@ def format_report(report: VerifyReport, pubkey_b64: str | None = None) -> str:
     else:
         lines.append("VERDICT: record CANNOT be relied upon — see findings above.")
     return "\n".join(lines)
+
+
+def _silence_seconds(raw: str) -> float:
+    """argparse type: a finite number of seconds > 0. ``nan``, ``inf``, zero and
+    negatives are refused (exit 2), never read as "off"."""
+    try:
+        value = float(raw)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a number: {raw!r}") from None
+    if not math.isfinite(value) or value <= 0:
+        raise argparse.ArgumentTypeError(
+            f"must be a finite number of seconds greater than 0, got {raw!r}"
+        )
+    return value
+
+
+def _heartbeat_findings(report: Any) -> list[str]:
+    """Plain-language lines for the heartbeat findings of a ledger or bundle
+    report. They describe what the device's own record claims; none of them
+    says what the host did, and none is proof the recorder was alive."""
+    out: list[str] = []
+    for gap in report.heartbeat_silences:
+        kind, a, b, name = gap.get("kind", "spacing"), gap["from_seq"], gap["to_seq"], gap["name"]
+        secs = gap.get("seconds")
+        span = f" for {secs:,.0f}s" if secs is not None else ""
+        accept = f" To accept it after review: --heartbeat-gap {name}."
+        if kind == "disabled":
+            out.append(
+                f"  - heartbeats not covered: the recorder declared heartbeats off at "
+                f"seq {a:,}; nothing vouches for the window to seq {b:,}{span}.{accept}"
+            )
+        elif kind == "tail":
+            out.append(
+                f"  - no heartbeat after seq {a:,}{span} before the end of the record "
+                f"(seq {b:,}), over the allowed spacing.{accept}"
+            )
+        else:
+            out.append(
+                f"  - heartbeat gap: nothing between seq {a:,} and seq {b:,}{span}, over "
+                "the allowed spacing. The record does not show the recorder writing in "
+                "that window; it does not say why (a laptop or VM that slept, a stopped "
+                f"process) or what the host did.{accept}"
+            )
+    for f in report.clock_findings:
+        out.append(
+            f"  - clock note (advisory unless --strict-clock): the heartbeat at seq "
+            f"{f['seq']:,} is {f['reason']}. NTP steps, VM resume, a moved host and several "
+            f"writer processes cause this in honest records. Accept with "
+            f"--accept-clock-note {f['seq']}."
+        )
+    if report.no_heartbeats:
+        out.append(
+            "  - no heartbeats: this record spans longer than the allowed spacing and "
+            "contains none (removed, never written, or an older recorder). Use "
+            "--allow-no-heartbeats for a record from before heartbeats existed."
+        )
+    return out
+
+
+def _add_gap_flags(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--heartbeat-gap",
+        dest="heartbeat_gaps",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="accept one window the check flags, by the name shown in the finding: "
+        "FROM-TO (the two heartbeat seqs bounding a gap, e.g. a laptop or VM that "
+        "slept), tail:SEQ (after the last heartbeat), off:SEQ (a 'heartbeats off' "
+        "window, by its marker). Repeatable; needs --max-heartbeat-silence",
+    )
+    parser.add_argument(
+        "--strict-clock",
+        dest="strict_clock",
+        action="store_true",
+        help="make clock inconsistencies fail instead of only being noted. For a "
+        "single-host, single-process deployment under review; NTP steps, VM "
+        "resume, a moved host and several writer processes trip it in honest records",
+    )
+    parser.add_argument(
+        "--accept-clock-note",
+        dest="accept_clock_notes",
+        action="append",
+        type=int,
+        default=[],
+        metavar="SEQ",
+        help="with --strict-clock, accept the clock note at this heartbeat seq "
+        "(repeatable)",
+    )
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -255,6 +353,28 @@ def _build_parser() -> argparse.ArgumentParser:
         "are still listed",
     )
     parser.add_argument(
+        "--max-heartbeat-silence",
+        dest="max_heartbeat_silence",
+        type=_silence_seconds,
+        default=None,
+        metavar="SECONDS",
+        help="turn on the heartbeat checks: fail when two consecutive heartbeat "
+        "entries, or the last heartbeat and the end of the record, are further "
+        "apart than this; when the recorder declared heartbeats off; when device "
+        "time runs backwards or outside the signed checkpoints; or when a record "
+        "that long has no heartbeats (see --allow-no-heartbeats). Off by default, "
+        "so ledgers from before heartbeats verify as before. It bounds what the "
+        "device's own clock claims; it is not proof of liveness",
+    )
+    parser.add_argument(
+        "--allow-no-heartbeats",
+        dest="allow_no_heartbeats",
+        action="store_true",
+        help="with --max-heartbeat-silence, accept a record with no heartbeat "
+        "entries (a record from before heartbeats existed)",
+    )
+    _add_gap_flags(parser)
+    parser.add_argument(
         "--forget-rejected",
         dest="forget_rejected",
         action="store_true",
@@ -274,6 +394,17 @@ def _parse_device_pubkeys(raw: list[str]) -> dict[str, str]:
             )
         device_public_keys[device_id] = pubkey
     return device_public_keys
+
+
+def _parse_heartbeat_gaps(raw: list[str]) -> list[str]:
+    from byoai.recorder.verify import _parse_gap
+
+    for item in raw:
+        try:
+            _parse_gap(item)
+        except VerifyError as exc:
+            raise SystemExit(f"coriqo-verify: --heartbeat-gap: {exc}") from None
+    return list(raw)
 
 
 def _receipt_main(argv: list[str]) -> int:
@@ -314,11 +445,81 @@ def _receipt_main(argv: list[str]) -> int:
     return _EXIT_OK if result["ok"] else _EXIT_FAILED
 
 
+def _bundle_main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="coriqo-verify bundle",
+        description="Offline verification of an examiner export bundle (JSON, "
+        "docs/seal-format.md 13.2).",
+    )
+    parser.add_argument("file", help="path to the bundle (JSON)")
+    parser.add_argument("--pubkey", default=None,
+                        help="base64 Ed25519 device public key to pin (the key active at seq 1)")
+    parser.add_argument("--tenant-pubkey", dest="tenant_pubkeys", action="append", default=[],
+                        metavar="B64", help="pinned tenant epoch key (repeatable)")
+    parser.add_argument("--skip-anchors", action="store_true",
+                        help="do not check external anchor receipts")
+    parser.add_argument("--max-heartbeat-silence", dest="max_heartbeat_silence",
+                        type=_silence_seconds, default=None, metavar="SECONDS",
+                        help="turn on the heartbeat checks; see `coriqo-verify --help`")
+    _add_gap_flags(parser)
+    parser.add_argument("--allow-no-heartbeats", action="store_true",
+                        help="accept a bundle with no heartbeat entries")
+    parser.add_argument("--json", dest="as_json", action="store_true",
+                        help="emit the report as machine-readable JSON")
+    args = parser.parse_args(argv)
+    try:
+        with open(args.file, encoding="utf-8") as fh:
+            bundle = json.load(fh)
+    except (OSError, ValueError) as exc:
+        print(f"coriqo-verify: cannot read {args.file}: {exc}", file=sys.stderr)
+        return _EXIT_UNREADABLE
+    try:
+        report = verify_bundle(
+            bundle,
+            pinned_device_public_key_b64=args.pubkey,
+            pinned_tenant_public_keys_b64=args.tenant_pubkeys or None,
+            check_anchors=not args.skip_anchors,
+            max_heartbeat_silence_seconds=args.max_heartbeat_silence,
+            heartbeat_gaps_allowed=_parse_heartbeat_gaps(args.heartbeat_gaps),
+            allow_no_heartbeats=args.allow_no_heartbeats,
+            strict_clock=args.strict_clock,
+            clock_notes_accepted=args.accept_clock_notes,
+        )
+    except VerifyError as exc:
+        print(f"coriqo-verify: {exc}", file=sys.stderr)
+        return _EXIT_UNREADABLE
+    if args.as_json:
+        print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
+    else:
+        print(f"Bundle: {report.entries_checked:,} entries, "
+              f"{report.checkpoints_checked} checkpoint(s), "
+              f"{report.heartbeats_checked} heartbeat(s) checked")
+        findings = _heartbeat_findings(report)
+        for name in ("broken_links", "bad_checkpoint_signatures", "bad_inclusions",
+                     "bad_epoch_signatures", "bad_anchors", "gaps", "orphan_tool_results",
+                     "stale_key_usage", "tenant_key_mismatches", "malformed_bundle"):
+            value = getattr(report, name)
+            if value:
+                findings.append(f"  - {name}: {value}")
+        if report.device_key_mismatch:
+            findings.append("  - device_key_mismatch: the bundle's key is not the pinned one")
+        if findings:
+            print("FINDINGS")
+            print("\n".join(findings))
+        for note in report.notes:
+            print(f"  note: {note}")
+        print("VERDICT: bundle verified." if report.ok
+              else "VERDICT: bundle CANNOT be relied upon — see findings above.")
+    return _EXIT_OK if report.ok else _EXIT_FAILED
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     # A ledger file named "receipt" is still reachable as ./receipt.
     if argv and argv[0] == "receipt":
         return _receipt_main(argv[1:])
+    if argv and argv[0] == "bundle":
+        return _bundle_main(argv[1:])
     args = _build_parser().parse_args(argv)
     device_public_keys = _parse_device_pubkeys(args.device_pubkeys)
     receipt_pem = None
@@ -353,6 +554,11 @@ def main(argv: list[str] | None = None) -> int:
             receipt_public_key_pem=receipt_pem,
             allow_unchecked_receipts=args.allow_unchecked_receipts,
             allow_pending_receipts=args.allow_pending_receipts,
+            max_heartbeat_silence_seconds=args.max_heartbeat_silence,
+            heartbeat_gaps_allowed=_parse_heartbeat_gaps(args.heartbeat_gaps),
+            allow_no_heartbeats=args.allow_no_heartbeats,
+            strict_clock=args.strict_clock,
+            clock_notes_accepted=args.accept_clock_notes,
         )
     except VerifyError as exc:
         print(f"coriqo-verify: {exc}", file=sys.stderr)

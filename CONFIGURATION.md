@@ -74,7 +74,7 @@ the recorder's shipped evidence; it never writes to a ledger.
 
 ### Installing Shield
 
-`pip install --pre "byoai-runtime[shield]"` installs what `byoai-shield` needs on top of the base package
+`pip install "byoai-runtime[shield]"` installs what `byoai-shield` needs on top of the base package
 (`cryptography`, used to sign the seal chain). Without it the command prints that line and exits, instead of a
 traceback. The `all` extra includes it.
 
@@ -253,7 +253,7 @@ protocol Coriqo's managed mode does, so
 `byoai.integrations.shield_publish.Publisher` enrols and polls it with no
 code changes. `byoai.shield_server.create_app(config)` builds the FastAPI
 app; the console script wraps it. Install with
-`pip install --pre 'byoai-runtime[shield-server]'`.
+`pip install 'byoai-runtime[shield-server]'`.
 
 | Var | Default | Meaning |
 |---|---|---|
@@ -732,7 +732,7 @@ The proxy needs FastAPI, uvicorn, and redis, so it ships behind its own extra �
 a base install has none of them and `byoai-cache` will fail to import:
 
 ```bash
-pip install --pre "byoai-runtime[agent-context-cache]"
+pip install "byoai-runtime[agent-context-cache]"
 ```
 
 Start it with `byoai-cache` (the long `byoai-agent-context-cache` name is an
@@ -788,7 +788,7 @@ Requires the `cryptography` package (and, for verifying RFC 3161 anchor
 receipts, `rfc3161ng`), behind its own extra:
 
 ```bash
-pip install --pre "byoai-runtime[recorder]"
+pip install "byoai-runtime[recorder]"
 export BYOAI_RECORDER_ENABLED=1
 ```
 
@@ -797,6 +797,7 @@ export BYOAI_RECORDER_ENABLED=1
 | `BYOAI_RECORDER_ENABLED` | `0` | Set to `1` to turn the recorder on. Everything below is a no-op while it's off |
 | `BYOAI_RECORDER_DIR` | `~/.byoai/recorder` | Where the device key and ledger (`ledger.db`) live |
 | `BYOAI_RECORDER_STRICT` | `0` | `1` = a ledger write failure returns `503` to the client instead of being logged and skipped — for deployments where an unrecorded action is unacceptable |
+| `BYOAI_RECORDER_HEARTBEAT_SECONDS` | `900` | How often the running recorder writes a signed `heartbeat` entry into the ledger (a normal chain entry, covered by the device-signed checkpoints). `0` turns it off, and the recorder then writes one `heartbeat` with `interval_s: 0` so the chain says so (a verifier with the heartbeat check on reports that window as not covered). An unparseable or negative value logs a warning and uses 900, never "off". Nothing is written while the process is not running, and a restart writes at most one (none if the last heartbeat is younger than the interval). Volume at 900: 96 heartbeats a day (35,040 a year) and about 48 checkpoints a day (about 17,500 a year, one per two idle heartbeats), per device. A forked worker restarts its own heartbeat thread (with its own SQLite connection), so N workers write N times that, and under `gunicorn --preload` the master heartbeats too (N + 1 writers). All processes that write one ledger file are trusted: entry hashes are unkeyed, so a writer with file access can forge consistent rows, and a checkpoint signature vouches for the file's content at that moment. A process re-derives the rows other writers added before it signs or appends past them, and stops (logged, with a `record_failure` queued) if the file's head went backwards, its history changed, or a row does not verify. A keyed per-row MAC is a possible future hardening (`docs/seal-format.md` §4.4). See `docs/seal-format.md` §4.4 |
 | `BYOAI_RECORDER_PAYLOAD_MODE` | `redacted` | What payload bytes actually reach the ledger. `hash-only` ships no payload bytes at all (only the tamper-evident `payload_hash`); `redacted` masks detected secrets/PII and salted-hashes everything else before it's written; `full` ships payloads unchanged. `payload_hash` always commits to the raw, unredacted payload regardless of mode |
 
 #### Trace attribution (sub-agents, resumed sessions)
@@ -830,6 +831,26 @@ tool-call pairing findings (a `tool_use` with no matching `tool_result`, or a
 `tool_result` with none — see the recorder's `verify.py` docstring for what
 each finding means). Exit code `0` on a clean ledger, `1` on any integrity
 failure, `2` if the file can't be read at all.
+
+To check heartbeats, add `--max-heartbeat-silence SECONDS` (off by default; `nan`,
+`inf`, 0 and negatives are refused with exit 2). With it on, the check fails a
+record when: two consecutive heartbeats, or the last heartbeat and the end of the
+record, are further apart than that; the recorder declared heartbeats off; an
+`interval_s` is invalid; or the record spans longer than that and has no
+heartbeats at all (`--allow-no-heartbeats` accepts an older record). A laptop or VM
+that slept shows as a gap. Accept a window you reviewed with `--heartbeat-gap NAME`,
+the name shown in the finding: `FROM-TO`, `tail:SEQ` or `off:SEQ` (repeatable).
+Clock inconsistencies (time going backwards, disagreeing with the monotonic counter
+or the signed checkpoints) are printed as advisory clock notes and do not fail:
+NTP steps, VM resume, a moved ledger and several writer processes cause them in
+honest records. `--strict-clock` makes them fail (for a single-host, single-process
+deployment under review); `--accept-clock-note SEQ` accepts a reviewed one.
+`coriqo-verify bundle FILE.json` takes the same flags for an export bundle, and
+with the check on it fails a bundle with no entries or no checkpoints. The same
+policy is `max_heartbeat_silence_seconds`, `heartbeat_gaps_allowed`,
+`allow_no_heartbeats`, `strict_clock` and `clock_notes_accepted` on `verify_ledger`
+and `verify_bundle`. The check bounds what the device's own clock claims; it is not
+proof of liveness or of what the host did (`docs/seal-format.md` §4.4, §11.6).
 
 #### Managed agents you cannot intercept (`byoai.recorder.bedrock_agent`)
 
@@ -887,7 +908,7 @@ it. `boto3` is confined to `bedrock_agent_source.py` and lives behind an
 extra:
 
 ```bash
-pip install --pre "byoai-runtime[bedrock-agent,recorder]"
+pip install "byoai-runtime[bedrock-agent,recorder]"
 ```
 
 `iter_cloudwatch_invocations(...)` replays Bedrock's model-invocation logs
@@ -1643,7 +1664,7 @@ either way, so the same enforcer runs on it unchanged, buffered and streaming.
 
 #### Gating an MCP server (`coriqo-mcp`, `byoai.integrations.coriqo_mcp`)
 
-`pip install --pre "byoai-runtime[coriqo-mcp]"` adds `cryptography` (the
+`pip install "byoai-runtime[coriqo-mcp]"` adds `cryptography` (the
 signed ledger), PyYAML (YAML mandate files) and uvicorn (`--http`).
 
 ```bash

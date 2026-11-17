@@ -70,7 +70,7 @@ if [ -n "${BYOAI_BEDROCK_AGENT_ID:-}" ]; then
 fi
 
 echo "==> Installing byoai-runtime (editable) with $EXTRAS extras"
-pip install --pre -e ".[$EXTRAS]"
+pip install -e ".[$EXTRAS]"
 
 export BYOAI_RECORDER_ENABLED="${BYOAI_RECORDER_ENABLED:-1}"
 export BYOAI_RECORDER_DIR="${BYOAI_RECORDER_DIR:-$HOME/.byoai/recorder}"

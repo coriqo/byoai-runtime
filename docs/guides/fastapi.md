@@ -56,5 +56,5 @@ async def ws(websocket: WebSocket, runtime: Runtime = Depends(get_runtime)):
     await serve_websocket(runtime, websocket)
 ```
 
-See [`examples/fastapi_app/main.py`](https://github.com/ravikings/byoai-runtime/blob/main/examples/fastapi_app/main.py)
+See [`examples/fastapi_app/main.py`](https://github.com/coriqo/byoai-runtime/blob/main/examples/fastapi_app/main.py)
 for a runnable app with events, caching, and provider fallback.

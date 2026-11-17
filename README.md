@@ -2,7 +2,7 @@
 
 > **Bring Your Own Infrastructure (BYOI). ByoAI Brings the Runtime.**
 
-[![CI](https://github.com/ravikings/byoai-runtime/actions/workflows/ci.yml/badge.svg)](https://github.com/ravikings/byoai-runtime/actions/workflows/ci.yml)
+[![CI](https://github.com/coriqo/byoai-runtime/actions/workflows/ci.yml/badge.svg)](https://github.com/coriqo/byoai-runtime/actions/workflows/ci.yml)
 [![PyPI version](https://badge.fury.io/py/byoai-runtime.svg)](https://badge.fury.io/py/byoai-runtime)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-brightgreen.svg)](https://www.python.org/downloads/)
@@ -45,7 +45,7 @@ The built console ships inside the wheel, so there is no Node toolchain to
 install at your end:
 
 ```bash
-pip install --pre "byoai-runtime[agent-context-cache]"
+pip install "byoai-runtime[agent-context-cache]"
 byoai-cache console      # starts the proxy in the background, prints the URL
 #   → http://localhost:8787/console/
 ```
@@ -155,10 +155,25 @@ ByoAI Runtime executes as an unopinionated, process-level orchestrator sitting a
 ### 1. Installation
 
 ```bash
-pip install --pre byoai-runtime
+pip install byoai-runtime
 ```
 
-`--pre` is required while the package is in pre-release (`0.1.0a7`).
+#### What is stable
+
+`byoai-runtime` is a beta (`0.1.x`): the parts below are a stable contract, and
+the rest may change in a minor release, with the change listed in the
+[changelog](CHANGELOG.md).
+
+- **Stable.** A breaking change is announced one minor release ahead and
+  documented in the changelog:
+  - the seal format and its verification ([docs/seal-format.md](docs/seal-format.md));
+  - the ledger and checkpoint ingest wire format the recorder ships to Coriqo;
+  - the `coriqo-verify` commands and their exit codes (0 verified, 1 failed,
+    2 unreadable input or bad usage);
+  - the versioned mandate file format.
+- **Provisional.** The pipeline runtime and stages, providers, framework
+  integrations, the Shield and Shield server, the MCP interposer, the console
+  and the optional extras.
 
 ### 2. Hello world
 
@@ -178,7 +193,7 @@ asyncio.run(main())
 No cache, no vector store, no telemetry — just a provider. Everything else in this README is
 opt-in: add `cache=`/`vector_store=`/`semantic_cache=`/`telemetry=` only for what you need, when
 you need it. The next example shows all of them wired up against real infrastructure. See
-[Getting Started](https://ravikings.github.io/byoai-runtime/getting-started/) for environment
+[Getting Started](https://coriqo.github.io/byoai-runtime/getting-started/) for environment
 variables, `system_prompt=`, and `async with Runtime(...)`.
 
 ### 3. Execution Example (Production Setup)
@@ -260,7 +275,7 @@ See `examples/fastapi_app/` for a runnable app with events, caching, and fallbac
 Run an unauthenticated MCP surface plus its behavioral-capture sidecar:
 
 ```bash
-pip install --pre 'byoai-runtime[mcp,shield]' mitmproxy
+pip install 'byoai-runtime[mcp,shield]' mitmproxy
 python examples/mcp_capture/server.py --http          # MCP over :8800/mcp
 python examples/mcp_capture/client.py                 # real session → ledger
 npm --prefix web install && npm --prefix web run build   # once, from a checkout
@@ -290,7 +305,7 @@ in the background), and the check reads memory.
 **Install**
 
 ```bash
-pip install --pre "byoai-runtime[coriqo-mcp]"
+pip install "byoai-runtime[coriqo-mcp]"
 ```
 
 **Run it.** Put `coriqo-mcp --mandate <file> --` in front of the command you
@@ -428,7 +443,7 @@ The demo's analyzer, seal chain, and UI backend are promoted into the package
 as `byoai.integrations.shield` with a console script (see `pyproject.toml`):
 
 ```bash
-pip install --pre 'byoai-runtime[shield]'   # Shield alone needs only this (it signs its record with `cryptography`)
+pip install 'byoai-runtime[shield]'   # Shield alone needs only this (it signs its record with `cryptography`)
 byoai-shield ./examples/mcp_capture/captures.jsonl --host 127.0.0.1 --port 17831
 byoai-shield --install-login-item   # start at login (macOS launchd, Linux systemd user unit, Windows Task Scheduler), low priority; --remove-login-item undoes it
 ```
@@ -761,7 +776,7 @@ enrols against it, polls it for policy, and reports checkpoints to it with
 address.
 
 ```bash
-pip install --pre 'byoai-runtime[shield-server]'
+pip install 'byoai-runtime[shield-server]'
 byoai-shield-server serve
 # ByoAI Shield server: org='default' data=~/.byoai/shield-server/
 # Listening on http://127.0.0.1:17840 (public url: http://127.0.0.1:17840)
@@ -1000,7 +1015,7 @@ collapses repeated large tool results within a request, cutting token spend
 without any client-side changes.
 
 ```bash
-pip install --pre "byoai-runtime[agent-context-cache]"
+pip install "byoai-runtime[agent-context-cache]"
 byoai-cache                                    # runs in the foreground
 export ANTHROPIC_BASE_URL=http://localhost:8787
 ```
@@ -1110,7 +1125,7 @@ is off by default and separate from the caching/dedup behavior above — the
 usage/benchmark stats keep working whether or not it's on.
 
 ```bash
-pip install --pre "byoai-runtime[recorder]"
+pip install "byoai-runtime[recorder]"
 BYOAI_RECORDER_ENABLED=1 byoai-cache
 coriqo-verify ~/.byoai/recorder/ledger.db   # check it offline, anytime
 ```
@@ -1352,7 +1367,7 @@ see [SECURITY.md](SECURITY.md) rather than opening a public issue.
 
 ## 🌐 Community & Documentation
 
-* **Documentation:** [ravikings.github.io/byoai-runtime](https://ravikings.github.io/byoai-runtime/)
+* **Documentation:** [coriqo.github.io/byoai-runtime](https://coriqo.github.io/byoai-runtime/)
 * **GitHub Repository:** [github.com/coriqo/byoai-runtime](https://github.com/coriqo/byoai-runtime)
 * **PyPI Package:** [pypi.org/project/byoai-runtime](https://pypi.org/project/byoai-runtime)
 * **Changelog:** [CHANGELOG.md](CHANGELOG.md)

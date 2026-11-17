@@ -59,6 +59,6 @@ Start with [Getting Started](getting-started.md), or jump straight to a guide:
 
 These guides cover how the pieces fit together and why. For the exact parameter reference of
 every component — every constructor argument and its default — see
-[CONFIGURATION.md](https://github.com/ravikings/byoai-runtime/blob/main/CONFIGURATION.md) in the
+[CONFIGURATION.md](https://github.com/coriqo/byoai-runtime/blob/main/CONFIGURATION.md) in the
 repository; it's kept as the single source of truth for exact signatures, cross-linked from the
 guides rather than duplicated in them.
