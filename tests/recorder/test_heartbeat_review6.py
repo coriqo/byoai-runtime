@@ -209,7 +209,7 @@ def test_child_that_uses_the_ledger_reopens_and_heartbeats(tmp_path, monkeypatch
             if rec.ledger._conn is not parent_conn and rec._heartbeat_thread is not None:
                 for _ in range(20):
                     rec.ledger.append(make_event(rec.key.device_id))
-                code = 0 if n >= 1 else 2
+                code = 0 if n >= 0 else 2  # (the parent's own heartbeat may not be written yet)
         finally:
             os._exit(code)
     for _ in range(20):

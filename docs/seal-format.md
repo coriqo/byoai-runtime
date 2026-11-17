@@ -266,9 +266,27 @@ the ledger, not at fork time, so a child that only execs (`subprocess` with
 across fork. Each
 forked worker writes its own heartbeats into the shared ledger: N workers write N
 times the entries, and under `gunicorn --preload` the master heartbeats too, so
-N + 1 writers. The shipper thread is not restarted. Several writers on one file
-are safe for the chain: each append reads the real head inside the write lock,
-and a checkpoint signs the real head and the time read together under that lock.
+N + 1 writers. The shipper thread is not restarted.
+
+Several writers on one file. Each append reads the real head inside the write
+lock, and a checkpoint signs the real head and the time read together under that
+lock. Before a process adopts rows another writer added, it re-derives each one
+(`entry_hash` from the stored fields, `prev_hash` linking to the row before,
+contiguous `seq`). It resyncs forward only. If the file's head is behind what the
+process already wrote, or the row at its last known seq no longer has the hash it
+remembers (the file was truncated, replaced or rewritten), it does not adopt the
+head: it logs an error naming the file and both heads, queues a `record_failure`
+(`ledger_head_changed`), refuses to append, and signs no checkpoint. If new rows
+do not re-derive, it logs an error and queues a `record_failure`
+(`ledger_rows_unverified`), refuses to append onto them, and a checkpoint stops at
+the process's own last verified head. The marker is written when the chain can be
+continued again.
+
+Trust. Every process that writes one ledger file is trusted. Entry hashes are
+unkeyed, so a writer with file access can forge rows that are consistent with each
+other. A checkpoint signature vouches for the file's content at that moment, not
+for who wrote each row. A keyed per-row MAC is a possible future hardening and is
+not part of this format.
 
 Volume. At the default 900 s: 96 heartbeats a day, 35,040 a year per device,
 and (measured over a simulated idle day in `tests/recorder/test_heartbeat.py`)

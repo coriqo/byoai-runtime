@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from byoai.recorder.canonical import canonicalize
 from byoai.recorder.keys import DeviceKey
+from byoai.recorder.ledger import LedgerHeadError
 from byoai.recorder.schema import format_ts_device
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -158,7 +159,7 @@ class Checkpointer:
 
     # -- internals --------------------------------------------------------
 
-    def _emit(self) -> dict:
+    def _emit(self) -> dict | None:
         assert self._pending_start is not None and self._pending_end is not None
         seq_start, seq_end = self._pending_start, self._pending_end
         snapshot = getattr(self._ledger, "snapshot", None)
@@ -166,7 +167,14 @@ class Checkpointer:
             # Cover everything written so far and sign the hash that belongs
             # to that seq, both read under the ledger lock. Reading ``head``
             # separately signs whatever another thread appended meanwhile.
-            last_seq, chain_head, snapped_at = snapshot(self._wall_clock)
+            try:
+                last_seq, chain_head, snapped_at = snapshot(self._wall_clock)
+            except LedgerHeadError:
+                # The ledger already logged it and queued a record_failure.
+                # Sign nothing; keep the pending window so a later try can.
+                return None
+            if self._last_emitted_end is not None and last_seq <= self._last_emitted_end:
+                return None  # nothing verified beyond what is already signed
             seq_end = max(seq_end, last_seq)
             if self._last_emitted_end is not None:
                 seq_start = min(seq_start, self._last_emitted_end + 1)

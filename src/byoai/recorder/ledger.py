@@ -114,6 +114,12 @@ CREATE TABLE IF NOT EXISTS sync_state (
 """
 
 
+class LedgerHeadError(RuntimeError):
+    """The file's chain head is not one this object can safely continue from:
+    it went backwards or its history was rewritten (``ledger_head_changed``), or
+    rows another writer added do not re-derive (``ledger_rows_unverified``)."""
+
+
 class LedgerWriteError(RuntimeError):
     """A ledger write failed while ``strict_mode`` was on.
 
@@ -270,22 +276,104 @@ class Ledger:
     ) -> tuple[int, str, float | None]:
         """``(last_seq, head, now)`` read together under the ledger lock.
 
-        The head is read from the file, not from this object's memory, so a
-        second writer on the same ledger (another worker process) cannot make
-        it stale: the hash is the one that belongs to that seq. ``clock``, when
-        given, is read inside the same lock, so a checkpoint's time cannot fall
-        on the wrong side of an entry that was appended around it. A checkpoint
-        signs this triple, never a head or time read separately."""
+        The head is read from the file, so a second writer on the same ledger
+        cannot make it stale: the hash is the one that belongs to that seq.
+        ``clock`` is read inside the same lock, so a checkpoint's time cannot
+        fall on the wrong side of an entry appended around it. A checkpoint signs
+        this triple, never a head or time read separately.
+
+        Rows another writer added are re-derived first (see :meth:`_sync_head`).
+        If they do not verify, the result stays at this object's own last
+        verified head and the failure is logged and queued. If the file's head
+        went backwards or its history changed, this raises
+        :class:`LedgerHeadError`: no head is returned to be signed."""
         with self._lock:
             self._require_open()
-            row = self._conn.execute(
-                "SELECT seq, entry_hash FROM agent_events ORDER BY seq DESC LIMIT 1"
-            ).fetchone()
-            if row is None:
-                self._head, self._next_seq = GENESIS_PREV_HASH, 1
-            else:
-                self._head, self._next_seq = row[1], row[0] + 1
+            try:
+                self._sync_head(tolerate_unverified=True)
+            except LedgerHeadError as exc:
+                self._queue_failure(str(exc))
+                raise
             return self._next_seq - 1, self._head, (clock() if clock is not None else None)
+
+    def _queue_failure(self, error: str) -> None:
+        if not self._pending_failures or self._pending_failures[-1].get("error") != error:
+            self._pending_failures.append(
+                {"event_id": None, "kind": None, "session_id": None, "tool_use_id": None,
+                 "error": error, "ts_device": now_ts_device()}
+            )
+
+    def _sync_head(self, *, tolerate_unverified: bool) -> None:
+        """Bring ``(_head, _next_seq)`` in line with the file, forward only.
+
+        - File head ahead of ours (another writer appended): adopt it, after
+          re-deriving every new row (``entry_hash`` from its stored fields,
+          ``prev_hash`` linking to the row before, contiguous seq).
+        - File head behind ours, or the row at our last known seq no longer has
+          the hash we remember (truncated, replaced or rewritten): do not adopt.
+          Log an error naming the file and both heads and raise
+          :class:`LedgerHeadError` (``ledger_head_changed``).
+        - A new row that does not verify: log an error and raise
+          ``ledger_rows_unverified``, or with ``tolerate_unverified`` stay at our
+          own last verified head and queue the failure.
+
+        Rows from other writers are trusted only as far as their entry hashes
+        are unkeyed: a writer with file access can forge consistent rows.
+        """
+        known_seq, known_hash = self._next_seq - 1, self._head
+        row = self._conn.execute(
+            "SELECT seq, entry_hash FROM agent_events ORDER BY seq DESC LIMIT 1"
+        ).fetchone()
+        disk_seq, disk_hash = (0, GENESIS_PREV_HASH) if row is None else (row[0], row[1])
+        if disk_seq == known_seq and disk_hash == known_hash:
+            return
+        changed = None
+        if disk_seq < known_seq:
+            changed = "the file's head is behind what this process already wrote"
+        elif known_seq >= 1:
+            at_known = self._conn.execute(
+                "SELECT entry_hash FROM agent_events WHERE seq = ?", (known_seq,)
+            ).fetchone()
+            if at_known is None or at_known[0] != known_hash:
+                changed = "the entry at the last known seq no longer has its remembered hash"
+        if changed is not None:
+            msg = (f"ledger_head_changed: {changed}; file {self.path}, this process: "
+                   f"seq {known_seq} {known_hash}, file: seq {disk_seq} {disk_hash}")
+            log.error(msg)
+            raise LedgerHeadError(msg)
+        # Ahead (or equal seq with a different hash handled above). Verify new rows.
+        prev, expected = known_hash, known_seq + 1
+        bad = None
+        for r in self._conn.execute(
+            "SELECT * FROM agent_events WHERE seq > ? ORDER BY seq", (known_seq,)
+        ).fetchall():
+            next_hash = None
+            try:
+                entry = _row_to_entry(r)
+                if (
+                    entry.seq == expected
+                    and entry.prev_hash == prev
+                    and event_digest(entry.event) == entry.event_digest
+                    and compute_entry_hash(prev, entry.seq, entry.event_digest)
+                    == entry.entry_hash
+                ):
+                    next_hash = entry.entry_hash
+            except Exception:  # noqa: BLE001 - an unreadable row is an unverified row
+                next_hash = None
+            if next_hash is None:
+                bad = expected
+                break
+            prev, expected = next_hash, expected + 1
+        if bad is not None:
+            msg = (f"ledger_rows_unverified: row at seq {bad} added by another writer does "
+                   f"not re-derive or link; file {self.path}, last verified: seq "
+                   f"{expected - 1} {prev}, file head: seq {disk_seq} {disk_hash}")
+            log.error(msg)
+            if tolerate_unverified:
+                self._queue_failure(msg)
+                return
+            raise LedgerHeadError(msg)
+        self._head, self._next_seq = disk_hash, disk_seq + 1
 
     # A forked child must not use the parent's SQLite connection, but it also
     # must not open a new one until it actually uses the ledger: a child that
@@ -441,13 +529,7 @@ class Ledger:
                 # Read the head again inside the write lock: another process
                 # writing the same file may have appended since this object
                 # last looked, and a retry outside the lock can lose that race.
-                row = self._conn.execute(
-                    "SELECT seq, entry_hash FROM agent_events ORDER BY seq DESC LIMIT 1"
-                ).fetchone()
-                if row is None:
-                    self._head, self._next_seq = GENESIS_PREV_HASH, 1
-                elif row[0] + 1 != self._next_seq or row[1] != self._head:
-                    self._head, self._next_seq = row[1], row[0] + 1
+                self._sync_head(tolerate_unverified=False)
                 seq = self._next_seq
                 prev_hash = self._head
                 # The event carries the seq that is actually written, so the

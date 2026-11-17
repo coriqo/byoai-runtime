@@ -1015,10 +1015,23 @@ def _check_heartbeat_silence(
                 # opposite (wall ahead of the counter) and is not noted.
                 note(seq, f"dated {d_mono - (t - p_t):,.0f}s short of the monotonic "
                           f"counter since seq {p_seq} (device clock set back)")
-            if t < p_t - tol:
+            backwards = t < p_t - tol
+            if backwards:
                 note(seq, f"device time went backwards from the heartbeat at seq {p_seq}")
-            elif p_int == 0:
-                flag("disabled", ("off", p_seq), f"off:{p_seq}", p_seq, seq, t - p_t)
+            # Each rule below stands on its own; a backwards clock never skips one.
+            if p_int == 0:
+                flag("disabled", ("off", p_seq), f"off:{p_seq}", p_seq, seq,
+                     (t - p_t) if t >= p_t else None)
+            elif backwards:
+                if bid is not None and bid == p_bid and d_mono is not None:
+                    # Same boot: the monotonic counter judges the spacing.
+                    if d_mono > max_silence_s:
+                        flag("spacing", ("sp", p_seq, seq), f"{p_seq}-{seq}", p_seq, seq, d_mono)
+                else:
+                    res.notes.append(
+                        f"spacing between seq {p_seq} and seq {seq} across a clock step "
+                        "cannot be judged; pass --strict-clock to fail it"
+                    )
             elif t - p_t > max_silence_s:
                 flag("spacing", ("sp", p_seq, seq), f"{p_seq}-{seq}", p_seq, seq, t - p_t)
         prev = beat
