@@ -11,7 +11,7 @@ import sys
 
 INSTALL_HINT = (
     "Shield signs its record with the 'cryptography' package, which is not installed.\n"
-    'Install it with:  pip install --pre "byoai-runtime[shield]"'
+    'Install it with:  pip install "byoai-runtime[shield]"'
 )
 
 

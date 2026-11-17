@@ -11,7 +11,7 @@ Where this page and the code disagree, the code is what produced the records
 you hold, so treat the disagreement as a documentation bug and report it.
 
 Test vectors are in [section 16](#16-test-vectors). They are produced by
-[`docs/seal-format-vectors.py`](https://github.com/ravikings/byoai-runtime/blob/main/docs/seal-format-vectors.py),
+[`docs/seal-format-vectors.py`](https://github.com/coriqo/byoai-runtime/blob/main/docs/seal-format-vectors.py),
 which drives the real library with fixed keys and clocks.
 
 **Out of scope.** Coriqo Shield's local seal chain (`sealchain.log.jsonl`,

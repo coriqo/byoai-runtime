@@ -13,7 +13,7 @@ The CLI must be installed (it ships with this package):
 
 ```bash
 pip install -e ".[agent-context-cache]"          # inside this repo, or
-pip install --pre "byoai-runtime[agent-context-cache]"  # from PyPI
+pip install "byoai-runtime[agent-context-cache]"  # from PyPI
 ```
 
 Verify it's on PATH: `command -v byoai-cache`. If missing, install first — don't try to invoke `python -m ...` as a substitute; use the console script.
@@ -71,6 +71,6 @@ This skill only depends on the `byoai-cache` console script being installed — 
 cp -r .claude/skills/byoai-cache /path/to/other-repo/.claude/skills/
 ```
 
-Then `pip install --pre "byoai-runtime[agent-context-cache]"` in that project's environment so the
+Then `pip install "byoai-runtime[agent-context-cache]"` in that project's environment so the
 `byoai-cache` command resolves. The bare package does not pull in FastAPI/uvicorn/redis, so
 without the extra the command exists but fails to import.

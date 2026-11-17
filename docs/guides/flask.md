@@ -95,5 +95,5 @@ def create_app():
     return app
 ```
 
-See [`examples/flask_app/main.py`](https://github.com/ravikings/byoai-runtime/blob/main/examples/flask_app/main.py)
+See [`examples/flask_app/main.py`](https://github.com/coriqo/byoai-runtime/blob/main/examples/flask_app/main.py)
 for a runnable app with this pattern, `provider_metadata=`, and `cache_system=`.

@@ -46,7 +46,7 @@ and also applies when an individual is officially representing the project in pu
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the
 project maintainers by opening a private security advisory at
-[github.com/ravikings/byoai-runtime/security/advisories/new](https://github.com/ravikings/byoai-runtime/security/advisories/new),
+[github.com/coriqo/byoai-runtime/security/advisories/new](https://github.com/coriqo/byoai-runtime/security/advisories/new),
 which is only visible to maintainers. All complaints will be reviewed and investigated promptly
 and fairly.
 

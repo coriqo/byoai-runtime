@@ -74,7 +74,7 @@ the recorder's shipped evidence; it never writes to a ledger.
 
 ### Installing Shield
 
-`pip install --pre "byoai-runtime[shield]"` installs what `byoai-shield` needs on top of the base package
+`pip install "byoai-runtime[shield]"` installs what `byoai-shield` needs on top of the base package
 (`cryptography`, used to sign the seal chain). Without it the command prints that line and exits, instead of a
 traceback. The `all` extra includes it.
 
@@ -253,7 +253,7 @@ protocol Coriqo's managed mode does, so
 `byoai.integrations.shield_publish.Publisher` enrols and polls it with no
 code changes. `byoai.shield_server.create_app(config)` builds the FastAPI
 app; the console script wraps it. Install with
-`pip install --pre 'byoai-runtime[shield-server]'`.
+`pip install 'byoai-runtime[shield-server]'`.
 
 | Var | Default | Meaning |
 |---|---|---|
@@ -732,7 +732,7 @@ The proxy needs FastAPI, uvicorn, and redis, so it ships behind its own extra â€
 a base install has none of them and `byoai-cache` will fail to import:
 
 ```bash
-pip install --pre "byoai-runtime[agent-context-cache]"
+pip install "byoai-runtime[agent-context-cache]"
 ```
 
 Start it with `byoai-cache` (the long `byoai-agent-context-cache` name is an
@@ -788,7 +788,7 @@ Requires the `cryptography` package (and, for verifying RFC 3161 anchor
 receipts, `rfc3161ng`), behind its own extra:
 
 ```bash
-pip install --pre "byoai-runtime[recorder]"
+pip install "byoai-runtime[recorder]"
 export BYOAI_RECORDER_ENABLED=1
 ```
 
@@ -908,7 +908,7 @@ it. `boto3` is confined to `bedrock_agent_source.py` and lives behind an
 extra:
 
 ```bash
-pip install --pre "byoai-runtime[bedrock-agent,recorder]"
+pip install "byoai-runtime[bedrock-agent,recorder]"
 ```
 
 `iter_cloudwatch_invocations(...)` replays Bedrock's model-invocation logs
@@ -1664,7 +1664,7 @@ either way, so the same enforcer runs on it unchanged, buffered and streaming.
 
 #### Gating an MCP server (`coriqo-mcp`, `byoai.integrations.coriqo_mcp`)
 
-`pip install --pre "byoai-runtime[coriqo-mcp]"` adds `cryptography` (the
+`pip install "byoai-runtime[coriqo-mcp]"` adds `cryptography` (the
 signed ledger), PyYAML (YAML mandate files) and uvicorn (`--http`).
 
 ```bash

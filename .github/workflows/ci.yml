@@ -1,14 +1,17 @@
 name: CI
 
-# Tag-only, to keep CI spend proportional to releases rather than to commits.
+# Runs on pull requests to main, on release tags, and by hand.
 #
-# The trade this makes: nothing validates a push or a pull request any more, so
-# main can carry a lint error, a type error or a failing test until the next tag
-# exposes it — and at that point the failure blocks a release instead of a
-# merge. `workflow_dispatch` is kept so the full suite can still be run by hand
-# from the Actions tab before tagging, which is the cheapest way to avoid
-# discovering a break at release time.
+# It used to run on tags only, to keep CI spend proportional to releases. That let
+# main carry a lint error, a type error and a stale test for months (the lint job
+# was red from August to November) and surface only at release time. A full run is
+# about 6 billable minutes and the repository is public, so a pull request run is
+# cheap; a push to main is not run, because the same commits already ran on their
+# pull request. `workflow_dispatch` stays for running the suite on any branch by
+# hand.
 on:
+  pull_request:
+    branches: [main]
   push:
     tags: ["v*"]
   workflow_dispatch: {}

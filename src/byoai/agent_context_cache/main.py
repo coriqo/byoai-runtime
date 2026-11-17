@@ -450,7 +450,7 @@ async def root():
     return {
         "service": "byoai-agent-context-cache",
         "status": "ok",
-        "docs": "https://github.com/ravikings/byoai-runtime#-agent-context-cache",
+        "docs": "https://github.com/coriqo/byoai-runtime#-agent-context-cache",
         "endpoints": {
             "messages": "/v1/messages",
             "count_tokens": "/v1/messages/count_tokens",

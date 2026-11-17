@@ -5,6 +5,6 @@ pyproject.toml reads ``__version__`` at build time via hatchling's
 package root, so low-level modules can use it without circular imports).
 """
 
-__version__ = "0.1.0a7"
+__version__ = "0.1.0"
 
 USER_AGENT = f"byoai-runtime/{__version__}"

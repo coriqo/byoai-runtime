@@ -12,7 +12,7 @@ requires-python = ">=3.10"
 authors = [{ name = "ByoAI Runtime Contributors" }]
 keywords = ["ai", "llm", "runtime", "pipeline", "fastapi", "rag", "openai", "anthropic"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
@@ -23,12 +23,11 @@ classifiers = [
     "Framework :: AsyncIO",
 ]
 dependencies = [
-    # Upper bound is load-bearing, not defensive habit. Installing this package
-    # requires `pip install --pre` while it is an alpha, and --pre applies to
-    # every dependency in the resolve, not just this one — so an uncapped
-    # `httpx>=0.25` resolves to httpx 1.0.dev*, whose API drops `httpx.Timeout`
-    # and breaks the proxy on import. Raise the ceiling only after the code is
-    # verified against the 1.x API.
+    # Upper bound is load-bearing, not defensive habit. The code is verified
+    # against httpx 0.x only: httpx 1.0 drops `httpx.Timeout` and breaks the
+    # proxy on import (an uncapped `httpx>=0.25` resolved to 1.0.dev* for anyone
+    # installing with `--pre`, which is how this was found). Raise the ceiling
+    # only after the code is verified against the 1.x API.
     "httpx>=0.25,<1.0",
 ]
 
@@ -98,11 +97,11 @@ byoai-shield-server = "byoai.shield_server.cli:main"
 coriqo-mcp = "byoai.integrations.coriqo_mcp:main"
 
 [project.urls]
-Homepage = "https://github.com/ravikings/byoai-runtime"
-Repository = "https://github.com/ravikings/byoai-runtime"
-Documentation = "https://ravikings.github.io/byoai-runtime/"
-Changelog = "https://github.com/ravikings/byoai-runtime/blob/main/CHANGELOG.md"
-Issues = "https://github.com/ravikings/byoai-runtime/issues"
+Homepage = "https://github.com/coriqo/byoai-runtime"
+Repository = "https://github.com/coriqo/byoai-runtime"
+Documentation = "https://coriqo.github.io/byoai-runtime/"
+Changelog = "https://github.com/coriqo/byoai-runtime/blob/main/CHANGELOG.md"
+Issues = "https://github.com/coriqo/byoai-runtime/issues"
 
 [tool.hatch.version]
 path = "src/byoai/_version.py"
