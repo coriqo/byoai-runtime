@@ -34,7 +34,7 @@ import logging
 import os
 import sqlite3
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -265,6 +265,75 @@ class Ledger:
         with self._lock:
             return self._head
 
+    def snapshot(
+        self, clock: Callable[[], float] | None = None
+    ) -> tuple[int, str, float | None]:
+        """``(last_seq, head, now)`` read together under the ledger lock.
+
+        The head is read from the file, not from this object's memory, so a
+        second writer on the same ledger (another worker process) cannot make
+        it stale: the hash is the one that belongs to that seq. ``clock``, when
+        given, is read inside the same lock, so a checkpoint's time cannot fall
+        on the wrong side of an entry that was appended around it. A checkpoint
+        signs this triple, never a head or time read separately."""
+        with self._lock:
+            self._require_open()
+            row = self._conn.execute(
+                "SELECT seq, entry_hash FROM agent_events ORDER BY seq DESC LIMIT 1"
+            ).fetchone()
+            if row is None:
+                self._head, self._next_seq = GENESIS_PREV_HASH, 1
+            else:
+                self._head, self._next_seq = row[1], row[0] + 1
+            return self._next_seq - 1, self._head, (clock() if clock is not None else None)
+
+    # A forked child must not use the parent's SQLite connection, but it also
+    # must not open a new one until it actually uses the ledger: a child that
+    # only execs (``subprocess`` with ``preexec_fn``) would otherwise open a
+    # connection and start threads before exec. So the child hook only swaps the
+    # lock and sets this flag; the reopen happens on first use of ``_conn``.
+    _needs_reopen = False
+    #: Called once, in the child, right after the lazy reopen (the recorder
+    #: starts its heartbeat thread here).
+    after_reopen: Callable[[], None] | None = None
+
+    @property
+    def _conn(self) -> sqlite3.Connection:
+        if self._needs_reopen:
+            self._reopen_now()
+        return self._conn_
+
+    @_conn.setter
+    def _conn(self, value: sqlite3.Connection) -> None:
+        self._conn_ = value
+
+    def mark_forked_in_child(self) -> None:
+        """Called in a forked child: swap in a fresh lock (one a vanished thread
+        held would never release) and reopen the connection on first use."""
+        self._lock = threading.RLock()
+        if not self._closed:
+            self._needs_reopen = True
+
+    def _reopen_now(self) -> None:
+        self._needs_reopen = False
+        if not hasattr(self, "_abandoned_conns"):
+            self._abandoned_conns: list[sqlite3.Connection] = []
+        # Referenced, never closed here: closing an inherited handle in the
+        # child can disturb the parent's file locks.
+        self._abandoned_conns.append(self._conn_)
+        self._conn_ = sqlite3.connect(
+            str(self.path), check_same_thread=False, isolation_level=None
+        )
+        self._conn_.execute("PRAGMA journal_mode=WAL")
+        self._conn_.execute("PRAGMA synchronous=NORMAL")
+        self._head, self._next_seq = self._resume()
+        callback = self.after_reopen
+        if callback is not None:
+            try:
+                callback()
+            except Exception:  # noqa: BLE001
+                log.exception("ledger: after-fork callback failed")
+
     @property
     def next_seq(self) -> int:
         with self._lock:
@@ -273,6 +342,13 @@ class Ledger:
     # --------------------------------------------------------------- append
 
     def append(self, event: AgentEvent) -> LedgerEntry | None:
+        return self._append(event, None)
+
+    def _append(
+        self,
+        event: AgentEvent | None,
+        builder: Callable[[int], AgentEvent] | None,
+    ) -> LedgerEntry | None:
         """Assign a seq, link it into the chain, and commit it in one transaction.
 
         Returns the persisted entry. Returns ``None`` only in the non-strict
@@ -282,6 +358,23 @@ class Ledger:
         there is no honest entry to return when nothing was persisted).
         """
         with self._lock:
+            def _for_log() -> AgentEvent:
+                if event is not None:
+                    return event
+                assert builder is not None
+                try:
+                    return builder(self._next_seq - 1)
+                except Exception:  # noqa: BLE001 - a failure to log must not raise
+                    # The builder is what failed; do not run it again inside the
+                    # handler. A minimal stand-in carries the failure record.
+                    return AgentEvent(
+                        schema_version=EVENT_SCHEMA_VERSION, event_id=new_event_id(),
+                        device_id=self.device_id, session_id="", seq=0, kind="unknown",
+                        ts_device=now_ts_device(), ts_monotonic_ns=now_monotonic_ns(),
+                        tool_use_id=None, tool_name=None, payload={}, payload_hash="",
+                        model=None, provider="byoai-recorder", trace_id="", span_id="",
+                    )
+
             if self._closed:
                 # A closed ledger is a write failure like any other — route
                 # it through _on_write_failure so strict_mode governs it
@@ -294,18 +387,43 @@ class Ledger:
                 # already logs loudly, which is the only durable record a
                 # closed ledger can still produce.
                 self._on_write_failure(
-                    event, RuntimeError(f"ledger {self.path} is closed"), queue=False
+                    _for_log(),
+                    RuntimeError(f"ledger {self.path} is closed"), queue=False,
                 )
                 return None
             if self._pending_failures:
                 self._drain_failures()
             try:
-                return self._append_locked(event)
+                return self._append_locked(event, builder)
             except Exception as exc:  # noqa: BLE001 - policy decision below
-                self._on_write_failure(event, exc)
+                self._on_write_failure(_for_log(), exc)
                 return None
 
-    def _append_locked(self, event: AgentEvent) -> LedgerEntry:
+    def append_stamped(
+        self, build: Callable[[int], AgentEvent]
+    ) -> LedgerEntry | None:
+        """Append the event ``build(last_seq)`` returns. ``last_seq`` is the
+        seq just before the one this entry is written at (0 when empty). It is
+        computed inside the write, after any queued ``record_failure`` marker
+        has been written and after a stale-head resync, so it is exactly
+        ``seq - 1`` of the stored entry. Same failure policy as :meth:`append`."""
+        return self._append(None, build)
+
+    def last_entry_of_kind(self, kind: Any) -> LedgerEntry | None:
+        """The newest entry whose ``kind`` matches, or ``None``."""
+        with self._lock:
+            self._require_open()
+            row = self._conn.execute(
+                "SELECT * FROM agent_events WHERE kind = ? ORDER BY seq DESC LIMIT 1",
+                (_kind_value(kind),),
+            ).fetchone()
+        return _row_to_entry(row) if row is not None else None
+
+    def _append_locked(
+        self,
+        event: AgentEvent | None,
+        builder: Callable[[int], AgentEvent] | None = None,
+    ) -> LedgerEntry:
         # Up to two attempts: the in-memory (_head, _next_seq) pair can go
         # stale if something else advanced the on-disk chain out from under
         # this Ledger object without going through it — e.g. `coriqo-verify`'s
@@ -318,17 +436,29 @@ class Ledger:
         # non-strict mode), resync from disk once and retry with the correct
         # seq/prev_hash before giving up.
         for attempt in range(2):
-            seq = self._next_seq
-            prev_hash = self._head
-            # The event carries the seq that is actually written, so the
-            # digest commits to its position too — a row cannot be reordered
-            # or replayed at a different seq without breaking its own digest.
-            stamped = _with_seq(event, seq)
-            digest = event_digest(stamped)
-            entry_hash = compute_entry_hash(prev_hash, seq, digest)
-
             self._conn.execute("BEGIN IMMEDIATE")
             try:
+                # Read the head again inside the write lock: another process
+                # writing the same file may have appended since this object
+                # last looked, and a retry outside the lock can lose that race.
+                row = self._conn.execute(
+                    "SELECT seq, entry_hash FROM agent_events ORDER BY seq DESC LIMIT 1"
+                ).fetchone()
+                if row is None:
+                    self._head, self._next_seq = GENESIS_PREV_HASH, 1
+                elif row[0] + 1 != self._next_seq or row[1] != self._head:
+                    self._head, self._next_seq = row[1], row[0] + 1
+                seq = self._next_seq
+                prev_hash = self._head
+                # The event carries the seq that is actually written, so the
+                # digest commits to its position too — a row cannot be reordered
+                # or replayed at a different seq without breaking its own digest.
+                if builder is not None:
+                    event = builder(seq - 1)
+                assert event is not None
+                stamped = _with_seq(event, seq)
+                digest = event_digest(stamped)
+                entry_hash = compute_entry_hash(prev_hash, seq, digest)
                 self._conn.execute(
                     "INSERT INTO agent_events (seq, event_id, schema_version, device_id, "
                     "session_id, kind, ts_device, ts_monotonic_ns, tool_use_id, tool_name, "
@@ -372,16 +502,16 @@ class Ledger:
                     self._head, self._next_seq = self._resume()
                     continue
                 raise
-            except Exception:
-                try:
-                    self._conn.execute("ROLLBACK")
-                except sqlite3.Error:
-                    pass
+            except BaseException:
+                # Including KeyboardInterrupt: a transaction left open would make
+                # every later append fail ("cannot start a transaction within a
+                # transaction") and lock other processes out of the file.
+                self._rollback_quietly()
                 raise
             else:
                 try:
                     self._conn.execute("COMMIT")
-                except sqlite3.Error:
+                except BaseException:
                     # A failed COMMIT (e.g. a transient disk I/O error) must
                     # not leave the connection wedged inside an open
                     # transaction — the next append()'s BEGIN IMMEDIATE
@@ -391,10 +521,7 @@ class Ledger:
                     # this append itself still surfaces the failure to the
                     # caller (via the existing except Exception / strict
                     # mode handling one level up).
-                    try:
-                        self._conn.execute("ROLLBACK")
-                    except sqlite3.Error:
-                        pass
+                    self._rollback_quietly()
                     raise
                 # Only advance in-memory chain state after the row is
                 # durable, so a failed write cannot leave the head pointing
@@ -409,6 +536,13 @@ class Ledger:
                     event=stamped,
                 )
         raise AssertionError("unreachable: loop always returns or raises")
+
+    def _rollback_quietly(self) -> None:
+        try:
+            if self._conn.in_transaction:
+                self._conn.execute("ROLLBACK")
+        except sqlite3.Error:
+            pass
 
     def _on_write_failure(self, event: AgentEvent, exc: Exception, *, queue: bool = True) -> None:
         log.error(
@@ -672,11 +806,8 @@ class Ledger:
                     ),
                 )
                 self._conn.execute("COMMIT")
-            except Exception:
-                try:
-                    self._conn.execute("ROLLBACK")
-                except sqlite3.Error:
-                    pass
+            except BaseException:
+                self._rollback_quietly()
                 raise
 
     def latest_checkpoint(self) -> dict | None:
