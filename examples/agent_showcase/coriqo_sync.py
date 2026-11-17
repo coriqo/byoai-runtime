@@ -118,7 +118,7 @@ def _resolve_existing(
         item.get("external_id"): item.get("agent_id") for item in client.list_agents()
     }
     resolved = {
-        key: by_external_id[f"{_EXTERNAL_ID_PREFIX}{key}"]
+        key: str(by_external_id[f"{_EXTERNAL_ID_PREFIX}{key}"])
         for key in registrations
         if by_external_id.get(f"{_EXTERNAL_ID_PREFIX}{key}")
     }

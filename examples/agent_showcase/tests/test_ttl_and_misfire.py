@@ -8,11 +8,11 @@ check which *mode* that fallback got reached through.
 from __future__ import annotations
 
 import pytest
+from examples.agent_showcase import runner as runner_module
+from examples.agent_showcase.app import app
 from fastapi.testclient import TestClient
 
 from byoai.recorder import integration as recorder_integration
-from examples.agent_showcase import runner as runner_module
-from examples.agent_showcase.app import app
 
 
 @pytest.fixture
@@ -80,7 +80,7 @@ def test_inject_misfire_forces_fallback_without_attempting_live_call(demo_client
 
 def test_live_call_ttl_cooldown_helper():
     agent_runner = runner_module.AgentRunner.__new__(runner_module.AgentRunner)
-    agent_runner.agent = type("A", (), {"id": "some-agent"})()
+    agent_runner.agent = type("A", (), {"id": "some-agent"})()  # pyright: ignore[reportAttributeAccessIssue]  # stand-in agent: only .id is read
 
     assert agent_runner._live_call_on_cooldown() is False
 

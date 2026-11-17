@@ -905,8 +905,8 @@ class MandateGate:
         min_refresh_interval_s: float = MIN_REFRESH_INTERVAL_S,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] | None = None,
-        on_suspend_observed: Callable[["MandateSnapshot"], None] | None = None,
-        report_approval_request: Callable[["RequireApproval"], None] | None = None,
+        on_suspend_observed: Callable[[MandateSnapshot], None] | None = None,
+        report_approval_request: Callable[[RequireApproval], None] | None = None,
         report_capability_snapshot: Callable[[dict[str, Any]], None] | None = None,
         environment: str | None = None,
         on_suspend: SuspendHook | Iterable[SuspendHook] | None = None,
@@ -955,7 +955,7 @@ class MandateGate:
         # purely local bookkeeping: it prevents re-attesting on every run
         # start within one process, not across processes or restarts.
         self._last_capability_digest: str | None = None
-        self._reported_approval_requests: "OrderedDict[str, None]" = OrderedDict()
+        self._reported_approval_requests: OrderedDict[str, None] = OrderedDict()
         # AD-11: enforced budgets — local bookkeeping only, no I/O. A sliding
         # window of call timestamps for the rate ceiling; per-trajectory step
         # counts and accumulated cost for the other two. All under self._lock,
@@ -964,8 +964,8 @@ class MandateGate:
         # DA-2: (clock reading, amount_usd) of ALLOWED calls that carried an
         # asset amount, for the rolling-24h payment limit. Same lock.
         self._asset_spend: deque[tuple[float, float]] = deque()
-        self._trajectory_steps: "OrderedDict[str, set[int]]" = OrderedDict()
-        self._trajectory_costs: "OrderedDict[str, float]" = OrderedDict()
+        self._trajectory_steps: OrderedDict[str, set[int]] = OrderedDict()
+        self._trajectory_costs: OrderedDict[str, float] = OrderedDict()
         self._agent_id = agent_id
         # TI-20: where this runtime runs. None (the default, and an unset
         # BYOAI_MANDATE_ENVIRONMENT) means the snapshot's environment is not
@@ -1383,7 +1383,7 @@ class MandateGate:
             **common,
         )
 
-    def report_approval_request(self, verdict: "RequireApproval") -> None:
+    def report_approval_request(self, verdict: RequireApproval) -> None:
         """AD-10: tell Coriqo about a pending approval-required call.
 
         Call this once, explicitly, after `decide()` returns a
@@ -1516,8 +1516,8 @@ class MandateGate:
         return True
 
     def _check_budgets(
-        self, action: ProposedAction, snapshot: "MandateSnapshot", age: float, now: float,
-    ) -> "Verdict | None":
+        self, action: ProposedAction, snapshot: MandateSnapshot, age: float, now: float,
+    ) -> Verdict | None:
         """AD-11: call-rate, step, and cost ceilings — `None` if none apply,
         a terminal `Deny` if one is breached. Called from `decide()` ONLY at
         the points where the call is otherwise about to be permitted (the
@@ -1887,7 +1887,7 @@ def mandate_gate(
 
         client = AsyncCoriqoAgentsClient(identity)
 
-    def _on_suspend_observed(snapshot: "MandateSnapshot") -> None:
+    def _on_suspend_observed(snapshot: MandateSnapshot) -> None:
         # Best-effort: schedule and forget. If there's no running
         # loop (apply_snapshot called outside the async refresh path — e.g.
         # a test seeding a snapshot directly) there is nothing to schedule
@@ -1912,7 +1912,7 @@ def mandate_gate(
 
         loop.create_task(_ack())
 
-    def _report_approval_request(verdict: "RequireApproval") -> None:
+    def _report_approval_request(verdict: RequireApproval) -> None:
         # Same best-effort/schedule-and-forget shape as the suspend ack above.
         try:
             loop = asyncio.get_running_loop()

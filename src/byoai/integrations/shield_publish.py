@@ -48,17 +48,18 @@ import json
 import random
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 
 import httpx
 
+from byoai.integrations.shield_sync import aggregate_daily, build_event, sync_level
 from byoai.recorder.canonical import canonicalize
 from byoai.recorder.enroll import EnrollmentError, enroll, load_enrollment_state
 from byoai.recorder.keys import atomic_write_bytes
 from byoai.recorder.shipper import ShipError, post_signed_batch
-from byoai.integrations.shield_sync import aggregate_daily, build_event, sync_level
 
 if TYPE_CHECKING:  # pragma: no cover
     from byoai.integrations.shield import SealChain
@@ -116,8 +117,8 @@ def _public_key_hex(entry: dict) -> str | None:
     pem = entry.get("public_key_pem")
     if isinstance(pem, str) and pem.strip():
         try:
-            from cryptography.hazmat.primitives.serialization import load_pem_public_key
             from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+            from cryptography.hazmat.primitives.serialization import load_pem_public_key
             key = load_pem_public_key(pem.encode())
             if not isinstance(key, Ed25519PublicKey):
                 return None
@@ -202,7 +203,7 @@ class Publisher:
     wedged connection can never outlive one request).
     """
 
-    def __init__(self, seals: "SealChain", key_dir: Path, state_dir: Path, *,
+    def __init__(self, seals: SealChain, key_dir: Path, state_dir: Path, *,
                  every_hours: float = DEFAULT_EVERY_HOURS,
                  now: Callable[[], float] = time.time,
                  client_factory: Callable[[], httpx.Client] | None = None,
@@ -379,9 +380,15 @@ class Publisher:
         """Turn new feed items into outbox events. Returns whether anything
         changed."""
         s = self.state
+        events = self._events
+        if events is None:
+            return False  # not wired: the caller checks this too
+        # The caller sets both to lists before collecting; this says so to the type checker.
+        s.sync_outbox = s.sync_outbox or []
+        s.sync_seen = s.sync_seen or []
         since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(s.sync_since))
         try:
-            items = list(self._events())
+            items = list(events())
         except Exception:  # noqa: BLE001 - a feed being written to; try next tick
             return False
         self._seen_cap = max(SYNC_SEEN_CAP, 4 * len(items))
@@ -446,11 +453,12 @@ class Publisher:
         # Resend exactly what is in flight; otherwise freeze the next batch
         # before sending it, so a lost reply can be retried byte for byte.
         flight = s.sync_inflight
+        outbox = s.sync_outbox or []
         if (flight and flight["level"] == level and [
-                e["event_id"] for e in s.sync_outbox[:len(flight["ids"])]] == flight["ids"]):
-            batch = s.sync_outbox[:len(flight["ids"])]
+                e["event_id"] for e in outbox[:len(flight["ids"])]] == flight["ids"]):
+            batch = outbox[:len(flight["ids"])]
         else:
-            batch = s.sync_outbox[:SYNC_BATCH]
+            batch = outbox[:SYNC_BATCH]
             s.sync_batch_seq += 1
             ids = [e["event_id"] for e in batch]
             flight = {"ids": ids, "gap": dict(s.sync_gap) if s.sync_gap else None,
@@ -484,7 +492,7 @@ class Publisher:
             self._sync_failed(now, ShipError(str(exc)))
             return True
         self._mark_seen(e["event_id"] for e in batch)
-        s.sync_outbox = s.sync_outbox[len(batch):]
+        s.sync_outbox = outbox[len(batch):]
         # A gap that widened while this batch was in flight is still owed.
         if s.sync_gap == flight["gap"]:
             s.sync_gap = None

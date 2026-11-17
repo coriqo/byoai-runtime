@@ -25,7 +25,8 @@ from byoai.ingest import (
     UnknownDeviceError,
 )
 from byoai.recorder.keys import derive_device_id
-from byoai.shield_server import auth, policy as policy_mod
+from byoai.shield_server import auth
+from byoai.shield_server import policy as policy_mod
 from byoai.shield_server.config import ShieldServerConfig
 from byoai.shield_server.store import PolicyRow, ServerStore, hash_token
 
@@ -102,7 +103,7 @@ def build_device_router(cfg: ShieldServerConfig, ingest: IngestStore, store: Ser
         public_key_b64 = row["public_key_b64"] if row is not None else None
         sig_ok = public_key_b64 is not None and auth.verify_against_key(
             public_key_b64, sr.body, sr.signature)
-        if not sig_ok:
+        if row is None or not sig_ok:
             raise HTTPException(status_code=401, detail="Device signature did not verify.")
         if row["revoked_at"] is not None:
             raise HTTPException(status_code=401, detail="This device has been revoked.")

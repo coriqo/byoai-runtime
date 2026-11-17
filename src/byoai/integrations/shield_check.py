@@ -16,16 +16,15 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import os
 import sys
 from pathlib import Path
 
 from byoai.integrations.shield import (
     DATA_DIR,
+    MAX_FILE_SCAN,
     RULES_VERSION,
     SealChain,
     ShieldConfig,
-    MAX_FILE_SCAN,
     _flags_from_row,
     inspect_file,
     mime_text_like,

@@ -132,9 +132,9 @@ src = ["src", "tests"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC"]
 # B008: `Depends(...)` in argument defaults is the standard FastAPI idiom.
-ignore = ["B008"]
-
-[tool.ruff.lint.per-file-ignores]
-# Copied byte-for-byte from coriqo-seal-verifier's reference reader; a test
-# fails if it drifts, so it is not reformatted here.
-"src/byoai/recorder/mandate_format.py" = ["E501"]
+# E501: line length is a formatting concern and this repo has no formatter; main
+# carried ~5,100 over-long lines (4,900 of them generated mock data in
+# examples/agent_showcase), and hand-wrapping them in trust-surface code
+# (recorder/, shield_server/) risks edits to signed-byte paths for no gain.
+# `line-length` still applies to `ruff format` if someone adopts it.
+ignore = ["B008", "E501"]

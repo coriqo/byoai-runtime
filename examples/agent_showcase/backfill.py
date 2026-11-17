@@ -125,7 +125,7 @@ def plan_runs(agents: list[AgentDef], *, days: int, seed: int, today: date | Non
                 "regenerate with tools/generate_cases.py or shorten --days"
             )
         drawn = rng.sample(agent.cases, len(times))
-        planned.extend(PlannedRun(at=at, agent=agent, case=case) for at, case in zip(times, drawn))
+        planned.extend(PlannedRun(at=at, agent=agent, case=case) for at, case in zip(times, drawn, strict=True))
     planned.sort(key=lambda run: (run.at, run.agent.id))
     return planned
 
@@ -210,7 +210,7 @@ async def _execute(planned: list[PlannedRun], *, publish: bool, clock: StepClock
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
     parser.add_argument("--days", type=int, default=90, help="calendar days of history ending yesterday")
     parser.add_argument("--domain", choices=["banking", "healthcare", "all"], default="banking")
     parser.add_argument("--seed", type=int, default=20260912, help="same seed, same schedule and cases")

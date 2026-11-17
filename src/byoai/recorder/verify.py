@@ -492,7 +492,9 @@ def verify_receipts(
     out["no_receipts_tracked"] = False
 
     try:
-        from coriqo_agents.receipts import verify_receipt as _verify_receipt
+        from coriqo_agents.receipts import (  # pyright: ignore[reportMissingImports]  # optional package, absent in CI
+            verify_receipt as _verify_receipt,
+        )
     except ImportError:
         _verify_receipt = None
     out["unpinned"] = public_key_pem is None
@@ -679,24 +681,27 @@ def verify_device_receipt(doc: Any, public_key: str) -> dict[str, Any]:
             name: {"ok": False, "detail": reason} for name in ("seal", "inclusion", "signature")
         }}
     payload, seal = receipt.get("payload"), receipt.get("seal")
-    merkle = receipt.get("merkle") if isinstance(receipt.get("merkle"), dict) else {}
-    checkpoint = merkle.get("checkpoint") if isinstance(merkle.get("checkpoint"), dict) else {}
+    merkle_raw = receipt.get("merkle")
+    merkle = merkle_raw if isinstance(merkle_raw, dict) else {}
+    checkpoint_raw = merkle.get("checkpoint")
+    checkpoint = checkpoint_raw if isinstance(checkpoint_raw, dict) else {}
 
     leaf: bytes | None = None
     seal_problem = None
     try:
-        leaf = checkpoint_leaf_hash(payload)
+        leaf = checkpoint_leaf_hash(payload)  # pyright: ignore[reportArgumentType]  # a non-dict payload raises TypeError, handled just below
     except (CanonicalizationError, TypeError, ValueError):
         seal_problem = "the payload could not be hashed"
     if seal_problem is None:
         if not isinstance(seal, str) or len(seal) != 16:
             seal_problem = "the seal is not 16 hex characters"
-        elif leaf.hex()[:16] != seal.lower():
+        elif leaf is None or leaf.hex()[:16] != seal.lower():
             seal_problem = "the payload does not match its seal: it was changed after sealing"
     inclusion_problem = _receipt_inclusion(leaf, merkle.get("proof"), checkpoint)
 
     signature_problem = None
     body = {k: v for k, v in checkpoint.items() if k != "sig"}
+    verified = False
     if not checkpoint.get("sig"):
         signature_problem = "the receipt has no signed checkpoint"
     else:
@@ -818,7 +823,7 @@ def _walk_chain(
         from byoai.recorder.keys import derive_device_id
 
         try:
-            active_id = derive_device_id(active_key)
+            active_id = derive_device_id(active_key)  # pyright: ignore[reportArgumentType]  # have_starting_key means active_key is set; a failure here is caught below
         except Exception:
             active_id = None
             notes.append(
@@ -937,7 +942,7 @@ def _walk_chain(
                         "an object, treated as empty"
                     )
                 if have_starting_key:
-                    rotation = _check_rotation_live(payload, active_key, active_id, dev)
+                    rotation = _check_rotation_live(payload, active_key, active_id, dev)  # pyright: ignore[reportArgumentType]  # have_starting_key means active_key is set
                     rotation["seq"] = seq
                     key_rotations.append(rotation)
                     new_id = rotation.get("new_device_id")
@@ -1230,7 +1235,7 @@ def _build_key_timeline(
         seq = r.get("seq")
         new_key = r.get("new_public_key")
         if r.get("cross_signature_verified") is True and isinstance(new_key, str):
-            timeline.append((int(seq), new_key))
+            timeline.append((int(seq), new_key))  # pyright: ignore[reportArgumentType]  # every rotation record carries the seq set when it was collected
         else:
             notes.append(
                 f"key rotation at seq {seq} ({r.get('old_device_id')} -> "

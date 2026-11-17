@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
-from collections import Counter, defaultdict
+from collections import defaultdict
 from pathlib import Path
 
 HERE = Path(__file__).parent

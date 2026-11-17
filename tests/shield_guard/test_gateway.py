@@ -10,7 +10,6 @@ from starlette.testclient import TestClient
 from byoai.agent_context_cache import main as acc_main
 
 
-
 class FakeRedis:
     def __init__(self):
         self.kv = {}

@@ -131,8 +131,9 @@ def test_concurrent_writes_never_collide_on_the_same_version(store, signer, cfg)
 
 
 def test_signature_verifies_and_rollback_is_structural(store, signer, cfg):
-    from byoai.recorder.canonical import canonicalize
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+    from byoai.recorder.canonical import canonicalize
 
     row = _write_default(store, signer, cfg.org)
     pub = Ed25519PublicKey.from_public_bytes(bytes.fromhex(signer.public_key_hex))

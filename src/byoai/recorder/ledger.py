@@ -42,7 +42,6 @@ from typing import Any
 from byoai.recorder.canonical import canonicalize, sha256_hex
 from byoai.recorder.schema import (
     EVENT_SCHEMA_VERSION,
-    EVENT_SCHEMA_VERSION_V1,
     AgentEvent,
     EventKind,
     event_digest,
