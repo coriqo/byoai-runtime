@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Signed heartbeat as a chain entry (C2).** The running recorder writes a
+  `heartbeat` event (`{last_seq, device_time, interval_s}`) every
+  `BYOAI_RECORDER_HEARTBEAT_SECONDS` (default 900), a normal chain entry covered
+  by the device-signed checkpoints, at most one per start. `0` writes one
+  `interval_s: 0` heartbeat saying they are off. While the thread runs, both
+  upload bodies carry `runtime: {version, capabilities: ["heartbeat_chain_v1"],
+  heartbeat_interval_s}` (self-asserted; the released routes and the
+  `rejected`/`seq_end` shape are unchanged). `coriqo-verify --max-heartbeat-silence
+  SECONDS [--heartbeat-gap A-B] [--allow-no-heartbeats]`, the new `coriqo-verify
+  bundle FILE.json`, and the matching `verify_ledger`/`verify_bundle` arguments
+  fail on spacing, tail, declared-off windows and no heartbeats (off by default);
+  clock inconsistencies are advisory notes unless `--strict-clock`. Windows are
+  accepted by name (`A-B`, `tail:N`, `off:N`). Contract: `docs/seal-format.md` §4.4 and §11.6.
+- **Fix: checkpoints stay verifiable under concurrent writers.** A checkpoint now
+  takes its `seq_end` and the chain hash it signs together from the ledger under
+  its lock, and a late `note()` cannot shrink the window. Before, two threads
+  noting out of order could produce a checkpoint that failed verification.
 - **Agent-signed token actions.** `AsyncCoriqoAgentsClient.request_token_action()`
   posts an agent's token action to Coriqo's
   `POST /api/v1/token-ops/actions/agent-signed`, signed with the device tuple

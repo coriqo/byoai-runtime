@@ -148,11 +148,12 @@ chain (level 1) and by the next checkpoint that covers it (level 2).
 
 From `schema.EventKind`: `tool_use`, `tool_result`, `message`, `api_error`,
 `record_failure`, `session_start`, `stream_aborted`, `parse_failure`,
-`key_rotated`, `mandate_verdict`, `guardrail_intervention`.
+`key_rotated`, `mandate_verdict`, `guardrail_intervention`,
+`worker_stop_ack`, `heartbeat`.
 
-The verifier gives meaning to three of them: `tool_use` and `tool_result`
-(pairing, 11.1 step 5) and `key_rotated` (section 7). The rest are hashed
-like any other event.
+The verifier gives meaning to four of them: `tool_use` and `tool_result`
+(pairing, 11.1 step 5), `key_rotated` (section 7) and `heartbeat` (4.4, an
+opt-in spacing check, 11.6). The rest are hashed like any other event.
 
 `record_failure` is written by `Ledger._drain_failures` after writes were
 dropped in non-strict mode. Its payload is
@@ -177,6 +178,119 @@ So `payload_hash == H(C(payload))` holds only in `full` mode, and the verifier
 does not check it in any mode. In `hash-only` and `redacted` mode,
 `payload_hash` commits to content the verifier never sees. Whoever holds the
 raw payload can later prove it matches.
+
+### 4.4 Heartbeat
+
+`heartbeat` is a liveness entry the recorder process writes on a timer
+(`recorder/heartbeat.py`). It is an ordinary chain entry: it takes the next
+`seq`, links to the previous entry by section 5, and is covered by the
+device-signed checkpoints (section 8) the same as a tool event. Nothing in the
+hash, link or signature rules changed for it.
+
+Payload:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `last_seq` | integer | The highest `seq` in the chain at the instant of the write; 0 on an empty chain. A heartbeat normally has `seq == last_seq + 1`. |
+| `device_time` | string | RFC 3339 UTC, microsecond precision. The device's own clock, the same trust as `ts_device`. |
+| `interval_s` | number | The interval the process was configured with. An integer when whole. `0` means heartbeats were off from this entry on. |
+| `boot_id` | string, optional | A per-boot identifier, on new entries only: the first 16 hex characters of `sha256(device_id \|\| raw)`, where `raw` is the Linux `boot_id` or the macOS `kern.boottime`, and the field is left out where the platform gives none cheaply. It is hashed so the shared, signed ledger does not carry the exact boot time or uptime; a verifier only compares two of them for equality within one record, to compare the monotonic counter only inside one boot. Entries without it (written before it existed) are unchanged and compared as before. |
+
+The envelope uses `session_id = "byoai-heartbeat"`, `provider =
+"byoai-recorder"`, `tool_use_id = null`, `tool_name = null`, `model = null`.
+The payload is stored in full in every payload mode (section 4.3), so
+`payload_hash == H(C(payload))` holds and can be checked.
+
+Ordering and cadence:
+
+- One is written when the process starts, unless the newest `heartbeat` in the
+  ledger is younger than `interval_s`. Then none is written and the next falls
+  due when that one reaches `interval_s`. Restarts seconds apart do not add
+  entries.
+- After that, one per `interval_s` (default 900, `BYOAI_RECORDER_HEARTBEAT_SECONDS`).
+  A process that stalls or sleeps writes one when it wakes, not one per missed
+  interval.
+- None is written while the process is not running. That absence is what the
+  check in 11.6 looks for.
+- With `BYOAI_RECORDER_HEARTBEAT_SECONDS=0` the recorder writes one heartbeat at
+  start with `interval_s: 0`, once, and none after. That entry says "heartbeats
+  off from here" in the chain itself, so a record with the feature turned off
+  cannot be mistaken for one that lost its heartbeats.
+- `last_seq` is read inside the write, after any queued `record_failure` marker
+  and any stale-head resync, so it is always the stored entry's `seq - 1`.
+- A heartbeat is covered by the next checkpoint (section 8). On an idle process
+  that is about one checkpoint per two heartbeats, and a clean shutdown flushes
+  the rest. A heartbeat written just before a crash can sit in the unsigned tail
+  (11.2) until the next run.
+
+What a verifier may conclude. A `heartbeat` at `seq` n shows that, at the
+`device_time` the device claims, the recorder process wrote an entry and the
+chain had been written up to `last_seq`. Because it sits in the chain it cannot
+be inserted, removed or reordered afterwards without breaking a link, and once a
+checkpoint covers it the device key vouches for it.
+
+What it does not show.
+
+- It is not proof of liveness, and it says nothing about actions taken outside
+  the recorder: a host can run an agent that bypasses the recorder while the
+  recorder heartbeats.
+- A gap means the record does not show the recorder writing in that window. It
+  does not say why (stopped, blocked, crashed) and does not say the host was idle.
+- Every time in it is the device's clock. A host that controls its own clock can
+  make spacing look right. 11.6 adds advisory cross-checks (the monotonic
+  counter each entry carries, the signed checkpoints, the tenant epoch time), but
+  only an external time anchor (a verified RFC 3161 or Rekor anchor, or the time
+  Coriqo received the entry) bounds device time from outside.
+
+The older "resend heartbeat" of `shield_publish.py` is separate. It resends the
+last accepted seal as a transport keep-alive and adds no chain entry. It is
+unchanged.
+
+Capability signal. While the heartbeat thread is running, both upload bodies
+(13.1) carry a top-level
+`"runtime": {"version": ..., "capabilities": ["heartbeat_chain_v1"], "heartbeat_interval_s": N}`.
+It is left out when heartbeats are off or the thread did not start, and by older
+runtimes. It is self-asserted: the body signature proves the device sent it, not
+that it is true. A server should treat it as sticky per device once seen (so a
+runtime cannot hide by dropping it) and judge the heartbeat entries themselves.
+Servers read the body by key, so the released contract is unchanged: the same
+two routes, the same signature over `C(body)`, and a `rejected` entry still
+carries a parseable `seq_end`.
+
+Forked workers. The thread does not survive `fork()`. The recorder holds the
+ledger lock across the fork (waiting at most 1 s, then forking without it and
+logging one warning), so no thread is inside SQLite when the child is cloned. The
+child opens its own SQLite connection and restarts the thread on its first use of
+the ledger, not at fork time, so a child that only execs (`subprocess` with
+`preexec_fn`) opens nothing and starts nothing. A connection must not be shared
+across fork. Each
+forked worker writes its own heartbeats into the shared ledger: N workers write N
+times the entries, and under `gunicorn --preload` the master heartbeats too, so
+N + 1 writers. The shipper thread is not restarted.
+
+Several writers on one file. Each append reads the real head inside the write
+lock, and a checkpoint signs the real head and the time read together under that
+lock. Before a process adopts rows another writer added, it re-derives each one
+(`entry_hash` from the stored fields, `prev_hash` linking to the row before,
+contiguous `seq`). It resyncs forward only. If the file's head is behind what the
+process already wrote, or the row at its last known seq no longer has the hash it
+remembers (the file was truncated, replaced or rewritten), it does not adopt the
+head: it logs an error naming the file and both heads, queues a `record_failure`
+(`ledger_head_changed`), refuses to append, and signs no checkpoint. If new rows
+do not re-derive, it logs an error and queues a `record_failure`
+(`ledger_rows_unverified`), refuses to append onto them, and a checkpoint stops at
+the process's own last verified head. The marker is written when the chain can be
+continued again.
+
+Trust. Every process that writes one ledger file is trusted. Entry hashes are
+unkeyed, so a writer with file access can forge rows that are consistent with each
+other. A checkpoint signature vouches for the file's content at that moment, not
+for who wrote each row. A keyed per-row MAC is a possible future hardening and is
+not part of this format.
+
+Volume. At the default 900 s: 96 heartbeats a day, 35,040 a year per device,
+and (measured over a simulated idle day in `tests/recorder/test_heartbeat.py`)
+about 48 checkpoints a day, roughly 17,500 a year.
 
 ## 5. Chain
 
@@ -851,10 +965,85 @@ receipt store was passed, its own verdict must also be true.
 `malformed_bundle` (covers malformed entries, checkpoints, epochs, and the
 bundle itself), `device_key_mismatch`, `tenant_key_mismatches`, and — when
 `pinned_device_public_key_b64` was supplied — the "zero checkpoints" and
-`unsigned_tail` findings from 11.2 to that list.
+`unsigned_tail` findings from 11.2 to that list. When a heartbeat silence
+policy was supplied (11.6), `heartbeat_silences` is added to both.
 
 `coriqo-verify` exits 0 when `ok`, 1 when not, and 2 when the ledger or a
 key file cannot be read. `--json` prints the full report.
+
+### 11.6 Heartbeat checks (opt-in)
+
+Off by default, so a ledger or bundle written before heartbeats verifies as
+before. A caller turns them on with a policy value: `--max-heartbeat-silence
+SECONDS` on `coriqo-verify`, or `max_heartbeat_silence_seconds` on `verify_ledger`
+and `verify_bundle`. A value that is not a finite number above 0 (`nan`, `inf`,
+0, negative) is refused: `VerifyError`, exit 2. It is never read as "off".
+
+Which command checks which format: `coriqo-verify LEDGER.db [flags]` checks a
+ledger (`verify_ledger`). `coriqo-verify bundle FILE.json [flags]` checks an
+export bundle (`verify_bundle`) and takes the same heartbeat flags.
+
+With the check on, each of these fails `ok`:
+
+1. Spacing. Two consecutive heartbeats further apart than the policy
+   (`heartbeat_silences`, `kind: "spacing"`, each `{from_seq, to_seq, seconds}`).
+2. Tail. The last heartbeat to the newest time in the record (the latest
+   checkpoint `ts_device` or entry `ts_device`) is longer than the policy
+   (`kind: "tail"`, named `tail:SEQ`). Silence after
+   the last entry of the record, up to now, is not judged: the offline verifier
+   has no reference time.
+3. Heartbeats off. A heartbeat with `interval_s: 0` starts a window the recorder
+   declared uncovered, until the next heartbeat or the end of the record
+   (`kind: "disabled"`, named `off:SEQ`).
+4. No heartbeats. A record that spans longer than the policy and contains none
+   (`no_heartbeats`). `--allow-no-heartbeats` / `allow_no_heartbeats=True`
+   accepts it, for a record from before heartbeats existed.
+5. An invalid `interval_s` (not a number >= 0), or a heartbeat with no parseable
+   time (`malformed_bundle`).
+6. With the check on, a bundle with no entries or no checkpoints. Stripping
+   checkpoints must not turn a failing record into a pass.
+
+Clock notes are advisory. These are reported as labelled "clock notes" in the
+output and in `clock_findings` (JSON), and do not change `ok`:
+
+- device time going backwards between heartbeats;
+- device time advancing less than the monotonic counter (`ts_monotonic_ns`)
+  between two heartbeats of the same boot (a clock set back, for example across
+  an outage). A host that slept shows the opposite and is not noted;
+- a heartbeat dated before the signed checkpoint that precedes it (by checkpoint
+  row order), or after the one that covers it;
+- in a bundle, a heartbeat dated after the `epoch_end` of any tenant epoch whose
+  checkpoint covers it.
+
+They are advisory because honest records trip them: an NTP step, a VM resume, a
+ledger moved to another host, several writer processes on one ledger. Use
+`--strict-clock` (`strict_clock=True`) to make them fail, in a single-host,
+single-process deployment under review. In strict mode a note you reviewed is
+accepted by its heartbeat seq: `--accept-clock-note SEQ` (repeatable;
+`clock_notes_accepted=[...]`). A clock note can always be accepted.
+
+Sleep. A laptop that sleeps or a VM that is suspended produces a spacing gap: the
+process was alive but not running, so it wrote nothing. The check reports it as
+any other gap. If you know that is the cause, accept it by name (below).
+
+A policy value below the smallest `interval_s` the device declared is noted
+("the policy is stricter than the interval the device declared"); it is not a
+failure, but a healthy recorder can fail such a policy.
+
+The caller accepts a window they have reviewed, such as a planned shutdown or a
+sleep, by the name shown in the finding. A gap between two heartbeats is
+`FROM-TO` (`--heartbeat-gap 12-13`, or `(12, 13)` in the API). The tail after the
+last heartbeat is `tail:SEQ`, SEQ being that heartbeat. A window the recorder
+declared off is `off:SEQ`, SEQ being the marker, so the acceptance does not change
+as the record grows. An accepted window is listed in `notes`. A name covers only
+that window.
+
+Limits. This check bounds what the device claims. A host that controls its own
+clock, and the monotonic counter source, can defeat it. Only an external time
+anchor bounds it from outside: a verified RFC 3161 or Rekor anchor (11.4), or the
+time Coriqo received the entry. Read the result together with pinned keys and the
+signed checkpoints that cover the heartbeats (11.2). A pass means nothing in the
+record contradicts the spacing policy. It is not proof the recorder was running.
 
 A green result without keys means "internally consistent". Read `notes` to
 see what was not checked.
