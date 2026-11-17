@@ -164,7 +164,7 @@ class ServerStore:
         with self._lock:
             self._conn.close()
 
-    def __enter__(self) -> "ServerStore":
+    def __enter__(self) -> ServerStore:
         return self
 
     def __exit__(self, *exc: object) -> None:
@@ -332,6 +332,7 @@ class ServerStore:
         except sqlite3.IntegrityError as exc:
             raise UnknownVersionRace(str(exc)) from exc
         row_id = cur.lastrowid
+        assert row_id is not None  # an INSERT always sets it
         return PolicyRow(id=row_id, device_id=device_id, version=version, document=document,
                          signature=signature, created_at=_now(), created_by=created_by)
 

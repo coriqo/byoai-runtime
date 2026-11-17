@@ -11,9 +11,10 @@ refusal state.
 
 from __future__ import annotations
 
-from byoai.integrations.shield import SealChain, ShieldConfig, apply_policy_update, default_policy
-from byoai.integrations.shield_publish import Publisher
 from tests.shield_server.conftest import SyncASGIClient, admin_call
+
+from byoai.integrations.shield import SealChain, ShieldConfig
+from byoai.integrations.shield_publish import Publisher
 
 
 def _publisher(tmp_path, app, name: str) -> Publisher:
@@ -70,7 +71,6 @@ def test_full_lifecycle_against_the_real_publisher(app, cfg, store, ingest, tmp_
     # own contract (apply_policy_update raising is what the proxy surfaces as
     # a 409 "Set by <managed_by>" — checked here at the function level since
     # this server owns no local proxy of its own).
-    local_policy = default_policy()
     from byoai.integrations import shield as shield_mod
     effective = shield_mod.load_policy(ShieldConfig(
         ledger=tmp_path / "mac1" / "ledger.jsonl", seal_path=tmp_path / "mac1" / "seal.json",

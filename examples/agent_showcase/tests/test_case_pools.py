@@ -156,7 +156,7 @@ def test_a_ninety_day_plan_never_repeats_a_case(seed):
     plan = backfill.plan_runs(banking, days=90, seed=seed, today=date(2026, 9, 12))
     drawn = [(r.agent.id, r.case.id) for r in plan if r.case is not None]
     assert len(drawn) == len(set(drawn))
-    for agent_id, (low, high) in backfill.RUNS_PER_DAY.items():
+    for agent_id in backfill.RUNS_PER_DAY:
         runs = sum(1 for r in plan if r.agent.id == agent_id)
         assert runs <= backfill.max_runs(agent_id, 90)
 

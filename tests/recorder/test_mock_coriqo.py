@@ -8,6 +8,7 @@ socket), independent of the end-to-end shipper/enroll flow covered in
 from __future__ import annotations
 
 import gzip
+from collections.abc import Iterator
 
 import httpx
 import pytest
@@ -25,7 +26,7 @@ def mock() -> MockCoriqo:
 
 
 @pytest.fixture
-def client(mock: MockCoriqo) -> httpx.Client:
+def client(mock: MockCoriqo) -> Iterator[httpx.Client]:
     with asgi_client(mock) as c:
         yield c
 

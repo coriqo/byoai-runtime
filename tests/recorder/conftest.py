@@ -74,7 +74,7 @@ def asgi_client(mock: MockCoriqo, *, base_url: str = "http://mock-coriqo.test") 
     startup/shutdown — MockCoriqo has none today, but callers should still
     use it via ``with`` so that stays true if it ever grows any.
     """
-    return TestClient(mock.app, base_url=base_url)
+    return TestClient(mock.app, base_url=base_url)  # pyright: ignore[reportReturnType]  # newer Starlette's TestClient no longer subclasses httpx.Client but is used as one
 
 
 @pytest.fixture(autouse=True)

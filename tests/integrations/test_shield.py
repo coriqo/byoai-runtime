@@ -2,12 +2,35 @@
 from __future__ import annotations
 
 import json
+import os
+import time as _time
 from pathlib import Path
 
+import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
 from byoai.integrations.shield import (
-    ShieldConfig, Feed, flags_for, redact, default_policy, load_policy,
-    SealChain, MAX_INTERACTIONS, save_policy, merge_policy,
+    Feed,
+    SealChain,
+    ShieldConfig,
+    apply_managed_envelope,
+    apply_policy_update,
+    clean_browser_row,
+    default_policy,
+    fingerprint,
+    flags_for,
+    inspect_text,
+    load_managed_policy,
+    load_policy,
+    merge_policy,
+    privacy_report,
+    redact,
+    redact_json_body,
+    request_problem,
+    save_policy,
+    scrub_ledger,
 )
+from byoai.recorder.canonical import canonicalize
 
 
 def make_cfg(tmp_path):
@@ -70,7 +93,7 @@ def test_seal_chain_roundtrip_and_tamper(tmp_path):
 
 def test_feed_pagination_counts(tmp_path):
     cfg = make_cfg(tmp_path)
-    rows = [{"wall_clock": "2026-09-24 10:0%d:00" % i,
+    rows = [{"wall_clock": f"2026-09-24 10:0{i}:00",
              "kind": "desktop.chat.request", "target": "claude.ai",
              "prompt": f"checkpoint smoke {i} fill"} for i in range(6)]
     cfg.ledger.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
@@ -91,15 +114,8 @@ def test_policy_roundtrip(tmp_path):
 
 # ------------------------------------------------------------- privacy-first
 
-import os
-import time as _time
 
-import pytest
 
-from byoai.integrations.shield import (
-    apply_policy_update, fingerprint, inspect_text, privacy_report,
-    redact_json_body, scrub_ledger,
-)
 
 SECRET = "email j.rivers@gmail.com about card 4242424242424242"
 
@@ -385,6 +401,7 @@ def test_chatgpt_and_openai_bodies_are_redacted():
 def _serve(cfg):
     import socket
     import threading
+
     from byoai.integrations.shield import serve
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
@@ -452,7 +469,6 @@ def test_server_says_how_to_build_when_the_app_is_missing(tmp_path, monkeypatch)
 
 # ------------------------------------------- other sites can't drive Shield
 
-from byoai.integrations.shield import clean_browser_row, request_problem
 
 
 def _post(url, body, headers):
@@ -702,6 +718,7 @@ def test_restarting_does_not_seal_the_ledger_again(tmp_path):
 
 def test_shield_files_are_written_private_and_atomically(tmp_path):
     import os
+
     from byoai.integrations.shield import atomic_write_private
     target = tmp_path / "state.json"
     atomic_write_private(target, "one")
@@ -724,8 +741,7 @@ def test_a_browser_row_is_sealed_before_the_request_returns(tmp_path):
 
 
 def test_linux_unit_and_windows_task_are_low_priority_and_run_as_the_user(tmp_path):
-    from byoai.integrations.shield_login import (
-        build_unit, windows_command, windows_create_args)
+    from byoai.integrations.shield_login import build_unit, windows_command, windows_create_args
     ledger = tmp_path / "my ledger" / "captures.jsonl"       # a space in the path
     unit = build_unit(ledger, 17831, python="/usr/bin/python3", log_dir=tmp_path)
     assert f'ExecStart="/usr/bin/python3" "-m" "byoai.integrations.shield" "{ledger}" "--port" "17831"' in unit
@@ -767,7 +783,8 @@ def test_rows_lost_to_a_broken_log_line_are_sealed_again_from_the_ledger(tmp_pat
 
 @pytest.mark.parametrize("value", ["", "abc", "70000", "-1", " "])
 def test_a_bad_port_setting_does_not_crash_the_import(value):
-    import subprocess, sys
+    import subprocess
+    import sys
     out = subprocess.run(
         [sys.executable, "-c",
          "import byoai.integrations.shield as s; print(s.DEFAULT_PORT)"],
@@ -886,7 +903,8 @@ def test_a_mismatch_in_an_old_file_is_still_reported_as_tampering(tmp_path):
 
 
 def test_the_store_package_omits_the_dev_key_and_ships_what_the_manifest_names(tmp_path):
-    import importlib.util, zipfile
+    import importlib.util
+    import zipfile
     spec = importlib.util.spec_from_file_location(
         "package_extension", Path(__file__).resolve().parents[2] / "scripts" / "package_extension.py")
     mod = importlib.util.module_from_spec(spec)
@@ -907,7 +925,8 @@ def test_the_store_package_omits_the_dev_key_and_ships_what_the_manifest_names(t
 
 
 def test_the_minified_store_package_keeps_every_file_and_shared_names(tmp_path):
-    import importlib.util, zipfile
+    import importlib.util
+    import zipfile
     spec = importlib.util.spec_from_file_location(
         "package_extension", Path(__file__).resolve().parents[2] / "scripts" / "package_extension.py")
     mod = importlib.util.module_from_spec(spec)
@@ -928,7 +947,8 @@ def test_the_minified_store_package_keeps_every_file_and_shared_names(tmp_path):
 
 
 def _run_launcher(block):
-    import subprocess, sys
+    import subprocess
+    import sys
     code = (f"import sys; sys.modules[{block!r}] = None; "
             "from byoai.integrations.shield_launcher import main; main()")
     return subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
@@ -947,7 +967,8 @@ def test_the_shield_command_does_not_hide_other_import_errors():
 
 
 def test_importing_shield_without_the_signing_library_is_a_plain_import_error():
-    import subprocess, sys
+    import subprocess
+    import sys
     out = subprocess.run(
         [sys.executable, "-c",
          "import sys; sys.modules['cryptography'] = None\n"
@@ -986,10 +1007,7 @@ def test_the_extension_declares_icons_that_exist_at_the_stated_sizes():
 # publisher's polling, key-pinning and HTTP-level (locked key, managed field)
 # behaviour is covered in test_shield_publish.py and further down here.
 
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from byoai.integrations.shield import apply_managed_envelope, load_managed_policy
-from byoai.recorder.canonical import canonicalize
 
 # Coriqo signs with its own server key, not a device key: lowercase hex of the
 # raw 32-byte public key and the raw 64-byte signature, no "ed25519:" prefix —
@@ -1302,7 +1320,6 @@ def test_the_extension_sites_file_is_generated_from_sites_json():
     hosts = {h for s in sites for h in s["hosts"]}
     for entry in manifest["content_scripts"]:
         assert {m.split("//")[1].split("/")[0] for m in entry["matches"]} == hosts
-        js = entry["js"]
         # The shared engine reads the rules and the site list, and both scripts read the engine.
     isolated = next(e for e in manifest["content_scripts"] if "world" not in e)
     page = next(e for e in manifest["content_scripts"] if e.get("world") == "MAIN")
@@ -1452,6 +1469,7 @@ def _independent_checkpoint_check(cp: dict) -> bool:
     the runtime's helpers: the same rule Coriqo's device-receipt ingest applies."""
     import base64
     import hashlib
+
     from cryptography.exceptions import InvalidSignature
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 

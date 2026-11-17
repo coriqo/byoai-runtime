@@ -5,7 +5,12 @@ import pytest
 
 from byoai.integrations import shield
 from byoai.integrations.shield_sync import (
-    EVENT_FIELDS, aggregate_daily, build_event, level_words, sync_level)
+    EVENT_FIELDS,
+    aggregate_daily,
+    build_event,
+    level_words,
+    sync_level,
+)
 
 SECRET = "4111 1111 1111 1111"
 DEV = "dev_abc123"

@@ -26,28 +26,30 @@ dev proxy, so one build works in dev and standalone.
 
 from __future__ import annotations
 
-import asyncio
+import contextlib as _contextlib
 import hashlib
 import json
-import re
-import threading
-import time
-import uuid
-from collections import deque
-from dataclasses import dataclass, field
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
-
-from byoai.recorder.keys import atomic_write_bytes, load_or_create_device_key
-from byoai.recorder.merkle import MerkleTree, checkpoint_leaf_hash
-from byoai.integrations.shield_sync import SYNC_LEVELS, level_words, sync_level
 
 # Shield's own port. Not 8300 (Consul), 8800 (the MCP demo gateway), 8080
 # (the proxy) or any other number a dev stack likes; the browser extension
 # ships the same default (browser_extension/background.js). Override with
 # BYOAI_SHIELD_PORT and enter the same port in the extension popup.
 import os as _os
+import re
 import sys as _sys
+import threading
+import time
+import uuid
+from collections import deque
+from collections.abc import Iterator
+from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+
+from byoai.integrations.shield_sync import SYNC_LEVELS, level_words, sync_level
+from byoai.recorder.keys import load_or_create_device_key
+from byoai.recorder.merkle import MerkleTree, checkpoint_leaf_hash
 
 
 def _port_from_env(default: int = 17831) -> int:
@@ -85,8 +87,6 @@ MAX_CARRIED = 10_000_000
 # ACL already limits them to the user, SYSTEM and administrators), written
 # atomically so a crash or a reader never sees half a file, and locked with the
 # platform's own primitive so this runs on Windows and Linux as well as macOS.
-
-import contextlib as _contextlib
 
 
 def atomic_write_private(path: Path, text: str) -> None:
@@ -132,7 +132,7 @@ def file_lock(fh):
         fh.seek(0)
         while True:
             try:
-                msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)  # retries ~10 s
+                msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)  # pyright: ignore[reportAttributeAccessIssue]  # msvcrt.locking exists only on Windows, where this branch runs; retries ~10 s
                 break
             except OSError:
                 continue
@@ -143,7 +143,7 @@ def file_lock(fh):
             pos = fh.tell()
             fh.seek(0)
             with _contextlib.suppress(OSError):
-                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)  # pyright: ignore[reportAttributeAccessIssue]  # Windows-only API, see the lock call above
             fh.seek(pos)
     else:
         import fcntl
@@ -784,7 +784,7 @@ def _map_texts(body: dict, fix) -> None:
     _walk(body, fix)
 
 
-def all_message_text(body: dict) -> str:
+def all_message_text(body: dict | list) -> str:
     """Every string in the body that could carry text, joined: what a block or
     redact decision must look at, so a secret in a system prompt, a tool
     result or earlier history can't ride along."""
@@ -909,7 +909,7 @@ class SealChain:
         _os.replace(path, moved)
         return moved
 
-    def _scan_log(self):
+    def _scan_log(self) -> Iterator[tuple[Any, str | None]]:
         """Yield ``(entry, problem)`` for each log line, in order. A problem
         ends the scan: nothing after a bad line can be trusted. A torn final
         line (a crash mid-write) is dropped without a problem."""
@@ -923,6 +923,7 @@ class SealChain:
         for i, line in enumerate(lines):
             if not line:
                 continue
+            e = None
             try:
                 e = json.loads(line)
                 ok = (e["height"] == i + 1
@@ -1419,7 +1420,7 @@ def _validate_managed_policy(policy: dict) -> None:
                          + " or " + SYNC_LEVELS[-1])
 
 
-def apply_managed_envelope(envelope: dict, *, tenant_slug: str | None, device_id: str,
+def apply_managed_envelope(envelope: object, *, tenant_slug: str | None, device_id: str,
                            public_key: str | None, path: Path | None = None) -> dict:
     """Verify a signed policy envelope from Coriqo and, if valid, store it as
     this device's managed policy. Never raises — every refusal reason comes
@@ -1452,9 +1453,10 @@ def apply_managed_envelope(envelope: dict, *, tenant_slug: str | None, device_id
         return {"ok": False, "error": "malformed envelope"}
     if not public_key:
         return {"ok": False, "error": "policy signed with an unknown key"}
+    from cryptography.exceptions import InvalidSignature  # a hard dependency (see pyproject)
+
     from byoai.recorder.canonical import canonicalize
     try:
-        from cryptography.exceptions import InvalidSignature
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
         raw_pub = bytes.fromhex(public_key)
         raw_sig = bytes.fromhex(sig)
@@ -1584,11 +1586,11 @@ def macos_https_proxy() -> tuple[bool, int | None] | None:
     if sys.platform != "darwin":
         return None
     try:
-        out = subprocess.run(["scutil", "--proxy"], capture_output=True,
-                             text=True, timeout=3, check=False).stdout
+        out = str(subprocess.run(["scutil", "--proxy"], capture_output=True,
+                                 text=True, timeout=3, check=False).stdout)
     except (OSError, subprocess.SubprocessError):
         return None
-    fields = dict(m.groups() for m in re.finditer(r"(\w+)\s*:\s*(\S+)", out))
+    fields = {m.group(1): m.group(2) for m in re.finditer(r"(\w+)\s*:\s*(\S+)", out)}
     port = fields.get("HTTPSPort")
     return (fields.get("HTTPSEnable") == "1",
             int(port) if port and port.isdigit() else None)
@@ -1705,7 +1707,7 @@ def _read_rows(ledger: Path) -> list[dict]:
     return rows
 
 
-def privacy_report(cfg: ShieldConfig, seals: "SealChain | None" = None) -> dict:
+def privacy_report(cfg: ShieldConfig, seals: SealChain | None = None) -> dict:
     """Facts for the "What Shield keeps" panel, read from disk, not assumed."""
     policy = load_policy(cfg)
     rows = _read_rows(cfg.ledger)
@@ -1902,12 +1904,12 @@ class Feed:
             return 0
         if len(lines) == self._offset:
             return 0
-        new = [l for l in lines[self._offset:] if l.strip()]
+        new = [line for line in lines[self._offset:] if line.strip()]
         self._offset = len(lines)
         with self.seals.batch():
-            for l in new:
+            for line in new:
                 try:
-                    self._absorb(json.loads(l))
+                    self._absorb(json.loads(line))
                 except Exception:
                     continue
         return len(new)
@@ -1967,7 +1969,6 @@ class Feed:
                 return
             if kind in ("browser.health.unmatched", "browser.health.core_missing"):
                 return  # facts for the ledger and seal, not a message row
-            wire = r.get("wire") if isinstance(r.get("wire"), str) else None
             ts_raw = r.get("sent_at") or ""
             # Extension rows carry their own ISO timestamp; fall back to now.
             try:
@@ -2324,7 +2325,7 @@ def clean_browser_row(row: object) -> dict | None:
     # The relay publishes the host (`location.host`) because only it knows it
     # reliably; the fetch-patch path sends the app tag directly. Map known
     # hosts to apps so every path lands under the right surface.
-    app = _APP_TAG_FOR_HOST.get(app) or app
+    app = (_APP_TAG_FOR_HOST.get(app) if isinstance(app, str) else None) or app
     if app in APP_LABEL:
         out["app"] = app
     chars = row.get("chars")
@@ -2424,7 +2425,7 @@ def serve(cfg: ShieldConfig, host: str = "127.0.0.1", port: int = DEFAULT_PORT,
                           protection=lambda: protection_state(cfg),
                           managed_policy_path=cfg.managed_policy_path,
                           policy=lambda: load_policy(cfg),
-                          events=lambda: feed.items)
+                          events=lambda: list(feed.items))
     publisher.start()  # background; sends only when enrolled and due
     # The console SPA's fleet screens read /v1/console/fleet*; here the fleet
     # is this one Mac, and the answers come from the local chain (see
@@ -2478,7 +2479,7 @@ def serve(cfg: ShieldConfig, host: str = "127.0.0.1", port: int = DEFAULT_PORT,
                     or "https://coriqo.com"}
 
         def _api(self):
-            from urllib.parse import urlparse, parse_qs
+            from urllib.parse import parse_qs, urlparse
             path = self.path.split("?")[0]
             if path == "/api/feed":
                 qs = parse_qs(urlparse(self.path).query)
@@ -2767,7 +2768,7 @@ def serve(cfg: ShieldConfig, host: str = "127.0.0.1", port: int = DEFAULT_PORT,
                 return
             self._send(200, json.dumps(status).encode())
 
-        def log_message(self, *a):  # per-request rlog silenced
+        def log_message(self, format, *args):  # per-request rlog silenced; names match BaseHTTPRequestHandler
             return
 
     harden_files(cfg.ledger, cfg.seal_path, cfg.policy_path)

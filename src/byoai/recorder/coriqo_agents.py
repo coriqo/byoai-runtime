@@ -518,7 +518,7 @@ class CoriqoAgentsClient:
         request.headers.pop("X-API-Key", None)
         request.headers.update(
             device_headers(
-                self._device_signer,
+                self._device_signer,  # pyright: ignore[reportArgumentType]  # only called when _device_signer is set (see the guard in the caller)
                 method=method,
                 path=request_path(request.url),
                 body=b"",

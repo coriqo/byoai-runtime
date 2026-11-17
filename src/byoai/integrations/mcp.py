@@ -34,7 +34,7 @@ except ImportError:
         # in this environment, so this fallback path can't be statically
         # verified — that's expected, it's only ever reached on an old SDK.
         from mcp.server.fastmcp import (  # pyright: ignore[reportMissingImports]
-            FastMCP as _MCPServerCls,
+            FastMCP as _MCPServerCls,  # pyright: ignore[reportAttributeAccessIssue]
         )
     except ImportError as exc:  # pragma: no cover
         raise ImportError(
@@ -51,7 +51,7 @@ except ImportError:
     try:
         # SDK <2.0; see the matching comment on the FastMCP fallback above.
         from mcp.server.fastmcp import (  # pyright: ignore[reportMissingImports]
-            Context as _ContextCls,
+            Context as _ContextCls,  # pyright: ignore[reportAttributeAccessIssue]
         )
     except ImportError as exc:  # pragma: no cover
         raise ImportError(

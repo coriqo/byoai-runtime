@@ -16,12 +16,12 @@ import json
 
 import httpx
 import pytest
-from fastapi.testclient import TestClient
-
-from byoai.recorder import integration as recorder_integration
 from examples.agent_showcase import coriqo_sync
 from examples.agent_showcase.agents.registry import get_agent, list_agents
 from examples.agent_showcase.app import app
+from fastapi.testclient import TestClient
+
+from byoai.recorder import integration as recorder_integration
 
 _AGENT_ID = "b1-fraud-triage"
 _CORIQO_AGENT_ID = "coriqo-agent-1"

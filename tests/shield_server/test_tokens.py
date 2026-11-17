@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import time
-
 from byoai.shield_server.store import ServerStore, hash_token
 
 
@@ -58,7 +56,7 @@ def test_tokens_are_hash_only_at_rest(tmp_path):
 
 def test_list_tokens_reports_status(tmp_path):
     store = ServerStore(tmp_path / "s.db")
-    active = store.mint_token(label="active")
+    store.mint_token(label="active")
     used = store.mint_token(label="used")
     store.redeem_token(used, device_id="dev_x")
     rows = {r.label: r for r in store.list_tokens()}

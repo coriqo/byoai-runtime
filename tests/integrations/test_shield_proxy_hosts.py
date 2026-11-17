@@ -14,6 +14,7 @@ from byoai.integrations.shield_proxy import (  # noqa: E402
     ShieldProxy,
     app_for_host,
 )
+
 from .test_shield_proxy import _Flow, _rows  # noqa: E402
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "proxy"

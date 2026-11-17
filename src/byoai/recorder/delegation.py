@@ -102,9 +102,9 @@ def intersect_tools(
     if parent is None and child is None:
         return None
     if parent is None:
-        return tuple(child)
+        return tuple(child or ())  # child is not None here: both None returned above
     if child is None:
-        return tuple(parent)
+        return tuple(parent or ())  # parent is not None here: both None returned above
     permitted = set(child)
     # Parent order, because the parent's mandate is the one being narrowed.
     return tuple(tool for tool in parent if tool in permitted)

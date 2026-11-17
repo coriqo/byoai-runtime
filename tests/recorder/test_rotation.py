@@ -28,7 +28,6 @@ from byoai.recorder.schema import (
     new_span_id,
     new_trace_id,
     now_monotonic_ns,
-    now_ts_device,
 )
 from byoai.recorder.verify import verify_ledger
 
@@ -534,7 +533,7 @@ def test_verify_ledger_reports_forged_new_device_id_in_rotation(tmp_path):
     key_dir, old_key, ledger = _make_ledger(tmp_path)
     try:
         _append_event(ledger, old_key.device_id, "message")
-        new_key = rotate_key(key_dir, ledger, reason="rotation")
+        rotate_key(key_dir, ledger, reason="rotation")
 
         # Tamper the already-written KEY_ROTATED event's new_device_id
         # directly in the DB, bypassing the writer entirely (this must never

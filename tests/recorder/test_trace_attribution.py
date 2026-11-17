@@ -15,19 +15,13 @@ Three things this file has to prove:
 
 from __future__ import annotations
 
-import json
 import sqlite3
-import time
-import uuid
-
-import pytest
 
 from byoai.recorder.canonical import canonicalize, sha256_hex
 from byoai.recorder.ledger import Ledger, compute_entry_hash
 from byoai.recorder.schema import (
     EVENT_SCHEMA_VERSION,
     EVENT_SCHEMA_VERSION_V1,
-    AgentEvent,
     EventKind,
     event_digest,
     new_span_id,

@@ -33,7 +33,8 @@ module hashes directly with :mod:`hashlib` instead.
 from __future__ import annotations
 
 import hashlib
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from .canonical import canonicalize
 from .ledger import LedgerEntry
