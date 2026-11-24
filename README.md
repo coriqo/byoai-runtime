@@ -330,6 +330,22 @@ coriqo-mcp --mandate coriqo.mandate.yaml --http \
 
 Add `-- <server command>` to have `coriqo-mcp` start and stop that server too.
 
+**Pinned tools.** A v1.4 mandate can pin the hash of each approved tool's
+definition and annotations per server (`tool_pins`). Start with
+`--server NAME`, the server's key in `tool_pins.servers`:
+
+```bash
+coriqo-mcp --mandate coriqo.mandate.yaml --server payments-mcp -- node server.js
+```
+
+`coriqo-mcp` fetches the server's full tool list itself, hashes each tool and
+compares. A changed or unpinned tool is flagged under `shadow`; under `enforce`
+it is hidden from `tools/list` and refused, as the policy says. A call
+whose tool could not be checked in time (`--pin-hold-timeout`, default 10
+seconds) counts as unpinned. Records gain `pin_status` and `definition_sha256`.
+With pins and `enforce`, `--server` is required. What it checks and cannot
+tell: CONFIGURATION.md, "Tool pinning".
+
 **When the agent is suspended.** With `--coriqo-agent-id`, a suspension in
 Coriqo reaches `coriqo-mcp` on its next mandate fetch. From then on every call
 is refused, and the server it started gets SIGTERM to its process group, then
@@ -408,6 +424,8 @@ that decisions stay local.
   amount. Set `BYOAI_APPROVAL_SEND_ARGS=0` to keep arguments and amounts on
   the host; approvals then cannot sign off an above-limit action (see
   [CONFIGURATION.md](CONFIGURATION.md)).
+- Checked when the mandate pins tools: each tool's definition and annotations
+  hashes, on every call and in every `tools/list` answer.
 - Not checked: `max_cost_usd`. An MCP call carries no cost, so there is
   nothing to count against it.
 - Not checked: resources (`resources/read`), prompts, sampling and elicitation

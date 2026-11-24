@@ -134,9 +134,10 @@ def snapshot_payload(normalised: Mapping[str, Any], *, sha256: str) -> dict[str,
         },
         # v1.3
         **({"asset_scope": dict(normalised["asset_scope"])} if normalised.get("asset_scope") else {}),
-        # v1.4: passed through unchanged. This release does not enforce pins,
-        # so the snapshot declares them required and the gate applies its
-        # posture to a snapshot it cannot evaluate rather than ignoring them.
+        # v1.4: passed through unchanged and declared required, so a runtime
+        # that cannot enforce pins refuses to ignore them. A file has no pin
+        # policy: the gate's defaults apply (a changed tool is refused under
+        # enforce and flagged under shadow; an unpinned tool is flagged).
         **(
             {"tool_pins": normalised["tool_pins"], "required_fields": ["tool_pins"]}
             if normalised.get("tool_pins")

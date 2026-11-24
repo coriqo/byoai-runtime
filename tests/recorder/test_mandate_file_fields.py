@@ -101,7 +101,25 @@ def test_every_field_reaches_the_snapshot():
     assert snap.max_transaction_usd == 100.5
     assert snap.max_transaction_usd_per_day == 250000.0
     assert snap.asset_classes == ("fiat",) and snap.venues == ("bank-wire",)
-    assert snap.unreadable_keys == ("tool_pins",)
+    assert snap.unreadable_keys == ()
+    assert snap.tool_pin_policy is None
+    assert snap.tool_pins == {
+        "payments-mcp": {
+            "stripe.refund": {
+                "definition_sha256": PINS["servers"]["payments-mcp"]["tools"]["stripe.refund"]["definition_sha256"],
+                "annotations_sha256": PINS["servers"]["payments-mcp"]["tools"]["stripe.refund"]["annotations_sha256"],
+            },
+            "search_orders": {
+                "definition_sha256": PINS["servers"]["payments-mcp"]["tools"]["search_orders"]["definition_sha256"],
+            },
+        },
+        "docs.example": {
+            "fetch_doc": {
+                "definition_sha256": PINS["servers"]["docs.example"]["tools"]["fetch_doc"]["definition_sha256"],
+                "annotations_sha256": PINS["servers"]["docs.example"]["tools"]["fetch_doc"]["annotations_sha256"],
+            },
+        },
+    }
 
 
 def test_a_file_without_the_newer_fields_yields_none_of_their_keys():
@@ -137,12 +155,19 @@ def test_the_daily_limit_comes_from_the_file():
     assert isinstance(d, Deny) and d.reason == Reason.DAILY_TRANSACTION_LIMIT_EXCEEDED
 
 
-def test_tool_pins_make_the_gate_report_unreadable_keys_under_the_posture():
-    closed = _gate(_loaded().payload())
-    assert closed.unreadable_keys == ("tool_pins",)
+def test_tool_pins_from_a_file_are_read_and_the_gate_still_allows_in_scope_tools():
+    gate = _gate(_loaded().payload())
+    assert gate.unreadable_keys == ()
+    assert isinstance(gate.decide("search"), Allow)
+
+
+def test_a_required_field_this_runtime_does_not_read_still_makes_the_snapshot_unreadable():
+    payload = {**_loaded().payload(), "required_fields": ["tool_pins", "future_field"]}
+    closed = _gate(payload)
+    assert closed.unreadable_keys == ("future_field",)
     verdict = closed.decide("search")
     assert isinstance(verdict, Deny) and verdict.reason == Reason.SNAPSHOT_UNREADABLE
-    opened = _gate(_loaded({**FULL, "on_stale_snapshot": "fail_open"}).payload())
+    opened = _gate({**payload, "enforcement_posture": "fail_open"})
     verdict = opened.decide("search")
     assert isinstance(verdict, Flag) and verdict.reason == Reason.SNAPSHOT_UNREADABLE
     assert closed.posture == Posture.FAIL_CLOSED

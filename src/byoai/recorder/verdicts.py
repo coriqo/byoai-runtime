@@ -160,15 +160,22 @@ CREATE INDEX IF NOT EXISTS idx_pending_verdicts_state
 
 
 def wire_verdict(
-    verdict: Verdict, *, decided_at: str | None = None
+    verdict: Verdict,
+    *,
+    decided_at: str | None = None,
+    pin_status: str | None = None,
+    definition_sha256: str | None = None,
 ) -> dict[str, Any]:
     """The verdict as Coriqo's batch endpoint wants it.
 
     ``reason`` is always populated — every verdict this runtime produces
     carries a reason code — which is what keeps a ``flagged`` or ``blocked``
     row from being the 422 the server owes a reasonless one.
+
+    ``pin_status`` and ``definition_sha256`` (tool pinning) are added only when
+    given, so a verdict for an agent without pins keeps its exact shape.
     """
-    return {
+    out: dict[str, Any] = {
         "tool": verdict.tool,
         "verdict": verdict.verdict,
         "reason": verdict.reason,
@@ -178,6 +185,11 @@ def wire_verdict(
         "step_index": verdict.step_index,
         "decided_at": decided_at or now_ts_device(),
     }
+    if pin_status is not None:
+        out["pin_status"] = pin_status
+    if definition_sha256 is not None:
+        out["definition_sha256"] = definition_sha256
+    return out
 
 
 def ledger_payload(
@@ -192,6 +204,8 @@ def ledger_payload(
     effective_scope: EffectiveScope | None = None,
     arguments_sha256: str | None = None,
     arguments: Any = None,
+    pin_status: str | None = None,
+    definition_sha256: str | None = None,
 ) -> dict[str, Any]:
     """The fuller local record: the wire fields plus what only an operator sees.
 
@@ -228,7 +242,14 @@ def ledger_payload(
     why that choice needs none of ``schema.py``'s v1/v2 field-suppression
     machinery to keep a pre-existing event's digest unchanged.
     """
-    payload = dict(wire_verdict(verdict, decided_at=decided_at))
+    payload = dict(
+        wire_verdict(
+            verdict,
+            decided_at=decided_at,
+            pin_status=pin_status,
+            definition_sha256=definition_sha256,
+        )
+    )
     on_behalf_of = (
         list(effective_scope.chain)
         if effective_scope is not None and effective_scope.delegated
@@ -521,6 +542,8 @@ class VerdictRecorder:
         effective_scope: EffectiveScope | None = None,
         arguments_sha256: str | None = None,
         arguments: Any = None,
+        pin_status: str | None = None,
+        definition_sha256: str | None = None,
     ) -> LedgerEntry | None:
         """Record one verdict. Returns the ledger entry, if one was written.
 
@@ -547,11 +570,13 @@ class VerdictRecorder:
                 effective_scope=effective_scope,
                 arguments_sha256=arguments_sha256,
                 arguments=arguments,
+                pin_status=pin_status,
+                definition_sha256=definition_sha256,
             )
             entry = self._append(verdict, payload)
             if entry is not None and self._checkpointer is not None:
                 self._checkpointer.note(entry.seq)
-            self._enqueue(agent_id, verdict, decided_at)
+            self._enqueue(agent_id, verdict, decided_at, pin_status, definition_sha256)
             return entry
         except Exception:  # noqa: BLE001 - policy: recording never breaks a call
             log.exception("coriqo: failed to record a mandate verdict")
@@ -656,7 +681,12 @@ class VerdictRecorder:
         return self._ledger.append(event)
 
     def _enqueue(
-        self, agent_id: str | None, verdict: Verdict, decided_at: str
+        self,
+        agent_id: str | None,
+        verdict: Verdict,
+        decided_at: str,
+        pin_status: str | None = None,
+        definition_sha256: str | None = None,
     ) -> None:
         if self._outbox is None:
             return
@@ -668,7 +698,15 @@ class VerdictRecorder:
                 verdict.tool,
             )
             return
-        self._outbox.add(agent_id, wire_verdict(verdict, decided_at=decided_at))
+        self._outbox.add(
+            agent_id,
+            wire_verdict(
+                verdict,
+                decided_at=decided_at,
+                pin_status=pin_status,
+                definition_sha256=definition_sha256,
+            ),
+        )
 
 
 _recorder: ContextVar[VerdictRecorder | None] = ContextVar(

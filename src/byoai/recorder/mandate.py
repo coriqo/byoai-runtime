@@ -38,8 +38,9 @@ no snapshot ever fetched                      allow + flag    **deny**
 A snapshot that needs fields this runtime cannot read is also "cannot
 evaluate". Coriqo lists the fields the runtime must understand in the snapshot's
 ``required_fields`` (like the JWT ``crit`` header); one this version does not
-read (``tool_pins`` today) makes the snapshot unreadable, and a ``tool_pin*``
-key present without being listed does the same. ``enforce`` + ``fail_closed``
+read makes the snapshot unreadable, and an unknown ``tool_pin*`` key present
+without being listed does the same. ``tool_pins`` and ``tool_pin_policy`` are
+read here; a malformed one makes the snapshot unreadable too. ``enforce`` + ``fail_closed``
 denies; ``fail_open`` allows and flags. ``observe`` allows and flags under
 BOTH postures, on purpose: the agent is observing, so ``observe`` +
 ``fail_closed`` is a Flag here, and a later change must not turn it into a
@@ -256,6 +257,12 @@ class Reason:
     #: nothing it can stand behind and the posture decides, as for
     #: NO_SNAPSHOT.
     ENVIRONMENT_MISMATCH = "environment_mismatch"
+    #: Tool pinning: a tool's definition or annotations no longer hash to the
+    #: pinned values.
+    TOOL_PIN_DRIFT = "tool_pin_drift"
+    #: Tool pinning: an allowed tool has no pin, or its definition could not be
+    #: read and checked in time.
+    TOOL_UNPINNED = "tool_unpinned"
 
 
 class ViolationAction:
@@ -512,8 +519,8 @@ MAX_STOP_GRACE_S = 600.0
 
 #: Mandate fields this runtime reads. A snapshot whose ``required_fields`` names
 #: anything outside this set cannot be evaluated here. ``tool_pins`` and
-#: ``tool_pin_policy`` are deliberately absent until a later runtime release
-#: teaches the gate to enforce them.
+#: ``tool_pin_policy`` are enforced by ``coriqo-mcp``, which checks each tool it
+#: relays against the pinned hashes (see ``byoai.recorder.tool_pins``).
 UNDERSTOOD_SNAPSHOT_KEYS = frozenset({
     "allowed_tools", "approval_required_tools", "resolved_approvals",
     "max_run_cost_usd", "max_calls_per_minute", "max_run_steps",
@@ -521,7 +528,7 @@ UNDERSTOOD_SNAPSHOT_KEYS = frozenset({
     "max_staleness_s", "delegation_policy", "max_delegation_depth", "served_at",
     "reassessment_required", "prohibited_tools", "on_violation", "environment",
     "output_inspection", "stop_grace_s", "asset_scope", "max_transaction_usd",
-    "max_transaction_usd_per_day",
+    "max_transaction_usd_per_day", "tool_pins", "tool_pin_policy",
 })
 #: Every key this runtime knows about: the fields above, the declaration
 #: itself and the envelope Coriqo adds around the mandate (informational).
@@ -539,11 +546,14 @@ _MAX_SHOWN_KEYS = 8
 _MAX_KEYS_EXAMINED = 256
 
 
-def _sanitize_keys(names: Iterable[Any]) -> tuple[str, ...]:
+def _sanitize_keys(
+    names: Iterable[Any], pattern: re.Pattern[str] = _KEY_RE, placeholder: str = INVALID_KEY
+) -> tuple[str, ...]:
     """Names from the server, made safe to log and to put in a reason.
 
-    Only ``[a-z0-9_]{1,64}`` passes; anything else becomes a fixed placeholder.
-    At most eight are shown, then ``+N more``.
+    Only ``[a-z0-9_]{1,64}`` passes (or ``pattern``, for tool and server
+    names); anything else becomes a fixed placeholder. At most eight are shown,
+    then ``+N more``.
     """
     seen: list[str] = []
     total = 0
@@ -551,8 +561,8 @@ def _sanitize_keys(names: Iterable[Any]) -> tuple[str, ...]:
         total += 1
         if total > _MAX_KEYS_EXAMINED:
             continue
-        ok = isinstance(name, str) and len(name) <= 64 and _KEY_RE.fullmatch(name)
-        clean = name if ok else INVALID_KEY
+        ok = isinstance(name, str) and len(name) <= 64 and pattern.fullmatch(name)
+        clean = name if ok else placeholder
         if clean not in seen:
             seen.append(clean)
     shown = sorted(seen)[:_MAX_SHOWN_KEYS]
@@ -560,6 +570,88 @@ def _sanitize_keys(names: Iterable[Any]) -> tuple[str, ...]:
     if extra:
         shown.append(f"+{extra} more")
     return tuple(shown)
+
+
+#: Most pinned tools a snapshot may carry; more is a snapshot this runtime will
+#: not enforce (the mandate file format caps pins far lower).
+MAX_PINNED_TOOLS = 5000
+_HASH_RE = re.compile(r"[0-9a-f]{64}")
+_PIN_ACTIONS = frozenset({"flag", "refuse"})
+
+
+def parse_tool_pin_fields(
+    payload: Mapping[str, Any],
+) -> tuple[dict[str, dict[str, dict[str, str]]] | None, dict[str, Any] | None, list[str]]:
+    """``(tool_pins, tool_pin_policy, problems)`` from a snapshot payload.
+
+    ``problems`` names the field (``tool_pins`` or ``tool_pin_policy``) when it
+    is malformed, or when ``required_fields`` lists it and the payload has
+    none: a mandate this runtime cannot read is not one it may enforce.
+    """
+    problems: list[str] = []
+    required = payload.get("required_fields")
+    listed = set(required) if isinstance(required, (list, tuple)) else set()
+
+    pins: dict[str, dict[str, dict[str, str]]] | None = None
+    raw = payload.get("tool_pins")
+    if raw is None:
+        if "tool_pins" in listed:
+            problems.append("tool_pins")
+    else:
+        servers = raw.get("servers") if isinstance(raw, Mapping) else None
+        parsed: dict[str, dict[str, dict[str, str]]] = {}
+        total = 0
+        ok = isinstance(servers, Mapping)
+        for sname, sv in (servers.items() if isinstance(servers, Mapping) else ()):
+            tools = sv.get("tools") if isinstance(sv, Mapping) else None
+            if not isinstance(sname, str) or not isinstance(tools, Mapping):
+                ok = False
+                break
+            entries: dict[str, dict[str, str]] = {}
+            for tname, entry in tools.items():
+                d = entry.get("definition_sha256") if isinstance(entry, Mapping) else None
+                a = entry.get("annotations_sha256") if isinstance(entry, Mapping) else None
+                if (not isinstance(tname, str) or not isinstance(d, str)
+                        or not _HASH_RE.fullmatch(d)
+                        or (a is not None and not (isinstance(a, str) and _HASH_RE.fullmatch(a)))):
+                    ok = False
+                    break
+                entries[tname] = {"definition_sha256": d, **({"annotations_sha256": a} if a else {})}
+                total += 1
+            if not ok or total > MAX_PINNED_TOOLS:
+                ok = False
+                break
+            parsed[sname] = entries
+        if not ok:
+            problems.append("tool_pins")
+        elif total:
+            pins = parsed
+
+    policy: dict[str, Any] | None = None
+    raw_policy = payload.get("tool_pin_policy")
+    if raw_policy is None:
+        if "tool_pin_policy" in listed:
+            problems.append("tool_pin_policy")
+    else:
+        classes = raw_policy.get("class_actions", {}) if isinstance(raw_policy, Mapping) else None
+        sha = raw_policy.get("policy_sha256") if isinstance(raw_policy, Mapping) else None
+        if (
+            not isinstance(raw_policy, Mapping)
+            or raw_policy.get("on_drift") not in _PIN_ACTIONS
+            or raw_policy.get("on_unpinned") not in _PIN_ACTIONS
+            or not isinstance(classes, Mapping)
+            or not all(isinstance(k, str) and isinstance(v, str) for k, v in classes.items())
+            or (sha is not None and not isinstance(sha, str))
+        ):
+            problems.append("tool_pin_policy")
+        else:
+            policy = {
+                "on_drift": raw_policy["on_drift"],
+                "on_unpinned": raw_policy["on_unpinned"],
+                "class_actions": dict(classes),
+                "policy_sha256": sha,
+            }
+    return pins, policy, problems
 
 
 def _unreadable_keys(payload: Mapping[str, Any]) -> tuple[str, ...]:
@@ -578,6 +670,9 @@ def _unreadable_keys(payload: Mapping[str, Any]) -> tuple[str, ...]:
         if isinstance(k, str) and k not in KNOWN_SNAPSHOT_KEYS
         and k.startswith(_FALLBACK_PREFIX)
     )
+    pins, policy, pin_problems = parse_tool_pin_fields(payload)
+    del pins, policy
+    bad.extend(pin_problems)
     return _sanitize_keys(bad)
 
 
@@ -647,6 +742,14 @@ class MandateSnapshot:
     #: DA-2: per-transaction and rolling-24h USD limits (mandate format v1.2).
     max_transaction_usd: float | None = None
     max_transaction_usd_per_day: float | None = None
+    #: Mandate v1.4: ``{server: {tool: {"definition_sha256": h,
+    #: "annotations_sha256": h?}}}``. ``None`` when the agent has no pins.
+    tool_pins: Mapping[str, Mapping[str, Mapping[str, str]]] | None = None
+    #: The pinning policy Coriqo resolved for this agent: ``on_drift`` and
+    #: ``on_unpinned`` (``flag`` or ``refuse``), ``class_actions`` (carried and
+    #: recorded, not interpreted here) and ``policy_sha256``. ``None`` when the
+    #: snapshot has no policy (a mandate file): the defaults apply.
+    tool_pin_policy: Mapping[str, Any] | None = None
     #: Monotonic reading from when this snapshot was received. Monotonic, not
     #: wall clock, so an NTP correction mid-run cannot make a snapshot look
     #: fresher (or older) than it is.
@@ -727,6 +830,7 @@ class MandateSnapshot:
 
         scope = payload.get("asset_scope")
         scope = scope if isinstance(scope, Mapping) else {}
+        pins, pin_policy, _ = parse_tool_pin_fields(payload)
 
         return cls(
             allowed_tools=tools,
@@ -761,6 +865,8 @@ class MandateSnapshot:
             max_transaction_usd_per_day=_opt_limit(
                 payload.get("max_transaction_usd_per_day")
             ),
+            tool_pins=pins,
+            tool_pin_policy=pin_policy,
             received_at=received_at,
             unreadable_keys=_unreadable_keys(payload),
             raw=dict(payload),

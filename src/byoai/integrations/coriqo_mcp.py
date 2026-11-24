@@ -20,6 +20,11 @@ the server as its own child process and sits on the pipe between them:
   reaches the server;
 - under ``enforce``, a ``tools/list`` answer is cut down to the tools the
   mandate allows, so the model is not shown a tool it may not call.
+- when the mandate pins tools (``tool_pins``), each tool's definition and
+  annotations hashes are compared with the pins: the runtime fetches the
+  server's tool list itself (see :mod:`byoai.integrations.coriqo_mcp_pins`),
+  a changed or unpinned tool is flagged or refused as the pin policy says, and
+  each record gains ``pin_status`` and ``definition_sha256``.
 
 Nothing on this path calls Coriqo. The mandate is a local file (or a cached
 snapshot fetched in the background), and the decision reads memory.
@@ -50,7 +55,7 @@ import threading
 import time
 import uuid
 from collections import OrderedDict
-from collections.abc import Awaitable, Callable, Iterable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from typing import Any, cast
 from urllib.parse import urlsplit
 
@@ -58,6 +63,24 @@ from ..recorder.canonical import canonicalize, sha256_hex
 from ..recorder.mandate import MODEL_MESSAGE, MandateError, MandateGate
 from ..recorder.proxy_gate import ProxyDecision, ProxyEnforcer
 from ..recorder.suspend import SuspendHook, SuspendNotice, WorkerAck, WorkerOutcome, utc_now
+from ..recorder.tool_pins import (
+    PinAction,
+    PinCheck,
+    PinStatus,
+    ToolHashes,
+    evaluate_pin,
+    hash_tool,
+    pin_actions,
+    pin_blocks,
+    safe_name,
+)
+from .coriqo_mcp_pins import (
+    DEFAULT_HOLD_TIMEOUT_S,
+    PIN_ID_PREFIX,
+    FetchLimiter,
+    ToolInventory,
+    is_own_id,
+)
 
 __all__ = [
     "DENIAL_RESULT",
@@ -86,6 +109,12 @@ MAX_LINE_BYTES = 64 * 1024 * 1024
 
 #: Runs (MCP sessions) whose step counters are kept, oldest dropped first.
 _MAX_RUNS = 1024
+
+#: MCP sessions whose tool hashes are kept (HTTP), oldest dropped first.
+_MAX_PIN_SESSIONS = 64
+
+#: Largest answer to the runtime's own tools/list request accepted over HTTP.
+MAX_PIN_BODY_BYTES = 16 * 1024 * 1024
 
 #: How long the child gets to exit after its stdin closes, and again after
 #: SIGTERM, before it is killed.
@@ -158,6 +187,19 @@ def _id_key(message_id: Any) -> str:
     return json.dumps(message_id, sort_keys=True)
 
 
+def _safe_names(names: Iterable[str]) -> list[str]:
+    return [safe_name(n) for n in list(names)[:8]]
+
+
+def _call_name(msg: Any) -> str | None:
+    """The tool a ``tools/call`` message names, if it names one."""
+    if not _is_request(msg, "tools/call"):
+        return None
+    params = msg.get("params")
+    name = params.get("name") if isinstance(params, dict) else None
+    return name if isinstance(name, str) else None
+
+
 def _is_request(msg: Any, method: str) -> bool:
     return isinstance(msg, dict) and msg.get("method") == method
 
@@ -177,8 +219,22 @@ class Interposer:
     count, is the stdio connection, or the MCP session on HTTP.
     """
 
-    def __init__(self, gate: MandateGate, *, run_id: str | None = None) -> None:
+    def __init__(
+        self,
+        gate: MandateGate,
+        *,
+        run_id: str | None = None,
+        pin_server: str | None = None,
+        pin_hold_timeout_s: float = DEFAULT_HOLD_TIMEOUT_S,
+    ) -> None:
+        """``pin_server`` is the key of this server's entry in the mandate's
+        ``tool_pins.servers``; ``pin_hold_timeout_s`` is how long a call waits
+        for the runtime's own tool list fetch before it counts as unpinned."""
         self.gate = gate
+        self.pin_server = pin_server
+        self.pin_hold_timeout_s = pin_hold_timeout_s
+        #: Shared by every inventory this process creates: one upstream.
+        self.fetch_limiter = FetchLimiter()
         self._default_run = run_id or f"mcp-{uuid.uuid4().hex[:16]}"
         self._steps: OrderedDict[str, int] = OrderedDict()
         self._lock = threading.Lock()
@@ -194,10 +250,85 @@ class Interposer:
                 self._steps.popitem(last=False)
             return step
 
+    # -- tool pins ---------------------------------------------------------
+
+    def pins_active(self) -> bool:
+        """True while the mandate in hand pins tools."""
+        snapshot = self.gate.snapshot
+        return snapshot is not None and snapshot.tool_pins is not None
+
+    def new_inventory(self) -> ToolInventory:
+        """One per transport connection (stdio) or MCP session (HTTP)."""
+        inventory = ToolInventory(hold_timeout_s=self.pin_hold_timeout_s, limiter=self.fetch_limiter)
+        inventory.on_refresh = self._report_inventory
+        return inventory
+
+    def _pin_check(
+        self, tool: str, inventory: ToolInventory | None, settled: bool
+    ) -> PinCheck | None:
+        snapshot = self.gate.snapshot
+        if snapshot is None or snapshot.tool_pins is None:
+            return None
+        live: ToolHashes | None = None
+        hashable = True
+        if inventory is not None and settled:
+            live, hashable = inventory.lookup(tool)
+        check = evaluate_pin(snapshot, self.pin_server, tool, live, hashable=hashable)
+        if check is None or inventory is None or not settled or self.pin_server is None or live is None:
+            return check
+        seen, host = inventory.host_seen(tool)
+        if seen and host != live:
+            # The host was shown a different definition than the runtime fetched
+            # (a server that answers clients differently): that is drift, and
+            # the hash on the record is the one the host saw.
+            on_drift = pin_actions(snapshot)[0]
+            name = safe_name(tool)
+            return PinCheck(
+                PinStatus.DRIFT, None if host is None else host.definition_sha256, on_drift,
+                f"tool {name} on server {safe_name(self.pin_server)}: the host was shown "
+                "a different definition than the one the runtime fetched",
+            )
+        return check
+
+    def _report_inventory(self, tools: Mapping[str, ToolHashes | None]) -> None:
+        """Log what a fresh tool list says against the pins: changed, new and
+        removed tools, by sanitized name."""
+        snapshot = self.gate.snapshot
+        if snapshot is None or snapshot.tool_pins is None or self.pin_server is None:
+            return
+        pinned = snapshot.tool_pins.get(self.pin_server) or {}
+        drifted: list[str] = []
+        new: list[str] = []
+        for name, hashes in tools.items():
+            check = evaluate_pin(snapshot, self.pin_server, name, hashes, hashable=hashes is not None)
+            if check is None:
+                continue
+            if check.status == "drift":
+                drifted.append(name)
+            elif check.status == "unpinned" and name in set(snapshot.allowed_tools or ()):
+                new.append(name)
+        removed = [name for name in pinned if name not in tools]
+        for label, names in (("changed", drifted), ("allowed but not pinned", new),
+                             ("removed", removed)):
+            if names:
+                log.warning("coriqo-mcp: server %s: %d pinned tool(s) %s: %s",
+                            safe_name(self.pin_server), len(names), label,
+                            ", ".join(_safe_names(names)))
+
     # -- host -> server ----------------------------------------------------
 
-    def decide_call(self, msg: dict[str, Any], *, session: str | None = None) -> ProxyDecision:
-        """Decide one ``tools/call`` request and record the decision."""
+    def decide_call(
+        self,
+        msg: dict[str, Any],
+        *,
+        session: str | None = None,
+        inventory: ToolInventory | None = None,
+        settled: bool = True,
+    ) -> ProxyDecision:
+        """Decide one ``tools/call`` request and record the decision.
+
+        ``inventory`` holds the hashes the runtime fetched; ``settled`` is
+        False when the wait for a fresh fetch timed out."""
         raw_params = msg.get("params")
         params: dict[str, Any] = raw_params if isinstance(raw_params, dict) else {}
         name = params.get("name")
@@ -210,10 +341,16 @@ class Interposer:
             arguments=raw_args if isinstance(raw_args, dict) else None,
             step_index=self._next_step(run_id),
             arguments_sha256=arguments_sha256(raw_args),
+            pin=self._pin_check(tool, inventory, settled),
         )
 
     def gate_request(
-        self, msg: Any, *, session: str | None = None
+        self,
+        msg: Any,
+        *,
+        session: str | None = None,
+        inventory: ToolInventory | None = None,
+        settled: bool = True,
     ) -> tuple[bool, dict[str, Any] | None]:
         """``(forward, reply)`` for one message from the host.
 
@@ -228,6 +365,12 @@ class Interposer:
             log.warning("coriqo-mcp: refused a message that is not a JSON object")
             return False, {"jsonrpc": "2.0", "id": None,
                            "error": {"code": -32600, "message": "Invalid Request"}}
+        if is_own_id(msg.get("id")) and self.pins_active():
+            # Our own requests use this namespace; a host id inside it could
+            # swallow one of our answers.
+            log.warning("coriqo-mcp: refused a request whose id starts with %r", PIN_ID_PREFIX)
+            return False, {"jsonrpc": "2.0", "id": msg["id"],
+                           "error": {"code": -32600, "message": "Invalid Request"}}
         if not _is_request(msg, "tools/call"):
             return True, None
         params = msg.get("params")
@@ -241,7 +384,7 @@ class Interposer:
             # follows the fail-open posture. Refused here instead.
             log.warning("coriqo-mcp: refused a tools/call whose arguments cannot be checked")
             return self._invalid_params(msg)
-        decision = self.decide_call(msg, session=session)
+        decision = self.decide_call(msg, session=session, inventory=inventory, settled=settled)
         if decision.allowed:
             return True, None
         if "id" not in msg:
@@ -257,24 +400,54 @@ class Interposer:
 
     # -- server -> host ----------------------------------------------------
 
-    def filter_tools(self, msg: dict[str, Any]) -> bool:
+    def filter_tools(self, msg: dict[str, Any], inventory: ToolInventory | None = None) -> bool:
         """Cut a ``tools/list`` result down to the offered tools, in place.
 
-        Returns True if anything was removed.
+        Returns True if anything was removed. With pins, ``inventory`` also
+        learns the hash of each tool as the host is shown it, so a later call
+        is checked against what the host saw as well as what the runtime
+        fetched.
         """
         result = msg.get("result")
         if not isinstance(result, dict) or not isinstance(result.get("tools"), list):
             return False
         tools = result["tools"]
+        if inventory is not None and self.pins_active():
+            for t in tools:
+                if isinstance(t, dict) and isinstance(t.get("name"), str):
+                    inventory.note_host_seen(t["name"], hash_tool(t))
         names = [t.get("name") for t in tools if isinstance(t, dict)]
         offered = set(self.gate.offered_tools(n for n in names if isinstance(n, str)))
         kept = [t for t in tools if isinstance(t, dict) and t.get("name") in offered]
+        hidden = len(tools) - len(kept)
+        if hidden:
+            log.info("coriqo-mcp: hid %d tool(s) the mandate does not allow from tools/list", hidden)
+        before = len(kept)
+        kept = self._without_refused_pins(kept)
+        if len(kept) != before:
+            log.info("coriqo-mcp: hid %d tool(s) whose pin the mandate refuses from tools/list",
+                     before - len(kept))
         if len(kept) == len(tools):
             return False
-        hidden = len(tools) - len(kept)
-        log.info("coriqo-mcp: hid %d tool(s) the mandate does not allow from tools/list", hidden)
         msg["result"] = {**result, "tools": kept}
         return True
+
+    def _without_refused_pins(self, tools: list[Any]) -> list[Any]:
+        """Under enforcement, a tool whose pin is refused (changed, or allowed
+        but unpinned) is not shown to the model. Each tool is hashed as it is
+        listed, so the hiding follows what the host would be shown."""
+        snapshot = self.gate.snapshot
+        if snapshot is None or snapshot.tool_pins is None or not pin_blocks(snapshot):
+            return tools
+        kept = []
+        for tool in tools:
+            hashes = hash_tool(tool)
+            check = evaluate_pin(
+                snapshot, self.pin_server, tool.get("name"), hashes, hashable=hashes is not None
+            )
+            if check is None or check.action != PinAction.REFUSE:
+                kept.append(tool)
+        return kept
 
 
 # -- stdio -------------------------------------------------------------------
@@ -289,6 +462,60 @@ class _StdioSession:
         # A count per id, not a set: a host may reuse an id, and each answer
         # must be filtered.
         self._lists: dict[str, int] = {}
+        # Tool pinning: the runtime's own tools/list requests and the answers
+        # it is waiting for, by id.
+        self.inventory = interposer.new_inventory()
+        self._own: dict[str, asyncio.Future[dict[str, Any] | None]] = {}
+        self._write_server: Callable[[bytes], None] | None = None
+        self._unsettled: set[str] = set()
+
+    def attach_server(self, write_server: Callable[[bytes], None]) -> None:
+        """Let the runtime send its own requests to the server."""
+        self._write_server = write_server
+        self.inventory.bind(self._request)
+
+    def close(self) -> None:
+        self.inventory.close()
+        for future in self._own.values():
+            if not future.done():
+                future.cancel()
+        self._own.clear()
+
+    async def _request(self, params: dict[str, Any]) -> dict[str, Any] | None:
+        write = self._write_server
+        if write is None:
+            return None
+        rid = self.inventory.next_id()
+        request: dict[str, Any] = {"jsonrpc": "2.0", "id": rid, "method": "tools/list"}
+        if params:
+            request["params"] = params
+        future: asyncio.Future[dict[str, Any] | None] = asyncio.get_running_loop().create_future()
+        self._own[rid] = future
+        try:
+            write(dump_message(request) + b"\n")
+            return await asyncio.wait_for(future, self.inventory.hold_timeout_s)
+        except (asyncio.TimeoutError, OSError, RuntimeError):
+            return None
+        finally:
+            self._own.pop(rid, None)
+
+    async def handle_host_line(self, line: bytes) -> bytes | None:
+        """:meth:`from_host`, after holding any ``tools/call`` until the
+        runtime has fetched the tool list it is checked against."""
+        self._unsettled.clear()
+        if line.strip() and self.interposer.pins_active():
+            try:
+                parsed = parse_message(line)
+            except ValueError:
+                parsed = None
+            for msg in parsed if isinstance(parsed, list) else [parsed]:
+                name = _call_name(msg)
+                if name is not None and not await self.inventory.settle(name):
+                    self._unsettled.add(name)
+        try:
+            return self.from_host(line)
+        finally:
+            self._unsettled.clear()
 
     def from_host(self, line: bytes) -> bytes | None:
         """Bytes to write to the server for one line from the host, if any."""
@@ -307,7 +534,18 @@ class _StdioSession:
         forward: list[Any] = []
         replies: list[dict[str, Any]] = []
         for msg in messages:
-            go, reply = self.interposer.gate_request(msg)
+            if _is_request(msg, "notifications/initialized") and "id" not in msg:
+                # The host's initialize is complete: the runtime may now ask
+                # the server for its tools.
+                self.inventory.set_ready()
+                if self.interposer.pins_active():
+                    self.inventory.request_refresh()
+            name = _call_name(msg)
+            go, reply = self.interposer.gate_request(
+                msg,
+                inventory=self.inventory,
+                settled=name is None or name not in self._unsettled,
+            )
             if reply is not None:
                 replies.append(reply)
             if not go:
@@ -327,7 +565,7 @@ class _StdioSession:
 
     def from_server(self, line: bytes) -> bytes:
         """Bytes to write to the host for one line from the server."""
-        if not self._lists:
+        if not self._lists and not self._own and not self.interposer.pins_active():
             return line
         try:
             parsed = parse_message(line)
@@ -335,7 +573,22 @@ class _StdioSession:
             return line
         messages = parsed if isinstance(parsed, list) else [parsed]
         changed = False
-        for msg in messages:
+        for msg in list(messages):
+            if _is_request(msg, "notifications/tools/list_changed") and "id" not in msg:
+                if self.interposer.pins_active():
+                    self.inventory.mark_changed()
+                continue
+            if _is_response(msg) and is_own_id(msg.get("id")):
+                # The answer to the runtime's own request: it never reaches the host.
+                future = self._own.get(msg["id"])
+                if future is not None and not future.done():
+                    future.set_result(msg)
+                if isinstance(parsed, list):
+                    parsed.remove(msg)
+                    changed = True
+                else:
+                    return b""
+                continue
             if not _is_response(msg):
                 continue
             key = _id_key(msg.get("id"))
@@ -346,8 +599,10 @@ class _StdioSession:
                 del self._lists[key]
             else:
                 self._lists[key] = pending - 1
-            if self.interposer.filter_tools(msg):
+            if self.interposer.filter_tools(msg, self.inventory):
                 changed = True
+        if changed and not parsed:
+            return b""
         return dump_message(parsed) + b"\n" if changed else line
 
 
@@ -656,6 +911,7 @@ async def run_stdio(
         stopper.attach(proc)
     assert proc.stdin is not None and proc.stdout is not None
     child_in, child_out = proc.stdin, proc.stdout
+    session.attach_server(child_in.write)
 
     async def host_to_server() -> None:
         try:
@@ -663,7 +919,7 @@ async def run_stdio(
                 line = await queue.get()
                 if line is None:
                     break
-                data = session.from_host(line)
+                data = await session.handle_host_line(line)
                 if data is not None:
                     child_in.write(data)
                     await child_in.drain()
@@ -685,7 +941,9 @@ async def run_stdio(
                 return
             if not line:
                 return
-            write_host(session.from_server(line))
+            data = session.from_server(line)
+            if data:
+                write_host(data)
 
     upstream = asyncio.create_task(host_to_server())
     downstream = asyncio.create_task(server_to_host())
@@ -702,6 +960,7 @@ async def run_stdio(
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(asyncio.shield(downstream), grace_s)
     finally:
+        session.close()
         for sig in installed:
             with contextlib.suppress(Exception):
                 loop.remove_signal_handler(sig)
@@ -738,6 +997,17 @@ _DROP_RESPONSE_HEADERS = frozenset(
 )
 
 
+#: Returned by a message filter when nothing of the message is to be relayed.
+_DROP: Any = object()
+
+
+def _credential_fingerprint(headers: Sequence[tuple[str, str]]) -> str:
+    """A hash of the host's credential headers, never the credentials."""
+    wanted = {"authorization", "cookie", "x-api-key"}
+    material = "\0".join(f"{k}={v}" for k, v in headers if k in wanted)
+    return hashlib.sha256(material.encode("utf-8", "replace")).hexdigest()[:16] if material else ""
+
+
 def _sse_event(data: Any) -> bytes:
     return b"event: message\ndata: " + dump_message(data) + b"\n\n"
 
@@ -746,7 +1016,7 @@ class _SseFilter:
     """Rewrites ``tools/list`` answers inside an SSE stream, one event at a
     time. Every other event passes through unchanged."""
 
-    def __init__(self, filter_message: Callable[[Any], bool]) -> None:
+    def __init__(self, filter_message: Callable[[Any], Any]) -> None:
         self._filter = filter_message
         self._buf = b""
 
@@ -777,7 +1047,10 @@ class _SseFilter:
             parsed = parse_message(payload)
         except ValueError:
             return event
-        if not self._filter(parsed):
+        result = self._filter(parsed)
+        if result is _DROP:
+            return b""
+        if not result:
             return event
         rebuilt: list[bytes] = []
         placed = False
@@ -827,6 +1100,88 @@ class HttpInterposer:
         self._on_startup = on_startup
         self._on_shutdown = on_shutdown
         self._sessions: OrderedDict[str, None] = OrderedDict()
+        # Tool pinning: one inventory per MCP session and per credential
+        # fingerprint, so one client's call is never judged on a list fetched
+        # with another client's credentials (a sessionless server shares no id).
+        self._inventories: OrderedDict[tuple[str | None, str], ToolInventory] = OrderedDict()
+        # Set when the upstream answered the runtime's own POST with 202: the
+        # answer would come on the host's event stream, which is not read.
+        self._legacy_sse = False
+
+    def _inventory(self, session: str | None, headers: Sequence[tuple[str, str]]) -> ToolInventory:
+        key = (session, _credential_fingerprint(headers))
+        inventory = self._inventories.pop(key, None)
+        if inventory is None:
+            inventory = self.interposer.new_inventory()
+            inventory.bind(lambda params, inv=inventory: self._fetch_page(inv, params))
+            if self._legacy_sse:
+                inventory.disable()
+        self._inventories[key] = inventory
+        while len(self._inventories) > _MAX_PIN_SESSIONS:
+            self._inventories.popitem(last=False)[1].close()
+        return inventory
+
+    async def _fetch_page(self, inventory: ToolInventory, params: dict[str, Any]) -> dict[str, Any] | None:
+        """One ``tools/list`` request of the runtime's own, sent with the
+        headers (``Mcp-Session-Id`` and credentials included) of the host's
+        latest request on this session."""
+        context = inventory.context
+        if context is None:
+            return None
+        url, headers = context
+        rid = inventory.next_id()
+        request: dict[str, Any] = {"jsonrpc": "2.0", "id": rid, "method": "tools/list"}
+        if params:
+            request["params"] = params
+        sent = [(k, v) for k, v in headers if k not in {"content-type", "accept", "content-length"}]
+        sent += [("content-type", "application/json"),
+                 ("accept", "application/json, text/event-stream")]
+        timeout = inventory.hold_timeout_s
+
+        async def exchange() -> dict[str, Any] | None:
+            req = self._client.build_request("POST", url, headers=sent, content=dump_message(request))
+            response = await self._client.send(req, stream=True)
+            try:
+                if response.status_code in (429, 503):
+                    with contextlib.suppress(ValueError):
+                        inventory.defer(float(response.headers.get("retry-after", "")))
+                if response.status_code == 202:
+                    self._note_legacy_sse()
+                    return None
+                if response.status_code != 200:
+                    return None
+                data = b""
+                async for chunk in response.aiter_bytes():
+                    data += chunk
+                    if len(data) > MAX_PIN_BODY_BYTES:
+                        return None
+                ctype = response.headers.get("content-type", "").lower()
+                return _answer_to(data, rid, sse="text/event-stream" in ctype)
+            finally:
+                await response.aclose()
+
+        try:
+            return await asyncio.wait_for(exchange(), timeout)
+        except (asyncio.TimeoutError, OSError, ValueError, RuntimeError):
+            return None
+        except Exception:  # noqa: BLE001 - any failure leaves the tools unchecked
+            log.debug("coriqo-mcp: tool list request failed", exc_info=True)
+            return None
+
+    def _note_legacy_sse(self) -> None:
+        """A 202 to the runtime's own request means the answer would arrive on
+        the host's event stream (the two-endpoint SSE transport). Stop fetching:
+        tools stay unchecked, so the pin policy treats them as unpinned."""
+        if self._legacy_sse:
+            return
+        self._legacy_sse = True
+        log.warning(
+            "coriqo-mcp: the upstream answered the tool list request with 202, so its "
+            "answer arrives on a separate event stream, which is not supported for tool "
+            "pinning; no tool can be checked and every tool counts as unpinned"
+        )
+        for inventory in self._inventories.values():
+            inventory.disable()
 
     def _note_session(self, session_id: str | None) -> None:
         if not session_id:
@@ -859,10 +1214,37 @@ class HttpInterposer:
                 with contextlib.suppress(Exception):
                     if self._on_shutdown is not None:
                         await self._on_shutdown()
+                for inventory in self._inventories.values():
+                    inventory.close()
                 with contextlib.suppress(Exception):
                     await self._client.aclose()
                 await send({"type": "lifespan.shutdown.complete"})
                 return
+
+    async def _prepare_pins(
+        self,
+        inventory: ToolInventory,
+        scope: dict[str, Any],
+        headers: list[tuple[str, str]],
+        messages: list[Any],
+    ) -> set[str]:
+        """Before a request is gated: remember how to reach the server for the
+        runtime's own tool list request, and hold each ``tools/call`` until the
+        list it is checked against is fresh. Returns the names whose hold timed
+        out. The first fetch waits until the upstream has accepted the host's
+        ``notifications/initialized``."""
+        raw_path = scope.get("raw_path") or scope["path"].encode("utf-8")
+        if raw_path.startswith(b"/") and not any(_is_request(m, "initialize") for m in messages):
+            url = self._origin + raw_path.decode("latin-1")
+            if scope.get("query_string"):
+                url += "?" + scope["query_string"].decode("latin-1")
+            inventory.context = (url, [(k, v) for k, v in headers if k not in _HOP_HEADERS])
+        unsettled: set[str] = set()
+        for msg in messages:
+            name = _call_name(msg)
+            if name is not None and not await inventory.settle(name):
+                unsettled.add(name)
+        return unsettled
 
     async def _http(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
         method = scope["method"]
@@ -879,6 +1261,9 @@ class HttpInterposer:
 
         replies: list[dict[str, Any]] = []
         list_ids: set[str] = set()
+        inventory: ToolInventory | None = None
+        saw_initialized = False
+        unsettled: set[str] = set()
         gated_body = bool(body)
         batch = False
         # Any request that carries a body is read and gated, whatever its
@@ -894,9 +1279,24 @@ class HttpInterposer:
                 await _send_json(send, 400, parse_error())
                 return
             batch = isinstance(parsed, list)
+            if method == "POST" and self.interposer.pins_active():
+                inventory = self._inventory(session, headers)
+                saw_initialized = any(
+                    _is_request(m, "notifications/initialized") and "id" not in m
+                    for m in (parsed if batch else [parsed])
+                )
+                unsettled = await self._prepare_pins(
+                    inventory, scope, headers, parsed if batch else [parsed]
+                )
             kept: list[Any] = []
             for msg in parsed if batch else [parsed]:
-                go, reply = self.interposer.gate_request(msg, session=session)
+                name = _call_name(msg)
+                go, reply = self.interposer.gate_request(
+                    msg,
+                    session=session,
+                    inventory=inventory,
+                    settled=name is None or name not in unsettled,
+                )
                 if reply is not None:
                     replies.append(reply)
                 if not go:
@@ -912,9 +1312,22 @@ class HttpInterposer:
                 return
             body = dump_message(kept if batch else kept[0])
 
-        def filter_message(parsed: Any) -> bool:
+        def filter_message(parsed: Any) -> Any:
+            """True if ``parsed`` was changed, ``_DROP`` if nothing is left of it."""
             changed = False
-            for msg in parsed if isinstance(parsed, list) else [parsed]:
+            pins = self.interposer.pins_active()
+            inv = self._inventory(session, headers) if pins else None
+            for msg in list(parsed) if isinstance(parsed, list) else [parsed]:
+                if _is_response(msg) and is_own_id(msg.get("id")):
+                    # The answer to a request of the runtime's own: never relayed.
+                    if not isinstance(parsed, list):
+                        return _DROP
+                    parsed.remove(msg)
+                    changed = True
+                    continue
+                if (_is_request(msg, "notifications/tools/list_changed") and "id" not in msg
+                        and inv is not None):
+                    inv.mark_changed()
                 if not _is_response(msg):
                     continue
                 # On a request with a body, only the answers to its own
@@ -922,8 +1335,10 @@ class HttpInterposer:
                 # match), any answer shaped like one.
                 if gated_body and _id_key(msg.get("id")) not in list_ids:
                     continue
-                if self.interposer.filter_tools(msg):
+                if self.interposer.filter_tools(msg, inv):
                     changed = True
+            if changed and isinstance(parsed, list) and not parsed:
+                return _DROP
             return changed
 
         raw_path = scope.get("raw_path") or scope["path"].encode("utf-8")
@@ -949,6 +1364,11 @@ class HttpInterposer:
             return
 
         self._note_session(response.headers.get("mcp-session-id"))
+        if saw_initialized and inventory is not None and 200 <= response.status_code < 300:
+            # The upstream has accepted the host's initialized notification, so
+            # the runtime may now ask for the tool list.
+            inventory.set_ready()
+            inventory.request_refresh()
         try:
             out_headers = [
                 (k.encode("latin-1"), v.encode("latin-1"))
@@ -979,6 +1399,13 @@ class HttpInterposer:
                     parsed = None
                 if parsed is not None:
                     changed = filter_message(parsed)
+                    if changed is _DROP:
+                        parsed, changed = [], True
+                        if not replies:
+                            status, data = 202, b""
+                            out_headers = [h for h in out_headers if h[0].lower() != b"content-type"]
+                            await _send_raw(send, status, out_headers, data)
+                            return
                     if replies:
                         merged = (parsed if isinstance(parsed, list) else [parsed]) + replies
                         parsed, changed = merged, True
@@ -993,6 +1420,29 @@ class HttpInterposer:
             await _send_raw(send, status, out_headers, data)
         finally:
             await response.aclose()
+
+
+def _answer_to(data: bytes, rid: str, *, sse: bool) -> dict[str, Any] | None:
+    """The JSON-RPC message with id ``rid`` in a JSON body or an SSE stream."""
+    if not sse:
+        candidates = [data]
+    else:
+        text = data.replace(b"\r\n", b"\n")
+        candidates = []
+        for event in text.split(b"\n\n"):
+            lines = [ln for ln in event.split(b"\n") if ln.startswith(b"data:")]
+            if lines:
+                candidates.append(b"\n".join(
+                    ln[6:] if ln.startswith(b"data: ") else ln[5:] for ln in lines))
+    for candidate in candidates:
+        try:
+            parsed = parse_message(candidate)
+        except ValueError:
+            continue
+        for msg in parsed if isinstance(parsed, list) else [parsed]:
+            if isinstance(msg, dict) and msg.get("id") == rid and "method" not in msg:
+                return msg
+    return None
 
 
 async def _read_body(receive: Any) -> bytes:
@@ -1029,6 +1479,22 @@ _INSTALL_HINT = (
 )
 
 
+def _server_name(value: str) -> str:
+    import re
+
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", value):
+        raise argparse.ArgumentTypeError(
+            "a server name is letters, digits, dot, dash or underscore, up to 64 characters"
+        )
+    return value
+
+
+def _hold_timeout(value: float) -> float:
+    if not 0 < value <= 120:
+        raise ValueError("--pin-hold-timeout must be above 0 and at most 120 seconds")
+    return value
+
+
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="coriqo-mcp",
@@ -1059,6 +1525,17 @@ def _parser() -> argparse.ArgumentParser:
     )
     rec.add_argument(
         "--no-record", action="store_true", help="decide calls but write no record"
+    )
+    p.add_argument(
+        "--server", metavar="NAME", type=_server_name,
+        help="tool pinning: the key of this server's entry in the mandate's "
+        "tool_pins.servers. Required under enforce when the mandate pins tools; "
+        "under shadow every tool counts as unpinned without it",
+    )
+    p.add_argument(
+        "--pin-hold-timeout", type=float, default=DEFAULT_HOLD_TIMEOUT_S, metavar="SECONDS",
+        help="tool pinning: how long a tools/call waits for the runtime to fetch the "
+        f"server's tool list before it counts as unpinned (default {DEFAULT_HOLD_TIMEOUT_S:g})",
     )
     p.add_argument("--http", action="store_true", help="relay an HTTP MCP server instead of stdio")
     p.add_argument("--upstream", help="with --http: the server's base URL, e.g. http://127.0.0.1:9000")
@@ -1329,10 +1806,32 @@ async def _amain(args: argparse.Namespace, command: list[str]) -> int:
         return 2
     # Bound before any task is created, so every task inherits it.
     set_verdict_recorder(None if record is None else record.verdicts)
-    interposer = Interposer(gate)
+    pin_server = getattr(args, "server", None)
+    try:
+        hold = _hold_timeout(getattr(args, "pin_hold_timeout", DEFAULT_HOLD_TIMEOUT_S))
+    except ValueError as exc:
+        print(f"coriqo-mcp: {exc}", file=sys.stderr)
+        return 2
+    interposer = Interposer(gate, pin_server=pin_server, pin_hold_timeout_s=hold)
     try:
         await gate.start()
         print(f"coriqo-mcp: {source}; {_describe(gate)}", file=sys.stderr)
+        snap = gate.snapshot
+        if snap is not None and snap.tool_pins is not None:
+            if pin_server is None:
+                if pin_blocks(snap):
+                    print(
+                        "coriqo-mcp: the mandate pins tools, so enforcement needs to know "
+                        "which server this is. Start with --server NAME, where NAME is this "
+                        "server's key under tool_pins.servers in the mandate. Not starting.",
+                        file=sys.stderr,
+                    )
+                    return 2
+                print("coriqo-mcp: the mandate pins tools but no --server NAME was given; "
+                      "every tool counts as unpinned and is flagged", file=sys.stderr)
+            elif pin_server not in snap.tool_pins:
+                print(f"coriqo-mcp: the mandate has no pins for server {safe_name(pin_server)}; "
+                      "every tool counts as unpinned", file=sys.stderr)
         if record is not None:
             where = record.recorder.ledger.path
             sent = ", and sending decisions to Coriqo" if record.shipping else ""
