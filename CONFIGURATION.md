@@ -1368,6 +1368,8 @@ observing agent can still run under a fail-closed posture.
 | snapshot stale past `max_staleness_s` | allow + flag | **deny** |
 | agent suspended | **deny** | **deny** |
 | no snapshot ever fetched | allow + flag | **deny** |
+| snapshot requires fields this runtime cannot read (for example `tool_pins`), `enforce` | allow + flag | **deny** |
+| same, `observe` | allow + flag | allow + flag |
 | tool in `approval_required_tools`, no decision yet | **require approval** | **require approval** |
 
 Suspension denies under both postures — it is a decision Coriqo made and this
@@ -1375,6 +1377,22 @@ runtime read, not a failure to evaluate. And what trips the fail-closed branch
 is *staleness*, not reachability: a failed refresh keeps the cached snapshot,
 so one blip cannot become an outage, and the snapshot stops counting only when
 it is older than the budget the tenant set.
+
+**Fields this runtime cannot read.** The snapshot may carry `required_fields`,
+the fields the runtime must understand to evaluate the mandate (like the JWT
+`crit` header). If one is not a field this version reads (`tool_pins` and
+`tool_pin_policy` today), the gate records the names as
+`MandateGate.unreadable_keys` and treats the mandate as one it cannot evaluate:
+under `enforce` and `fail_closed` every call is denied; under `fail_open` it is
+allowed and flagged; under `observe` it is allowed and flagged under both
+postures, on purpose (the agent is observing). The reason
+(`snapshot_unreadable`) names the fields and says to upgrade byoai-runtime. A
+`tool_pin*` key that is present but not listed is treated the same. Any other
+unknown key is ignored and logged once at INFO. Names from the server are
+shown only if they match `[a-z0-9_]{1,64}` (else `<invalid key>`), at most
+eight, then `+N more`. One WARNING is logged per change in the set of
+fields. A snapshot without these keys behaves as before. The mandate file
+reader is at format revision 1.4.
 
 **`allowed_tools: null` is not `allowed_tools: []`.** `null` means
 unrestricted; `[]` means nothing is permitted. Both are valid on the wire and

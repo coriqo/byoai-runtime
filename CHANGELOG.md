@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- The mandate file reader is now at format revision 1.4 (accepts `tool_pins`,
+  asset scope and payment limits) and the golden tool-hash vectors are vendored
+  with a checksum test.
+- The mandate gate reads `required_fields` from the snapshot (fields the runtime
+  must understand, like the JWT `crit` header). A field it cannot read (first:
+  `tool_pins`) is recorded as `unreadable_keys` and the gate refuses to
+  evaluate: denied under `enforce` with `fail_closed`, allowed and flagged
+  otherwise, with a reason telling you to upgrade byoai-runtime. Other unknown
+  keys are ignored and logged once at INFO. Key names are sanitized.
+
 ## [0.1.0] - 2026-11-17
 
 First release without a pre-release suffix: `pip install byoai-runtime` no longer

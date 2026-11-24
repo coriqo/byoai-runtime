@@ -1,0 +1,273 @@
+{
+  "_about": "Golden vectors for the v1.4 tool hashes (RFC 8785 canonical JSON). Every reader of the mandate format, in any language or repository, must reproduce these exactly. Generated from the Python reader (mandate_format.py); do not edit by hand.",
+  "jcs": [
+    {
+      "name": "null",
+      "value": null,
+      "canonical": "null"
+    },
+    {
+      "name": "booleans",
+      "value": [
+        true,
+        false
+      ],
+      "canonical": "[true,false]"
+    },
+    {
+      "name": "integer",
+      "value": 4294967295,
+      "canonical": "4294967295"
+    },
+    {
+      "name": "float with no fraction",
+      "value": 1.0,
+      "canonical": "1"
+    },
+    {
+      "name": "zero and negative zero",
+      "value": [
+        0,
+        -0.0
+      ],
+      "canonical": "[0,0]"
+    },
+    {
+      "name": "small decimals",
+      "value": [
+        1e-06,
+        1e-07,
+        0.002
+      ],
+      "canonical": "[0.000001,1e-7,0.002]"
+    },
+    {
+      "name": "large numbers",
+      "value": [
+        1e+21,
+        1e+30,
+        1.2345678901234568e+17
+      ],
+      "canonical": "[1e+21,1e+30,123456789012345680]"
+    },
+    {
+      "name": "shortest round trip",
+      "value": 333333333.3333333,
+      "canonical": "333333333.3333333"
+    },
+    {
+      "name": "float extremes",
+      "value": [
+        1.7976931348623157e+308,
+        5e-324
+      ],
+      "canonical": "[1.7976931348623157e+308,5e-324]"
+    },
+    {
+      "name": "negative float",
+      "value": -4.5,
+      "canonical": "-4.5"
+    },
+    {
+      "name": "key order by UTF-16 code unit",
+      "value": {
+        "b": 1,
+        "a": 2,
+        "😀": 3,
+        "￿": 4,
+        "é": 5
+      },
+      "canonical": "{\"a\":2,\"b\":1,\"é\":5,\"😀\":3,\"￿\":4}"
+    },
+    {
+      "name": "string escapes",
+      "value": {
+        "s": "line\nbreak \"quoted\" back\\slash tab\t ctl\u001f del é 😀"
+      },
+      "canonical": "{\"s\":\"line\\nbreak \\\"quoted\\\" back\\\\slash tab\\t ctl\\u001f del é 😀\"}"
+    },
+    {
+      "name": "nested",
+      "value": {
+        "z": [
+          {
+            "b": [],
+            "a": {}
+          }
+        ],
+        "y": null
+      },
+      "canonical": "{\"y\":null,\"z\":[{\"a\":{},\"b\":[]}]}"
+    }
+  ],
+  "tools": [
+    {
+      "name": "plain tool",
+      "tool": {
+        "name": "search_orders",
+        "description": "Search orders.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "q": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "definition_sha256": "d1074376048ccb852ab651c70e43418e6d269e5cbd93c159386d4db99154d4cd",
+      "annotations_sha256": null
+    },
+    {
+      "name": "floats in the schema",
+      "tool": {
+        "name": "refund",
+        "description": "Refund a charge.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "amount": {
+              "type": "number",
+              "minimum": 0.01,
+              "multipleOf": 1.0,
+              "maximum": 1e+21
+            }
+          },
+          "required": [
+            "amount"
+          ]
+        }
+      },
+      "definition_sha256": "e066bca6e3943b36baafd09451cd642596b0560253219044929576509196c6d5",
+      "annotations_sha256": null
+    },
+    {
+      "name": "non-ASCII text",
+      "tool": {
+        "name": "résumé",
+        "description": "Zoë's 😀 résumé",
+        "inputSchema": {
+          "type": "object"
+        }
+      },
+      "definition_sha256": "b810b7dec7a68e69df3099e647d9c0cd3ea6935d15ebe6916d2920f82541cad8",
+      "annotations_sha256": null
+    },
+    {
+      "name": "output schema",
+      "tool": {
+        "name": "get",
+        "description": "Get.",
+        "inputSchema": {
+          "type": "object"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "integer"
+            }
+          }
+        }
+      },
+      "definition_sha256": "a77524410274b244d2fce02130dfecb87353695ae02ff00d82d4ce280e475295",
+      "annotations_sha256": null
+    },
+    {
+      "name": "title at top level",
+      "tool": {
+        "name": "t",
+        "description": "d",
+        "inputSchema": {
+          "type": "object"
+        },
+        "title": "Nice",
+        "annotations": {
+          "readOnlyHint": true
+        }
+      },
+      "definition_sha256": "d526dac93520a3edd71a249d55aefa9159fbdf863db7ddc110028e58fe35721c",
+      "annotations_sha256": "b4852fb797a63a0ee955e94299cba7ad9527dd519065898fdb542433862d2f81"
+    },
+    {
+      "name": "title inside annotations (2024-11-05)",
+      "tool": {
+        "name": "t",
+        "description": "d",
+        "inputSchema": {
+          "type": "object"
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "title": "Nice"
+        }
+      },
+      "definition_sha256": "d526dac93520a3edd71a249d55aefa9159fbdf863db7ddc110028e58fe35721c",
+      "annotations_sha256": "b4852fb797a63a0ee955e94299cba7ad9527dd519065898fdb542433862d2f81"
+    },
+    {
+      "name": "_meta and icons are not covered",
+      "tool": {
+        "name": "t",
+        "description": "d",
+        "inputSchema": {
+          "type": "object"
+        },
+        "title": "Nice",
+        "annotations": {
+          "readOnlyHint": true
+        },
+        "_meta": {
+          "x": 1
+        },
+        "icons": [
+          {
+            "src": "a"
+          }
+        ]
+      },
+      "definition_sha256": "d526dac93520a3edd71a249d55aefa9159fbdf863db7ddc110028e58fe35721c",
+      "annotations_sha256": "b4852fb797a63a0ee955e94299cba7ad9527dd519065898fdb542433862d2f81"
+    },
+    {
+      "name": "no annotations and no title",
+      "tool": {
+        "name": "bare",
+        "inputSchema": {
+          "type": "object"
+        }
+      },
+      "definition_sha256": "ca811b00e5490a4dc382f5b6b097f920afe4d71de63ea743a845950242551894",
+      "annotations_sha256": null
+    },
+    {
+      "name": "null optional fields are absent",
+      "tool": {
+        "name": "bare",
+        "description": null,
+        "inputSchema": {
+          "type": "object"
+        },
+        "outputSchema": null
+      },
+      "definition_sha256": "ca811b00e5490a4dc382f5b6b097f920afe4d71de63ea743a845950242551894",
+      "annotations_sha256": null
+    },
+    {
+      "name": "destructive hint",
+      "tool": {
+        "name": "wipe",
+        "description": "Wipe.",
+        "inputSchema": {
+          "type": "object"
+        },
+        "annotations": {
+          "destructiveHint": true,
+          "openWorldHint": false
+        }
+      },
+      "definition_sha256": "c34d116b7b315bf9867c68e03b123b2ae0a7b7393fe45f80f0638aa0078eebd2",
+      "annotations_sha256": "87153d51d35829d761a5765afe02a3c763493fc493eb92081ea4d92dbbf9687b"
+    }
+  ]
+}

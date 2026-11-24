@@ -35,6 +35,18 @@ agent suspended                               **deny**        **deny**
 no snapshot ever fetched                      allow + flag    **deny**
 ============================================  ==============  ===============
 
+A snapshot that needs fields this runtime cannot read is also "cannot
+evaluate". Coriqo lists the fields the runtime must understand in the snapshot's
+``required_fields`` (like the JWT ``crit`` header); one this version does not
+read (``tool_pins`` today) makes the snapshot unreadable, and a ``tool_pin*``
+key present without being listed does the same. ``enforce`` + ``fail_closed``
+denies; ``fail_open`` allows and flags. ``observe`` allows and flags under
+BOTH postures, on purpose: the agent is observing, so ``observe`` +
+``fail_closed`` is a Flag here, and a later change must not turn it into a
+Deny. Other unknown keys are ignored and logged once at INFO. Key names from
+the server are sanitized before they reach a log or a reason. See
+``unreadable_keys``.
+
 Suspension denies under both postures: a suspension is a decision Coriqo
 already made and this runtime read, not a failure to evaluate. And what trips
 the fail-closed branch is *staleness*, not network reachability — a bounded,
@@ -92,6 +104,7 @@ import hashlib
 import logging
 import math
 import os
+import re
 import threading
 import time
 from collections import OrderedDict, deque
@@ -198,6 +211,9 @@ class Reason:
     NO_SNAPSHOT = "no_snapshot"
     AGENT_SUSPENDED = "agent_suspended"
     ENFORCEMENT_UNCONFIGURED = "enforcement_unconfigured"
+    #: The snapshot carries mandate fields this runtime version cannot read
+    #: (a newer Coriqo). Could not evaluate: the posture decides.
+    SNAPSHOT_UNREADABLE = "snapshot_unreadable"
     #: A tool already denied for this run, refused from the latch without
     #: re-evaluating scope: the answer cannot have changed.
     REPEAT_DENIED = "repeat_denied"
@@ -494,6 +510,86 @@ def _coerce_float(value: Any, fallback: float) -> float:
 MAX_STOP_GRACE_S = 600.0
 
 
+#: Mandate fields this runtime reads. A snapshot whose ``required_fields`` names
+#: anything outside this set cannot be evaluated here. ``tool_pins`` and
+#: ``tool_pin_policy`` are deliberately absent until a later runtime release
+#: teaches the gate to enforce them.
+UNDERSTOOD_SNAPSHOT_KEYS = frozenset({
+    "allowed_tools", "approval_required_tools", "resolved_approvals",
+    "max_run_cost_usd", "max_calls_per_minute", "max_run_steps",
+    "mandate_version_id", "status", "mandate_enforcement", "enforcement_posture",
+    "max_staleness_s", "delegation_policy", "max_delegation_depth", "served_at",
+    "reassessment_required", "prohibited_tools", "on_violation", "environment",
+    "output_inspection", "stop_grace_s", "asset_scope", "max_transaction_usd",
+    "max_transaction_usd_per_day",
+})
+#: Every key this runtime knows about: the fields above, the declaration
+#: itself and the envelope Coriqo adds around the mandate (informational).
+KNOWN_SNAPSHOT_KEYS = UNDERSTOOD_SNAPSHOT_KEYS | frozenset({
+    "required_fields",
+    "agent_id", "agent_name", "mandate", "scope_source", "capability_digest",
+})
+#: Fallback for a snapshot that carries a pinning key without listing it.
+_FALLBACK_PREFIX = "tool_pin"
+
+INVALID_KEY = "<invalid key>"
+_KEY_RE = re.compile(r"[a-z0-9_]{1,64}")
+_MAX_SHOWN_KEYS = 8
+#: Names examined per snapshot; the rest only count toward "+N more".
+_MAX_KEYS_EXAMINED = 256
+
+
+def _sanitize_keys(names: Iterable[Any]) -> tuple[str, ...]:
+    """Names from the server, made safe to log and to put in a reason.
+
+    Only ``[a-z0-9_]{1,64}`` passes; anything else becomes a fixed placeholder.
+    At most eight are shown, then ``+N more``.
+    """
+    seen: list[str] = []
+    total = 0
+    for name in names:
+        total += 1
+        if total > _MAX_KEYS_EXAMINED:
+            continue
+        ok = isinstance(name, str) and len(name) <= 64 and _KEY_RE.fullmatch(name)
+        clean = name if ok else INVALID_KEY
+        if clean not in seen:
+            seen.append(clean)
+    shown = sorted(seen)[:_MAX_SHOWN_KEYS]
+    extra = max(total - len(shown), 0) if len(seen) > _MAX_SHOWN_KEYS else 0
+    if extra:
+        shown.append(f"+{extra} more")
+    return tuple(shown)
+
+
+def _unreadable_keys(payload: Mapping[str, Any]) -> tuple[str, ...]:
+    """Required fields this runtime does not understand (sanitized)."""
+    bad: list[Any] = []
+    required = payload.get("required_fields")
+    if isinstance(required, (list, tuple)):
+        bad.extend(
+            n for n in required
+            if not (isinstance(n, str) and n in UNDERSTOOD_SNAPSHOT_KEYS)
+        )
+    elif required is not None:
+        bad.append(INVALID_KEY)
+    bad.extend(
+        k for k in payload
+        if isinstance(k, str) and k not in KNOWN_SNAPSHOT_KEYS
+        and k.startswith(_FALLBACK_PREFIX)
+    )
+    return _sanitize_keys(bad)
+
+
+def _ignored_keys(payload: Mapping[str, Any]) -> tuple[str, ...]:
+    """Unknown keys that are not required: ignored, but never silently."""
+    return _sanitize_keys(
+        k for k in payload
+        if not (isinstance(k, str) and k in KNOWN_SNAPSHOT_KEYS)
+        and not (isinstance(k, str) and k.startswith(_FALLBACK_PREFIX))
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class MandateSnapshot:
     """One immutable copy of what Coriqo said this agent's mandate is.
@@ -555,6 +651,9 @@ class MandateSnapshot:
     #: wall clock, so an NTP correction mid-run cannot make a snapshot look
     #: fresher (or older) than it is.
     received_at: float = 0.0
+    #: Mandate-field keys in the payload this runtime cannot read; empty for
+    #: an ordinary snapshot.
+    unreadable_keys: tuple[str, ...] = ()
     raw: Mapping[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -663,6 +762,7 @@ class MandateSnapshot:
                 payload.get("max_transaction_usd_per_day")
             ),
             received_at=received_at,
+            unreadable_keys=_unreadable_keys(payload),
             raw=dict(payload),
         )
 
@@ -989,6 +1089,8 @@ class MandateGate:
         self._etag: str | None = None
         self._last_refresh_error: Exception | None = None
         self._noop_logged = False
+        self._unreadable_logged: tuple[str, ...] | None = None
+        self._ignored_logged: tuple[str, ...] | None = None
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
 
@@ -1052,6 +1154,12 @@ class MandateGate:
             return self._snapshot
 
     @property
+    def unreadable_keys(self) -> tuple[str, ...]:
+        """Mandate fields in the current snapshot this runtime cannot read."""
+        snapshot = self.snapshot
+        return () if snapshot is None else snapshot.unreadable_keys
+
+    @property
     def last_refresh_error(self) -> Exception | None:
         with self._lock:
             return self._last_refresh_error
@@ -1094,6 +1202,28 @@ class MandateGate:
             )
         if payload.get("enforcement_posture") is None:
             snapshot = replace(snapshot, enforcement_posture=self._default_posture)
+        ignored = _ignored_keys(payload)
+        with self._lock:
+            fresh_unreadable = bool(snapshot.unreadable_keys) and (
+                snapshot.unreadable_keys != self._unreadable_logged
+            )
+            if snapshot.unreadable_keys:
+                self._unreadable_logged = snapshot.unreadable_keys
+            fresh_ignored = bool(ignored) and ignored != self._ignored_logged
+            if ignored:
+                self._ignored_logged = ignored
+        if fresh_unreadable:
+            log.warning(
+                "coriqo: the mandate snapshot needs fields this byoai-runtime "
+                "cannot read (%s); it cannot evaluate the mandate until you "
+                "upgrade byoai-runtime",
+                ", ".join(repr(k) for k in snapshot.unreadable_keys),
+            )
+        if fresh_ignored:
+            log.info(
+                "coriqo: ignoring unknown mandate snapshot keys (%s)",
+                ", ".join(repr(k) for k in ignored),
+            )
         with self._lock:
             previous = self._snapshot
             self._snapshot = snapshot
@@ -1198,6 +1328,36 @@ class MandateGate:
                     f"the mandate applies to environment {snapshot.environment!r}; "
                     f"this runtime is {self._environment!r}"
                 ),
+            )
+
+        # A newer Coriqo sent mandate fields this runtime cannot enforce
+        # (the first is tool_pins). Not a failure of the network: the gate
+        # has a mandate it cannot stand behind, so the posture decides.
+        if snapshot.unreadable_keys:
+            detail = (
+                "the mandate snapshot carries fields this byoai-runtime cannot "
+                f"read ({', '.join(repr(k) for k in snapshot.unreadable_keys)}); upgrade byoai-runtime"
+            )
+            if snapshot.observing:
+                return Flag(
+                    reason=Reason.SNAPSHOT_UNREADABLE,
+                    mandate_version_id=snapshot.mandate_version_id,
+                    snapshot_age_s=age,
+                    tool=action.tool,
+                    posture=snapshot.enforcement_posture,
+                    enforcement=snapshot.mandate_enforcement,
+                    trajectory_id=action.trajectory_id,
+                    step_index=action.step_index,
+                    detail=detail,
+                )
+            return self._unevaluable(
+                action,
+                reason=Reason.SNAPSHOT_UNREADABLE,
+                age=age,
+                version=snapshot.mandate_version_id,
+                enforcement=snapshot.mandate_enforcement,
+                posture=snapshot.enforcement_posture,
+                detail=detail,
             )
 
         # W-7 TODO: this is deliberately coarse. `reassessment_required` is a
