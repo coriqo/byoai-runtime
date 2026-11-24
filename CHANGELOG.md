@@ -33,7 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so pinned tools are refused under `enforce` and flagged under `shadow`. A
   pinned tool that cannot be checked in time (not seen, failed or timed-out
   fetch, stale list) follows `on_drift`, not `on_unpinned`; a name listed twice
-  differently to the host counts as drift. Under `enforce`, `coriqo-mcp` refuses to start without
+  differently to the host, on one page or across the pages of one list, counts as drift. Under `enforce`, `coriqo-mcp` refuses to start without
   `--server` when the mandate pins tools.
 - The mandate file reader is now at format revision 1.4 (accepts `tool_pins`,
   asset scope and payment limits) and the golden tool-hash vectors are vendored

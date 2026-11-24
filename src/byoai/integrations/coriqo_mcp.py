@@ -191,6 +191,12 @@ def _safe_names(names: Iterable[str]) -> list[str]:
     return [safe_name(n) for n in list(names)[:8]]
 
 
+def _no_cursor(msg: Any) -> bool:
+    """True for a ``tools/list`` request that starts a list (no cursor)."""
+    params = msg.get("params") if isinstance(msg, dict) else None
+    return not (isinstance(params, dict) and params.get("cursor"))
+
+
 def _call_name(msg: Any) -> str | None:
     """The tool a ``tools/call`` message names, if it names one."""
     if not _is_request(msg, "tools/call"):
@@ -430,8 +436,11 @@ class Interposer:
                     hashes = None
                 shown[t["name"]] = None if t["name"] in ambiguous else hashes
         if inventory is not None and self.pins_active():
-            for name, hashes in shown.items():
-                inventory.note_host_seen(name, hashes)
+            for t in tools:
+                if isinstance(t, dict) and isinstance(t.get("name"), str):
+                    inventory.note_host_seen(t["name"], hash_tool(t))
+            # Ambiguity is tracked across the pages of one list, not just here.
+            ambiguous |= {n for n in shown if inventory.host_ambiguous(n)}
         names = [t.get("name") for t in tools if isinstance(t, dict)]
         offered = set(self.gate.offered_tools(n for n in names if isinstance(n, str)))
         kept = [t for t in tools if isinstance(t, dict) and t.get("name") in offered]
@@ -566,6 +575,8 @@ class _StdioSession:
                 replies.append(reply)
             if not go:
                 continue
+            if _is_request(msg, "tools/list") and _no_cursor(msg):
+                self.inventory.reset_host_seen()
             if _is_request(msg, "tools/list") and "id" in msg:
                 key = _id_key(msg["id"])
                 self._lists[key] = self._lists.get(key, 0) + 1
@@ -1317,6 +1328,8 @@ class HttpInterposer:
                     replies.append(reply)
                 if not go:
                     continue
+                if inventory is not None and _is_request(msg, "tools/list") and _no_cursor(msg):
+                    inventory.reset_host_seen()
                 if _is_request(msg, "tools/list") and "id" in msg:
                     list_ids.add(_id_key(msg["id"]))
                 kept.append(msg)

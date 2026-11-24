@@ -1775,12 +1775,15 @@ Hashes use RFC 8785 canonical JSON.
   nothing is checked against the old list.
 - The host and the runtime can be shown different lists. The runtime keeps, per
   session, the hash of each tool as it appeared in the host's own `tools/list`
-  answers. A call to a tool whose host-seen hash differs from the one the
+  answers, across all pages of one list. A call to a tool whose host-seen hash differs from the one the
   runtime fetched (or, when it could not fetch, from the pin) is drift, follows
   `on_drift`, and the record's
   `definition_sha256` is the host-seen hash. A name the host's own list shows
-  twice with different definitions is ambiguous: it counts as drift, and under
-  `enforce` with `refuse` every entry of it is hidden. A `list_changed` clears what the
+  twice with different definitions, on one page or on different pages of one
+  list, is ambiguous: it counts as drift, and under `enforce` with `refuse`
+  every later entry of it is hidden (an entry on a page already sent cannot be
+  taken back). The state resets when the host lists again from the first page
+  (a `tools/list` without a cursor) and on a `list_changed`. A `list_changed` clears what the
   host saw until it lists again.
 - Verdicts. Matching hashes (definition and annotations): allowed as before.
   A different definition or annotations hash: `on_drift`. A tool the mandate

@@ -127,6 +127,9 @@ class ToolInventory:
         #: What the host was shown for each tool in its own tools/list answers
         #: (``None``: shown a definition that cannot be hashed).
         self._host_seen: dict[str, ToolHashes | None] = {}
+        #: Names the host's list showed with different definitions (possibly on
+        #: different pages of one list).
+        self._host_ambiguous: set[str] = set()
         self._again = False
         self._tools: dict[str, ToolHashes | None] = {}
         self._fetched_at: float | None = None
@@ -162,9 +165,25 @@ class ToolInventory:
         return self._disabled
 
     def note_host_seen(self, name: str, hashes: ToolHashes | None) -> None:
-        """Remember what the host was shown for ``name`` (bounded)."""
-        if name in self._host_seen or len(self._host_seen) < MAX_TOOLS:
+        """Remember what the host was shown for ``name`` (bounded). A name shown
+        again with a different hash, on the same page or a later page of the
+        same list, becomes ambiguous: it matches no pin."""
+        if name in self._host_ambiguous:
+            return
+        if name in self._host_seen:
+            if self._host_seen[name] != hashes:
+                self._host_seen[name] = None
+                self._host_ambiguous.add(name)
+        elif len(self._host_seen) < MAX_TOOLS:
             self._host_seen[name] = hashes
+
+    def host_ambiguous(self, name: str) -> bool:
+        return name in self._host_ambiguous
+
+    def reset_host_seen(self) -> None:
+        """The host starts a new list (a ``tools/list`` with no cursor)."""
+        self._host_seen.clear()
+        self._host_ambiguous.clear()
 
     def host_seen(self, name: str) -> tuple[bool, ToolHashes | None]:
         """``(seen, hashes)`` for what the host was last shown for ``name``."""
@@ -203,7 +222,7 @@ class ToolInventory:
     def mark_changed(self) -> None:
         """The server said its tools changed: everything seen is out of date."""
         self._stale = True
-        self._host_seen.clear()  # the host must list again before this is compared
+        self.reset_host_seen()  # the host must list again before this is compared
         self.request_refresh()
 
     def request_refresh(self) -> None:

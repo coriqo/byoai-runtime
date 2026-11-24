@@ -1174,3 +1174,86 @@ def test_the_host_seen_hash_is_compared_even_when_the_runtime_could_not_fetch():
     assert check is not None and check.status == "drift"
     assert check.definition_sha256 == tool_definition_sha256(DRIFTED_SEARCH)
     assert "host was shown" in (check.detail or "")
+
+
+# -- one list, several pages --------------------------------------------------------
+
+
+class PagedHost(PinUpstream):
+    """The host's pages (page size 1) show ``search`` twice; the runtime's own
+    fetch sees the pinned list."""
+
+    def __init__(self, host_list: list) -> None:
+        super().__init__("json", LIVE, page=1)
+        self.host_list = host_list
+
+    async def intercept(self, headers, msg, send):
+        if isinstance(msg, dict) and msg.get("method") == "tools/list":
+            own = str(msg.get("id", "")).startswith(PIN_ID_PREFIX)
+            self.tools = LIVE if own else self.host_list
+        return False
+
+
+async def list_pages(front) -> list[str]:
+    names: list[str] = []
+    cursor = None
+    for i in range(1, 10):
+        params = {} if cursor is None else {"cursor": cursor}
+        r = await front.post("/mcp", json={"jsonrpc": "2.0", "id": i, "method": "tools/list",
+                                           "params": params}, headers=SESSION)
+        result = r.json()["result"]
+        names += [t["name"] for t in result["tools"]]
+        cursor = result.get("nextCursor")
+        if not cursor:
+            return names
+    raise AssertionError("never ended")
+
+
+SECOND = tool("search", "second page, different", annotations={"readOnlyHint": True})
+
+
+@pytest.mark.parametrize(("mode", "isError"), [("observe", False), ("enforce", True)])
+async def test_a_name_on_two_pages_with_different_hashes_is_drift(mode, isError):
+    upstream = PagedHost([SEARCH, TRANSFER, SECOND])
+    _, front = http_pair(pin_gate(mode=mode), upstream)
+    async with front:
+        await start_session(front)
+        names = await list_pages(front)
+        # Under enforce the later entry is hidden; the earlier page was already sent.
+        assert names == (["search", "transfer_funds"] if mode == "enforce"
+                         else ["search", "transfer_funds", "search"])
+        r = await front.post("/mcp", json=call("search", 50), headers=SESSION)
+        assert r.json()["result"]["isError"] is isError
+
+
+async def test_a_name_on_two_pages_with_the_same_hash_is_fine_and_a_new_first_page_resets():
+    upstream = PagedHost([SEARCH, TRANSFER, SEARCH])
+    _, front = http_pair(pin_gate(), upstream)
+    async with front:
+        await start_session(front)
+        await list_pages(front)
+        assert (await front.post("/mcp", json=call("search", 50), headers=SESSION)
+                ).json()["result"]["isError"] is False
+        upstream.host_list = [SEARCH, TRANSFER, SECOND]
+        await list_pages(front)
+        assert (await front.post("/mcp", json=call("search", 51), headers=SESSION)
+                ).json()["result"]["isError"] is True
+        upstream.host_list = [SEARCH, TRANSFER]
+        await list_pages(front)  # a fresh first page forgets the ambiguity
+        assert (await front.post("/mcp", json=call("search", 52), headers=SESSION)
+                ).json()["result"]["isError"] is False
+
+
+def test_inventory_ambiguity_spans_pages_and_resets():
+    from byoai.recorder.tool_pins import hash_tool
+
+    inv = ToolInventory()
+    inv.note_host_seen("search", hash_tool(SEARCH))
+    inv.note_host_seen("search", hash_tool(SEARCH))
+    assert not inv.host_ambiguous("search")
+    inv.note_host_seen("search", hash_tool(SECOND))
+    assert inv.host_ambiguous("search") and inv.host_seen("search") == (True, None)
+    inv.note_host_seen("search", hash_tool(SEARCH))  # does not undo it
+    assert inv.host_seen("search") == (True, None)
+    inv.reset_host_seen()
+    assert inv.host_seen("search") == (False, None)
