@@ -126,6 +126,22 @@ def snapshot_payload(normalised: Mapping[str, Any], *, sha256: str) -> dict[str,
         **({"stop_grace_s": normalised["stop_grace_s"]} if normalised.get("stop_grace_s") is not None else {}),
         "status": "active",
         "scope_source": "mandate_file",
+        # v1.2: decimal strings in the document, numbers in the snapshot.
+        **{
+            key: float(normalised[key])
+            for key in ("max_transaction_usd_per_day", "max_transaction_usd")
+            if normalised.get(key) is not None
+        },
+        # v1.3
+        **({"asset_scope": dict(normalised["asset_scope"])} if normalised.get("asset_scope") else {}),
+        # v1.4: passed through unchanged. This release does not enforce pins,
+        # so the snapshot declares them required and the gate applies its
+        # posture to a snapshot it cannot evaluate rather than ignoring them.
+        **(
+            {"tool_pins": normalised["tool_pins"], "required_fields": ["tool_pins"]}
+            if normalised.get("tool_pins")
+            else {}
+        ),
     }
 
 

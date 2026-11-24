@@ -1531,7 +1531,13 @@ Coriqo account: `mode: shadow`/`enforce` map to `observe`/`enforce`,
 byte-for-byte as `byoai/recorder/mandate_format.py` (YAML needs PyYAML; JSON
 needs nothing), and re-read on the refresh schedule; an unreadable or invalid
 file keeps the last good copy until it is stale. `MandateGate(default_posture=…,
-default_max_staleness_s=…)` overrides them in code.
+default_max_staleness_s=…)` overrides them in code. Every field the reader
+accepts reaches the gate: `max_transaction_usd` and `max_transaction_usd_per_day`
+(format v1.2) and `asset_scope` (v1.3) are enforced as they are from Coriqo's
+snapshot. `tool_pins` (v1.4) is not enforced by this release: a file that sets
+it makes the gate unable to evaluate, so `on_stale_snapshot: fail_closed` with
+`mode: enforce` denies every call and the other combinations allow and flag it,
+with a reason that says to upgrade byoai-runtime.
 
 #### `@governed_tool` — enforcing at the call site (`byoai.recorder.governed_tool`)
 
