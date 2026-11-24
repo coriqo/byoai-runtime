@@ -337,17 +337,18 @@ async def test_a_hold_that_times_out_is_never_a_pass(tmp_path, monkeypatch):
     rows = await h.finish()
     assert h.ran_tools() == []
     assert "tools/list" in h.server_methods()  # the runtime did ask; the answer was too late
-    assert (rows[0]["verdict"], rows[0]["pin_status"]) == ("blocked", "unpinned")
+    assert (rows[0]["verdict"], rows[0]["pin_status"]) == ("blocked", "drift")
     assert "definition_sha256" not in rows[0]
 
 
-async def test_a_hold_that_times_out_is_flagged_where_the_policy_flags(tmp_path, monkeypatch):
-    h = await host(tmp_path, monkeypatch, pin_gate(on_unpinned="flag"), hold=0.3, delay=1.5)
+async def test_a_hold_that_times_out_is_flagged_where_on_drift_flags(tmp_path, monkeypatch):
+    h = await host(tmp_path, monkeypatch, pin_gate(on_drift="flag", on_unpinned="refuse"),
+                   hold=0.3, delay=1.5)
     await h.handshake()
     h.send(call("search", 1))
     await h.reply(1)
     rows = await h.finish()
-    assert (rows[0]["verdict"], rows[0]["pin_status"]) == ("flagged", "unpinned")
+    assert (rows[0]["verdict"], rows[0]["pin_status"]) == ("flagged", "drift")
 
 
 async def test_the_runtimes_ids_never_collide_with_the_hosts_and_never_reach_it(tmp_path, monkeypatch):
@@ -805,6 +806,57 @@ async def test_http_legacy_sse_stops_fetching_says_so_once_and_never_allows(capl
     assert len(said) == 1
 
 
+@pytest.mark.parametrize(("mode", "isError"), [("enforce", True), ("observe", False)])
+async def test_http_legacy_sse_refuses_pinned_tools_under_enforce_and_flags_them_under_shadow(
+        mode, isError):
+    # on_unpinned flags, so a refusal here can only come from the pin being unchecked.
+    gate = pin_gate(mode=mode, on_drift="refuse", on_unpinned="flag")
+    upstream = Legacy("json")
+    _, front = http_pair(gate, upstream)
+    async with front:
+        await start_session(front)
+        r = await front.post("/mcp", json=call("search", 1), headers=SESSION)
+        assert r.json()["result"]["isError"] is isError
+
+
+async def test_a_pinned_tool_the_server_does_not_list_is_refused_under_enforce(tmp_path, monkeypatch):
+    # on_unpinned flags; only the pin can make this a refusal.
+    h = await host(tmp_path, monkeypatch, pin_gate(on_unpinned="flag"), [TRANSFER])
+    await h.handshake()
+    h.send(call("search", 1))
+    assert (await h.reply(1))["result"]["isError"] is True
+    rows = await h.finish()
+    assert h.ran_tools() == []
+    assert (rows[0]["verdict"], rows[0]["pin_status"]) == ("blocked", "drift")
+
+
+async def test_an_unpinned_tool_that_is_not_listed_follows_on_unpinned(tmp_path, monkeypatch):
+    gate = pin_gate([SEARCH], on_drift="refuse", on_unpinned="flag")
+    h = await host(tmp_path, monkeypatch, gate, [SEARCH])
+    await h.handshake()
+    h.send(call("transfer_funds", 1))
+    await h.reply(1)
+    rows = await h.finish()
+    assert (rows[0]["verdict"], rows[0]["pin_status"]) == ("flagged", "unpinned")
+
+
+@pytest.mark.parametrize(("mode", "verdict"), [("enforce", "blocked"), ("observe", "flagged")])
+async def test_a_name_listed_twice_to_the_host_with_different_definitions_is_drift(
+        tmp_path, monkeypatch, mode, verdict):
+    twice = [SEARCH, tool("search", "second, different"), TRANSFER]
+    h = Host(pin_gate(mode=mode), tmp_path, monkeypatch, LIVE, host_tools=twice)
+    await h.start()
+    await h.handshake()
+    h.send({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+    names = [t["name"] for t in (await h.reply(1))["result"]["tools"]]
+    # Under enforce every entry of the ambiguous name is hidden.
+    assert names == (["transfer_funds"] if mode == "enforce" else ["search", "search", "transfer_funds"])
+    h.send(call("search", 2))
+    await h.reply(2)
+    rows = await h.finish()
+    assert (rows[0]["verdict"], rows[0]["pin_status"]) == (verdict, "drift")
+
+
 class Ordered(PinUpstream):
     def __init__(self) -> None:
         super().__init__("json")
@@ -1110,3 +1162,15 @@ async def test_a_pinned_tool_that_has_gone_is_logged_by_sanitized_name(tmp_path,
         await h.finish()
     text = " ".join(r.getMessage() for r in caplog.records)
     assert "removed: gone_tool" in text
+
+
+def test_the_host_seen_hash_is_compared_even_when_the_runtime_could_not_fetch():
+    interposer = Interposer(pin_gate(on_drift="flag"), pin_server="srv")
+    inventory = interposer.new_inventory()
+    from byoai.recorder.tool_pins import hash_tool
+
+    inventory.note_host_seen("search", hash_tool(DRIFTED_SEARCH))
+    check = interposer._pin_check("search", inventory, True)
+    assert check is not None and check.status == "drift"
+    assert check.definition_sha256 == tool_definition_sha256(DRIFTED_SEARCH)
+    assert "host was shown" in (check.detail or "")

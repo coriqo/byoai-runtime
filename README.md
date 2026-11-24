@@ -342,7 +342,8 @@ coriqo-mcp --mandate coriqo.mandate.yaml --server payments-mcp -- node server.js
 compares. A changed or unpinned tool is flagged under `shadow`; under `enforce`
 it is hidden from `tools/list` and refused, as the policy says. A call
 whose tool could not be checked in time (`--pin-hold-timeout`, default 10
-seconds) counts as unpinned. Records gain `pin_status` and `definition_sha256`.
+seconds) is treated as changed if it has a pin (refused under `enforce`) and as
+unpinned if it has none. Records gain `pin_status` and `definition_sha256`.
 With pins and `enforce`, `--server` is required. What it checks and cannot
 tell: CONFIGURATION.md, "Tool pinning".
 

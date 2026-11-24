@@ -274,19 +274,25 @@ class Interposer:
         if inventory is not None and settled:
             live, hashable = inventory.lookup(tool)
         check = evaluate_pin(snapshot, self.pin_server, tool, live, hashable=hashable)
-        if check is None or inventory is None or not settled or self.pin_server is None or live is None:
+        if check is None or inventory is None or not settled or self.pin_server is None:
             return check
         seen, host = inventory.host_seen(tool)
-        if seen and host != live:
-            # The host was shown a different definition than the runtime fetched
-            # (a server that answers clients differently): that is drift, and
+        if not seen:
+            return check
+        pin = (snapshot.tool_pins.get(self.pin_server) or {}).get(tool)
+        reference = live
+        if reference is None and pin is not None:
+            reference = ToolHashes(pin["definition_sha256"], pin.get("annotations_sha256"))
+        if host is None or (reference is not None and host != reference):
+            # The host was shown a definition that cannot be hashed, that is
+            # listed twice differently, or that differs from what the runtime
+            # fetched (or, when it could not fetch, from the pin): drift, and
             # the hash on the record is the one the host saw.
-            on_drift = pin_actions(snapshot)[0]
-            name = safe_name(tool)
             return PinCheck(
-                PinStatus.DRIFT, None if host is None else host.definition_sha256, on_drift,
-                f"tool {name} on server {safe_name(self.pin_server)}: the host was shown "
-                "a different definition than the one the runtime fetched",
+                PinStatus.DRIFT, None if host is None else host.definition_sha256,
+                pin_actions(snapshot)[0],
+                f"tool {safe_name(tool)} on server {safe_name(self.pin_server)}: the host was "
+                "shown a different definition than the one the runtime holds",
             )
         return check
 
@@ -412,10 +418,20 @@ class Interposer:
         if not isinstance(result, dict) or not isinstance(result.get("tools"), list):
             return False
         tools = result["tools"]
+        ambiguous: set[str] = set()
+        shown: dict[str, ToolHashes | None] = {}
+        for t in tools:
+            if isinstance(t, dict) and isinstance(t.get("name"), str):
+                hashes = hash_tool(t)
+                if t["name"] in shown and shown[t["name"]] != hashes:
+                    # One name listed twice with different definitions: a call
+                    # cannot say which, so it matches no pin.
+                    ambiguous.add(t["name"])
+                    hashes = None
+                shown[t["name"]] = None if t["name"] in ambiguous else hashes
         if inventory is not None and self.pins_active():
-            for t in tools:
-                if isinstance(t, dict) and isinstance(t.get("name"), str):
-                    inventory.note_host_seen(t["name"], hash_tool(t))
+            for name, hashes in shown.items():
+                inventory.note_host_seen(name, hashes)
         names = [t.get("name") for t in tools if isinstance(t, dict)]
         offered = set(self.gate.offered_tools(n for n in names if isinstance(n, str)))
         kept = [t for t in tools if isinstance(t, dict) and t.get("name") in offered]
@@ -423,7 +439,7 @@ class Interposer:
         if hidden:
             log.info("coriqo-mcp: hid %d tool(s) the mandate does not allow from tools/list", hidden)
         before = len(kept)
-        kept = self._without_refused_pins(kept)
+        kept = self._without_refused_pins(kept, ambiguous)
         if len(kept) != before:
             log.info("coriqo-mcp: hid %d tool(s) whose pin the mandate refuses from tools/list",
                      before - len(kept))
@@ -432,7 +448,7 @@ class Interposer:
         msg["result"] = {**result, "tools": kept}
         return True
 
-    def _without_refused_pins(self, tools: list[Any]) -> list[Any]:
+    def _without_refused_pins(self, tools: list[Any], ambiguous: set[str] | None = None) -> list[Any]:
         """Under enforcement, a tool whose pin is refused (changed, or allowed
         but unpinned) is not shown to the model. Each tool is hashed as it is
         listed, so the hiding follows what the host would be shown."""
@@ -441,7 +457,7 @@ class Interposer:
             return tools
         kept = []
         for tool in tools:
-            hashes = hash_tool(tool)
+            hashes = None if tool.get("name") in (ambiguous or ()) else hash_tool(tool)
             check = evaluate_pin(
                 snapshot, self.pin_server, tool.get("name"), hashes, hashable=hashes is not None
             )

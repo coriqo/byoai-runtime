@@ -241,7 +241,7 @@ class ToolInventory:
             await asyncio.wait_for(asyncio.shield(task), self.hold_timeout_s)
         except asyncio.TimeoutError:
             log.warning("coriqo-mcp: the tool list was not refreshed in %.0fs; "
-                        "the call is treated as unpinned", self.hold_timeout_s)
+                        "the call is treated as not checked", self.hold_timeout_s)
             return False
         return True
 

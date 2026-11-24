@@ -29,8 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one upstream are spaced at least 1 second apart across sessions; inventories
   are kept per session and credential fingerprint; a tool the host was shown
   differently from what the runtime fetched counts as drift; and the legacy
-  two-endpoint SSE transport (a 202 to the runtime's request) stops fetching
-  and leaves every tool unpinned. Under `enforce`, `coriqo-mcp` refuses to start without
+  two-endpoint SSE transport (a 202 to the runtime's request) stops fetching,
+  so pinned tools are refused under `enforce` and flagged under `shadow`. A
+  pinned tool that cannot be checked in time (not seen, failed or timed-out
+  fetch, stale list) follows `on_drift`, not `on_unpinned`; a name listed twice
+  differently to the host counts as drift. Under `enforce`, `coriqo-mcp` refuses to start without
   `--server` when the mandate pins tools.
 - The mandate file reader is now at format revision 1.4 (accepts `tool_pins`,
   asset scope and payment limits) and the golden tool-hash vectors are vendored

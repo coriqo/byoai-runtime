@@ -1749,11 +1749,14 @@ Hashes use RFC 8785 canonical JSON.
   client's credentials. At most 64 inventories are kept. The legacy
   two-endpoint SSE transport answers on a separate stream and is not supported
   for this fetch: when the upstream answers the runtime's request with 202,
-  `coriqo-mcp` stops fetching, logs that once, and every tool counts as
-  unpinned (refused or flagged by `on_unpinned`, never treated as matching).
+  `coriqo-mcp` stops fetching (for every session of that upstream) and logs
+  that once. Because the runtime cannot read its own answers on that
+  transport, no tool can be checked: **pinned tools are refused under
+  `enforce` and flagged under `shadow`** (they follow `on_drift`), and tools
+  with no pin follow `on_unpinned`.
   A host that was already initialized before `coriqo-mcp` started sends no new
-  `notifications/initialized`, so its tools count as unpinned until it
-  reconnects.
+  `notifications/initialized`, so its tools cannot be checked until it
+  reconnects, with the same result.
 - Its requests use string ids starting `byoai-pin-` and a random per-process
   token, and the answers never reach the host. A host request whose id starts
   `byoai-pin-` is refused with `-32600`, so ids cannot collide. The refetch
@@ -1764,15 +1767,20 @@ Hashes use RFC 8785 canonical JSON.
   the server. A failed fetch backs off 2, 4, 8 ... up to 300 seconds (and honours
   `Retry-After` over HTTP), and there is one request in flight at a time.
 - A `tools/call` is **held** while a fetch is running or needed, up to
-  `--pin-hold-timeout`. If the wait runs out, or the tool was never seen, the
-  tool counts as **unpinned**: it is refused or flagged by `on_unpinned`, never
-  passed unchecked. After a `list_changed` nothing is checked against the old
-  list.
+  `--pin-hold-timeout`. If the wait runs out, the fetch failed, or the tool
+  was never seen, it cannot be checked. A tool that **has a pin** then follows
+  `on_drift` (refused under `enforce`, flagged under `shadow`), and the reason
+  says it could not be checked in time; a tool with **no pin** follows
+  `on_unpinned`. Neither is ever passed as a match. After a `list_changed`
+  nothing is checked against the old list.
 - The host and the runtime can be shown different lists. The runtime keeps, per
   session, the hash of each tool as it appeared in the host's own `tools/list`
   answers. A call to a tool whose host-seen hash differs from the one the
-  runtime fetched is drift, follows `on_drift`, and the record's
-  `definition_sha256` is the host-seen hash. A `list_changed` clears what the
+  runtime fetched (or, when it could not fetch, from the pin) is drift, follows
+  `on_drift`, and the record's
+  `definition_sha256` is the host-seen hash. A name the host's own list shows
+  twice with different definitions is ambiguous: it counts as drift, and under
+  `enforce` with `refuse` every entry of it is hidden. A `list_changed` clears what the
   host saw until it lists again.
 - Verdicts. Matching hashes (definition and annotations): allowed as before.
   A different definition or annotations hash: `on_drift`. A tool the mandate

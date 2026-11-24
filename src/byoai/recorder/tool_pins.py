@@ -137,12 +137,21 @@ def evaluate_pin(
             PinStatus.DRIFT, None, on_drift,
             f"tool {name} on server {where} could not be hashed, so it cannot match its pin",
         )
+    pin = (pins.get(server) or {}).get(tool)
     if live is None:
+        if pin is not None:
+            # Pinned, but its definition could not be read and checked (not
+            # listed, fetch failed or timed out, list out of date): it follows
+            # on_drift, never the unpinned policy, so it is not let through
+            # unchecked.
+            return PinCheck(
+                PinStatus.DRIFT, None, on_drift,
+                f"tool {name} on server {where} has a pin but could not be checked in time",
+            )
         return PinCheck(
             PinStatus.UNPINNED, None, on_unpinned,
             f"tool {name} on server {where} was not seen and checked in time, so it counts as unpinned",
         )
-    pin = (pins.get(server) or {}).get(tool)
     if pin is None:
         return PinCheck(
             PinStatus.UNPINNED, live.definition_sha256, on_unpinned,

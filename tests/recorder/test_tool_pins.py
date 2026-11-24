@@ -82,9 +82,17 @@ def test_match_drift_unpinned_and_unseen():
     assert "annotations changed" in evaluate_pin(s, "srv", "search", ann).detail
     assert evaluate_pin(s, "srv", "other", H).status == PinStatus.UNPINNED
     assert evaluate_pin(s, "elsewhere", "search", H).status == PinStatus.UNPINNED
+    # Pinned but not checked (not seen, fetch failed, timed out): on_drift, never
+    # on_unpinned, so it is not let through unchecked.
     unseen = evaluate_pin(s, "srv", "search", None)
     assert (unseen.status, unseen.action, unseen.definition_sha256) == (
-        PinStatus.UNPINNED, PinAction.FLAG, None)
+        PinStatus.DRIFT, PinAction.REFUSE, None)
+    assert "could not be checked" in unseen.detail
+    # No pin and not seen: on_unpinned, as before.
+    ghost = evaluate_pin(s, "srv", "ghost", None)
+    assert (ghost.status, ghost.action) == (PinStatus.UNPINNED, PinAction.FLAG)
+    shadow = snap(mandate_enforcement="observe", tool_pin_policy=None, required_fields=["tool_pins"])
+    assert evaluate_pin(shadow, "srv", "search", None).action == PinAction.FLAG
     assert evaluate_pin(s, "srv", "search", None, hashable=False).status == PinStatus.DRIFT
 
 
