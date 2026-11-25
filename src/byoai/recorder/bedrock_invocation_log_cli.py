@@ -24,10 +24,12 @@ import signal
 import sys
 import threading
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from .bedrock_invocation_log_source import (
     STATE_DB_NAME,
     AwsLogSource,
+    ConfigFetcher,
     ReaderBusy,
     SourceError,
     StateDB,
@@ -37,6 +39,10 @@ from .bedrock_invocation_log_source import (
     reader_lock,
     s3_max_bytes_from_env,
 )
+from .redact import PayloadMode
+
+if TYPE_CHECKING:
+    from .integration import Recorder
 
 log = logging.getLogger("byoai.recorder.bedrock_log")
 
@@ -97,17 +103,8 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
-    from .redact import PayloadMode
-
-    mode_raw = os.getenv("BYOAI_RECORDER_PAYLOAD_MODE", PayloadMode.REDACTED.value)
-    try:
-        mode = PayloadMode(mode_raw)
-    except ValueError:
-        print(
-            f"BYOAI_RECORDER_PAYLOAD_MODE={mode_raw!r} is not a payload mode; use one of "
-            f"{', '.join(m.value for m in PayloadMode)}.",
-            file=sys.stderr,
-        )
+    mode = _payload_mode()
+    if mode is None:
         return 2
     try:
         source = AwsLogSource.from_environment(
@@ -121,49 +118,70 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.check:
         return _check(source)
+    try:
+        return _run(args, source, mode)
+    except ReaderBusy as exc:
+        print(str(exc), file=sys.stderr)
+        return 3
 
+
+def _payload_mode() -> PayloadMode | None:
+    """BYOAI_RECORDER_PAYLOAD_MODE (redacted when unset); None, with the reason, if invalid."""
+    mode_raw = os.getenv("BYOAI_RECORDER_PAYLOAD_MODE", PayloadMode.REDACTED.value)
+    try:
+        return PayloadMode(mode_raw)
+    except ValueError:
+        print(
+            f"BYOAI_RECORDER_PAYLOAD_MODE={mode_raw!r} is not a payload mode; use one of "
+            f"{', '.join(m.value for m in PayloadMode)}.",
+            file=sys.stderr,
+        )
+        return None
+
+
+def _run(args: argparse.Namespace, source: AwsLogSource, mode: PayloadMode) -> int:
+    """Sweep once or in a loop, holding this recorder directory for as long as it runs."""
     from .. import __version__
-    from .enroll import load_enrollment_state
     from .integration import Recorder, default_recorder_dir
 
     directory = Path(args.dir) if args.dir else default_recorder_dir()
     directory.mkdir(parents=True, exist_ok=True)
-    try:
-        with reader_lock(directory):
-            recorder = Recorder(dir=directory, payload_mode=mode)
-            enrollment = load_enrollment_state(directory)
-            fetch = (
-                coriqo_config_fetcher(
-                    base_url=enrollment.coriqo_base_url,
-                    tenant_slug=enrollment.tenant_slug,
-                    signer=recorder.key,
-                )
-                if enrollment is not None
-                else None
-            )
-            if enrollment is None:
-                log.warning(
-                    "bedrock log reader: this directory is not enrolled; sealing locally with "
-                    "Coriqo's default settings, nothing is shipped (run byoai-recorder-enroll)"
-                )
-            state = StateDB(directory / STATE_DB_NAME)
-            sweeper = Sweeper(
-                recorder=recorder,
-                source=source,
-                state=state,
-                fetch_config=fetch,
-                post_status=coriqo_status_poster(recorder),
-                s3_max_bytes=s3_max_bytes_from_env(),
-                runtime_version=__version__,
-            )
-            try:
-                return _once(sweeper, recorder) if args.once else _loop(sweeper)
-            finally:
-                state.close()
-                recorder.close(final_ship=True)
-    except ReaderBusy as exc:
-        print(str(exc), file=sys.stderr)
-        return 3
+    with reader_lock(directory):
+        recorder = Recorder(dir=directory, payload_mode=mode)
+        fetch_config = _config_fetcher(directory, recorder)
+        state = StateDB(directory / STATE_DB_NAME)
+        sweeper = Sweeper(
+            recorder=recorder,
+            source=source,
+            state=state,
+            fetch_config=fetch_config,
+            post_status=coriqo_status_poster(recorder),
+            s3_max_bytes=s3_max_bytes_from_env(),
+            runtime_version=__version__,
+        )
+        try:
+            return _once(sweeper, recorder) if args.once else _loop(sweeper)
+        finally:
+            state.close()
+            recorder.close(final_ship=True)
+
+
+def _config_fetcher(directory: Path, recorder: Recorder) -> ConfigFetcher | None:
+    """Fetches Coriqo's capture settings for an enrolled directory; None (and a warning) if not."""
+    from .enroll import load_enrollment_state
+
+    enrollment = load_enrollment_state(directory)
+    if enrollment is None:
+        log.warning(
+            "bedrock log reader: this directory is not enrolled; sealing locally with "
+            "Coriqo's default settings, nothing is shipped (run byoai-recorder-enroll)"
+        )
+        return None
+    return coriqo_config_fetcher(
+        base_url=enrollment.coriqo_base_url,
+        tenant_slug=enrollment.tenant_slug,
+        signer=recorder.key,
+    )
 
 
 def _check(source: AwsLogSource) -> int:

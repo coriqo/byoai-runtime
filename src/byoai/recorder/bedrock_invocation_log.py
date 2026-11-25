@@ -414,67 +414,78 @@ def _converse_stream_as_sse(events: list) -> Iterable[bytes]:
     accumulation, tool-input parsing and abort handling for both shapes."""
     opened: set[int] = set()
     for item in events:
-        if not isinstance(item, dict):
-            continue
-        if "messageStart" in item:
-            yield _sse({"type": "message_start", "message": {"role": "assistant", "content": []}})
-        elif "contentBlockStart" in item:
-            start = item["contentBlockStart"] or {}
-            index = start.get("contentBlockIndex", 0)
-            use = (start.get("start") or {}).get("toolUse") or {}
+        if isinstance(item, dict):
+            yield from _converse_event_as_sse(item, opened)
+
+
+def _converse_event_as_sse(item: dict, opened: set[int]) -> Iterable[bytes]:
+    """The SSE frames for one Converse stream event; `opened` tracks the content blocks begun."""
+    if "messageStart" in item:
+        yield _sse({"type": "message_start", "message": {"role": "assistant", "content": []}})
+    elif "contentBlockStart" in item:
+        yield _converse_block_start(item["contentBlockStart"] or {}, opened)
+    elif "contentBlockDelta" in item:
+        yield from _converse_block_delta(item["contentBlockDelta"] or {}, opened)
+    elif "contentBlockStop" in item:
+        index = (item["contentBlockStop"] or {}).get("contentBlockIndex", 0)
+        opened.discard(index)
+        yield _sse({"type": "content_block_stop", "index": index})
+    elif "messageStop" in item:
+        stop = (item["messageStop"] or {}).get("stopReason")
+        yield _sse({"type": "message_delta", "delta": {"stop_reason": stop}})
+        yield _sse({"type": "message_stop"})
+
+
+def _converse_block_start(start: dict, opened: set[int]) -> bytes:
+    index = start.get("contentBlockIndex", 0)
+    use = (start.get("start") or {}).get("toolUse") or {}
+    opened.add(index)
+    return _sse(
+        {
+            "type": "content_block_start",
+            "index": index,
+            "content_block": {
+                "type": "tool_use",
+                "id": use.get("toolUseId"),
+                "name": use.get("name"),
+                "input": {},
+            },
+        }
+    )
+
+
+def _converse_block_delta(delta_block: dict, opened: set[int]) -> Iterable[bytes]:
+    """A text delta opens its text block on first sight (Converse sends no start for text)."""
+    index = delta_block.get("contentBlockIndex", 0)
+    delta = delta_block.get("delta") or {}
+    if "text" in delta:
+        if index not in opened:
             opened.add(index)
             yield _sse(
                 {
                     "type": "content_block_start",
                     "index": index,
-                    "content_block": {
-                        "type": "tool_use",
-                        "id": use.get("toolUseId"),
-                        "name": use.get("name"),
-                        "input": {},
-                    },
+                    "content_block": {"type": "text", "text": ""},
                 }
             )
-        elif "contentBlockDelta" in item:
-            delta_block = item["contentBlockDelta"] or {}
-            index = delta_block.get("contentBlockIndex", 0)
-            delta = delta_block.get("delta") or {}
-            if "text" in delta:
-                if index not in opened:
-                    opened.add(index)
-                    yield _sse(
-                        {
-                            "type": "content_block_start",
-                            "index": index,
-                            "content_block": {"type": "text", "text": ""},
-                        }
-                    )
-                yield _sse(
-                    {
-                        "type": "content_block_delta",
-                        "index": index,
-                        "delta": {"type": "text_delta", "text": delta.get("text") or ""},
-                    }
-                )
-            elif isinstance(delta.get("toolUse"), dict):
-                yield _sse(
-                    {
-                        "type": "content_block_delta",
-                        "index": index,
-                        "delta": {
-                            "type": "input_json_delta",
-                            "partial_json": delta["toolUse"].get("input") or "",
-                        },
-                    }
-                )
-        elif "contentBlockStop" in item:
-            index = (item["contentBlockStop"] or {}).get("contentBlockIndex", 0)
-            opened.discard(index)
-            yield _sse({"type": "content_block_stop", "index": index})
-        elif "messageStop" in item:
-            stop = (item["messageStop"] or {}).get("stopReason")
-            yield _sse({"type": "message_delta", "delta": {"stop_reason": stop}})
-            yield _sse({"type": "message_stop"})
+        yield _sse(
+            {
+                "type": "content_block_delta",
+                "index": index,
+                "delta": {"type": "text_delta", "text": delta.get("text") or ""},
+            }
+        )
+    elif isinstance(delta.get("toolUse"), dict):
+        yield _sse(
+            {
+                "type": "content_block_delta",
+                "index": index,
+                "delta": {
+                    "type": "input_json_delta",
+                    "partial_json": delta["toolUse"].get("input") or "",
+                },
+            }
+        )
 
 
 def _id_slot(kind: str, tool_use_id: Any, position: Any) -> str:
@@ -584,13 +595,19 @@ def _flatten_assessments(value: Any) -> list:
 
 def _acted(assessments: list) -> bool:
     """Whether any policy item in these assessments blocked or masked something."""
-    for assessment in assessments:
-        for policy in assessment.values() if isinstance(assessment, dict) else ():
-            for items in policy.values() if isinstance(policy, dict) else ():
-                for item in items if isinstance(items, list) else ():
-                    if isinstance(item, dict) and item.get("action") in ("BLOCKED", "ANONYMIZED"):
-                        return True
-    return False
+    policies = [
+        policy
+        for assessment in assessments
+        if isinstance(assessment, dict)
+        for policy in assessment.values()
+        if isinstance(policy, dict)
+    ]
+    items = [
+        item for policy in policies for v in policy.values() if isinstance(v, list) for item in v
+    ]
+    return any(
+        isinstance(item, dict) and item.get("action") in ("BLOCKED", "ANONYMIZED") for item in items
+    )
 
 
 def _guardrail(trace: Any, stop_reason: str | None) -> dict | None:
@@ -615,6 +632,302 @@ def _guardrail(trace: Any, stop_reason: str | None) -> dict | None:
     }
 
 
+@dataclass
+class _Links:
+    """How a record's tool results join the calls the reader sealed before."""
+
+    linked_call: IndexedCall | None = None
+    refusals: dict[str, str] = field(default_factory=dict)
+    calls_for: dict[str, IndexedCall] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class _Sealer:
+    """Stamps every event of one record with its run, model, time and a deterministic id."""
+
+    record: InvocationRecord
+    session_id: str
+    trace_id: str
+    span_id: str
+    log_record_sha256: str
+    ts_device: str
+
+    def base(self, kind: str) -> PartialEvent:
+        return PartialEvent(
+            session_id=self.session_id,
+            kind=kind,
+            ts_device=self.ts_device,
+            ts_monotonic_ns=self.record.ts_ns,
+            tool_use_id=None,
+            tool_name=None,
+            payload={},
+            model=self.record.model_id,
+        )
+
+    def seal(
+        self, partial: PartialEvent, slot: str, order: int, extra: dict[str, Any]
+    ) -> PartialEvent:
+        record = self.record
+        payload = {
+            **partial.payload,
+            **extra,
+            "request_id": record.request_id,
+            "log_record_sha256": self.log_record_sha256,
+        }
+        return replace(
+            partial,
+            provider=PROVIDER,
+            model=record.model_id,
+            session_id=self.session_id,
+            trace_id=self.trace_id,
+            span_id=self.span_id,
+            parent_span_id=None,
+            continues_from=None,
+            ts_device=self.ts_device,
+            ts_monotonic_ns=record.ts_ns + max(order, 0),
+            payload=payload,
+            event_id="evt_"
+            + deterministic_id(record.account_id, record.region, record.request_id, slot)[:32],
+        )
+
+
+def _is_bodiless_error(record: InvocationRecord, shape: str | None) -> bool:
+    """Bedrock logs a call it refused (throttled, invalid, not found) with its errorCode and no
+    bodies at all. There is no shape to read, but the failed call is still evidence, in either
+    scope, because nothing in the record says whether it would have used a tool."""
+    return (
+        shape is None
+        and record.error_code is not None
+        and record.input_body is None
+        and record.output_body is None
+    )
+
+
+def _read_call(record: InvocationRecord, shape: str | None) -> tuple[dict, _Response, bool]:
+    """(request in the Anthropic shape, response, whether the response was streamed)."""
+    inp = record.input_body
+    if shape in (SHAPE_CONVERSE, SHAPE_CONVERSE_STREAM):
+        request = _converse_request(inp)
+    else:
+        request = inp if isinstance(inp, dict) else {"messages": []}
+    if shape == SHAPE_CONVERSE:
+        response = _converse_response(record.output_body)
+    elif shape == SHAPE_ANTHROPIC:
+        response = _anthropic_response(record.output_body)
+    else:
+        response = _Response({"content": []}, _stream_stop_reason(record.output_body or []))
+    return request, response, shape in (SHAPE_CONVERSE_STREAM, SHAPE_ANTHROPIC_STREAM)
+
+
+def _uses_tools(record: InvocationRecord, response: _Response, streamed: bool) -> bool:
+    """Whether the response calls a tool (a streamed one is read from its raw events)."""
+    if any(
+        isinstance(b, dict) and b.get("type") == "tool_use"
+        for b in response.body.get("content") or []
+    ):
+        return True
+    return streamed and any(
+        isinstance(i, dict)
+        and (
+            ((i.get("contentBlockStart") or {}).get("start") or {}).get("toolUse")
+            or (i.get("content_block") or {}).get("type") == "tool_use"
+        )
+        for i in record.output_body or []
+    )
+
+
+def _link(
+    record: InvocationRecord, cited: list[str], index: LinkIndex, gap_ms: int, result: Normalized
+) -> _Links:
+    """Join each cited tool result to its sealed call: same caller, within the link limit."""
+    links = _Links()
+    caller = (record.account_id, record.region, record.principal)
+    for tool_use_id in cited:
+        candidate = index.get(tool_use_id)
+        if candidate is None:
+            result.count("results_without_call")
+            continue
+        if (candidate.account, candidate.region, candidate.principal) != caller:
+            links.refusals[tool_use_id] = "caller"
+        elif not 0 <= record.ts_ms - candidate.ts_ms <= gap_ms:
+            links.refusals[tool_use_id] = "time"
+        else:
+            links.calls_for[tool_use_id] = candidate
+            if links.linked_call is None:
+                links.linked_call = candidate
+            elif candidate.session_id != links.linked_call.session_id:
+                result.count("link_conflicts")
+            continue
+        result.count("links_refused")
+    return links
+
+
+def _sealer(record: InvocationRecord, linked_call: IndexedCall | None) -> _Sealer:
+    """A linked record joins its call's run; any other record starts a run of its own."""
+    if linked_call is not None:
+        session_id, trace_id, span_id = (
+            linked_call.session_id,
+            linked_call.trace_id,
+            linked_call.span_id,
+        )
+    else:
+        account, region, rid = record.account_id, record.region, record.request_id
+        session_id = f"bil_{rid}"[:128]
+        trace_id = "tr_" + deterministic_id(account, region, "trace", rid)[:32]
+        span_id = "sp_" + deterministic_id(account, region, "span", rid)[:32]
+    return _Sealer(
+        record=record,
+        session_id=session_id,
+        trace_id=trace_id,
+        span_id=span_id,
+        log_record_sha256=hashlib.sha256(record.raw_message.encode("utf-8")).hexdigest(),
+        ts_device=format_ts_device(record.timestamp),
+    )
+
+
+def _session_start(
+    sealer: _Sealer,
+    links: _Links,
+    *,
+    log_group: str | None,
+    tools_offered: list[str],
+    tool_choice: str | None,
+    tool_config_sha256: str | None,
+    reader_config_sha256: str | None,
+) -> PartialEvent:
+    record = sealer.record
+    payload: dict[str, Any] = {
+        "source": PROVIDER,
+        "operation": record.operation,
+        "account_id": record.account_id,
+        "region": record.region,
+        "principal_arn": record.principal,
+        "model_id": record.model_id,
+        "log_group": log_group,
+        "tools_offered": tools_offered,
+        "tool_choice": tool_choice,
+        "tool_config_sha256": tool_config_sha256,
+        "request_metadata": record.request_metadata,
+        "log_schema_version": record.schema_version,
+        "reader_config_sha256": reader_config_sha256,
+        "linked": False,
+    }
+    if links.refusals:
+        payload["link_refused"] = sorted(set(links.refusals.values()))[0]
+    return sealer.seal(sealer.base(EventKind.SESSION_START.value), "session_start", 0, payload)
+
+
+def _seal_request_events(
+    request: dict, sealer: _Sealer, links: _Links, index: LinkIndex
+) -> list[PartialEvent]:
+    """The tool results the request carries, each marked linked to its call or not."""
+    sealed_events = []
+    for position, partial in enumerate(
+        extract_request_events(request, session_id=sealer.session_id)
+    ):
+        call = links.calls_for.get(partial.tool_use_id or "")
+        extra: dict[str, Any] = {"linked": call is not None}
+        if partial.tool_use_id in links.refusals:
+            extra["link_refused"] = links.refusals[partial.tool_use_id]
+        slot = _id_slot("tool_result", partial.tool_use_id, position)
+        sealed = sealer.seal(partial, slot, position, extra)
+        if call is not None:
+            sealed = replace(sealed, tool_name=call.tool_name)
+            index.mark_result_seen(call.tool_use_id)
+        sealed_events.append(sealed)
+    return sealed_events
+
+
+def _response_partials(
+    record: InvocationRecord, shape: str | None, response: _Response, streamed: bool,
+    session_id: str, result: Normalized,
+) -> list[PartialEvent]:
+    """The response's events, read through the same extractors the proxy uses."""
+    if not streamed:
+        return extract_response_events(response.body, session_id=session_id)
+    extractor = StreamExtractor(session_id=session_id, model=record.model_id)
+    frames = (
+        _converse_stream_as_sse(record.output_body)
+        if shape == SHAPE_CONVERSE_STREAM
+        else _anthropic_stream_as_sse(
+            record.output_body, lambda: result.count("stream_chunks_undecodable")
+        )
+    )
+    return [p for frame in frames for p in extractor.feed(frame)] + extractor.close()
+
+
+def _index_call(partial: PartialEvent, sealer: _Sealer, index: LinkIndex) -> None:
+    """Remember a sealed tool call, so the record carrying its result can join this run."""
+    record = sealer.record
+    index.put(
+        IndexedCall(
+            tool_use_id=partial.tool_use_id,
+            account=record.account_id,
+            region=record.region,
+            principal=record.principal,
+            ts_ms=record.ts_ms,
+            request_id=record.request_id,
+            session_id=sealer.session_id,
+            trace_id=sealer.trace_id,
+            span_id=sealer.span_id,
+            tool_name=partial.tool_name,
+        )
+    )
+
+
+def _seal_response_events(
+    partials: list[PartialEvent], response: _Response, sealer: _Sealer, index: LinkIndex,
+    tool_config_sha256: str | None,
+) -> list[PartialEvent]:
+    sealed_events = []
+    for partial in partials:
+        index_in_body = (
+            partial.payload.get("index") if isinstance(partial.payload.get("index"), int) else 0
+        )
+        extra: dict[str, Any] = {"stop_reason": response.stop_reason}
+        if partial.kind == EventKind.TOOL_USE.value:
+            slot = _id_slot("tool_use", partial.tool_use_id, index_in_body)
+            extra["tool_config_sha256"] = tool_config_sha256
+            if partial.tool_use_id in response.server_tool_ids:
+                extra["executed_by"] = "bedrock"
+            if partial.tool_use_id:
+                _index_call(partial, sealer, index)
+        elif partial.kind == EventKind.MESSAGE.value:
+            slot = f"message:{index_in_body}"
+        elif partial.kind == EventKind.API_ERROR.value:
+            slot = "api_error"
+        else:
+            slot = f"{partial.kind}:{index_in_body if index_in_body is not None else 'end'}"
+        sealed_events.append(sealer.seal(partial, slot, 100 + (index_in_body or 0), extra))
+    return sealed_events
+
+
+def _seal_outcome(
+    record: InvocationRecord, response: _Response, sealer: _Sealer, result: Normalized
+) -> None:
+    """A guardrail intervention, and the error a refused or failed call ended in."""
+    stop_reason = response.stop_reason
+    guardrail = _guardrail(response.trace, stop_reason)
+    if guardrail is not None:
+        result.partials.append(
+            sealer.seal(
+                sealer.base(EventKind.GUARDRAIL_INTERVENTION.value), "guardrail", 900, guardrail
+            )
+        )
+    if not (record.error_code or stop_reason in _ERROR_STOP_REASONS):
+        return
+    error = (
+        {"error_type": "bedrock_invocation_error", "error_code": record.error_code}
+        if record.error_code
+        else {"error_type": "bedrock_stop_reason", "stop_reason": stop_reason}
+    )
+    if not any(p.kind == EventKind.API_ERROR.value for p in result.partials):
+        result.partials.append(
+            sealer.seal(sealer.base(EventKind.API_ERROR.value), "api_error", 950, error)
+        )
+    result.count(f"stop_reason:{stop_reason}" if not record.error_code else "error_records")
+
+
 def normalize(
     record: InvocationRecord,
     *,
@@ -631,240 +944,47 @@ def normalize(
     """
     result = Normalized()
     shape = classify_shape(record)
-    # Bedrock logs a call it refused (throttled, invalid, not found) with its errorCode and no
-    # bodies at all. There is no shape to read, but the failed call is still evidence, in either
-    # scope, because nothing in the record says whether it would have used a tool.
-    bodiless_error = (
-        shape is None
-        and record.error_code is not None
-        and record.input_body is None
-        and record.output_body is None
-    )
+    bodiless_error = _is_bodiless_error(record, shape)
     if shape is None and not bodiless_error:
         result.in_scope = False
         result.count(f"unsupported_shape:{unsupported_label(record)}")
         return result
 
-    inp = record.input_body
-    if shape in (SHAPE_CONVERSE, SHAPE_CONVERSE_STREAM):
-        request = _converse_request(inp)
-    else:
-        request = inp if isinstance(inp, dict) else {"messages": []}
-    streamed = shape in (SHAPE_CONVERSE_STREAM, SHAPE_ANTHROPIC_STREAM)
-    if shape == SHAPE_CONVERSE:
-        response = _converse_response(record.output_body)
-    elif shape == SHAPE_ANTHROPIC:
-        response = _anthropic_response(record.output_body)
-    else:
-        response = _Response({"content": []}, _stream_stop_reason(record.output_body or []))
-
-    config, tools_offered, tool_choice, names_dropped = _tool_config(inp, shape)
+    request, response, streamed = _read_call(record, shape)
+    config, tools_offered, tool_choice, names_dropped = _tool_config(record.input_body, shape)
     tool_config_sha256 = hashlib.sha256(canonicalize(config)).hexdigest() if config else None
     cited = _cited_tool_use_ids(request)
-    response_calls = [
-        b
-        for b in response.body.get("content") or []
-        if isinstance(b, dict) and b.get("type") == "tool_use"
-    ]
-    stream_has_tools = streamed and any(
-        isinstance(i, dict)
-        and (
-            ((i.get("contentBlockStart") or {}).get("start") or {}).get("toolUse")
-            or (i.get("content_block") or {}).get("type") == "tool_use"
-        )
-        for i in record.output_body or []
-    )
-    if scope == SCOPE_TOOL_CALLS and not (
-        config or cited or response_calls or stream_has_tools or bodiless_error
-    ):
+    uses_tools = _uses_tools(record, response, streamed)
+    if scope == SCOPE_TOOL_CALLS and not (config or cited or uses_tools or bodiless_error):
         result.in_scope = False
         result.count("out_of_scope")
         return result
 
-    # Which run this record belongs to.
-    gap_ms = link_gap_minutes * 60_000
-    linked_call: IndexedCall | None = None
-    refusals: dict[str, str] = {}
-    calls_for: dict[str, IndexedCall] = {}
-    for tool_use_id in cited:
-        candidate = index.get(tool_use_id)
-        if candidate is None:
-            result.count("results_without_call")
-            continue
-        if (candidate.account, candidate.region, candidate.principal) != (
-            record.account_id,
-            record.region,
-            record.principal,
-        ):
-            refusals[tool_use_id] = "caller"
-        elif not 0 <= record.ts_ms - candidate.ts_ms <= gap_ms:
-            refusals[tool_use_id] = "time"
-        else:
-            calls_for[tool_use_id] = candidate
-            if linked_call is None:
-                linked_call = candidate
-            elif candidate.session_id != linked_call.session_id:
-                result.count("link_conflicts")
-            continue
-        result.count("links_refused")
-
-    account, region, rid = record.account_id, record.region, record.request_id
-    if linked_call is not None:
-        session_id, trace_id, span_id = (
-            linked_call.session_id,
-            linked_call.trace_id,
-            linked_call.span_id,
-        )
-    else:
-        session_id = f"bil_{rid}"[:128]
-        trace_id = "tr_" + deterministic_id(account, region, "trace", rid)[:32]
-        span_id = "sp_" + deterministic_id(account, region, "span", rid)[:32]
-
-    log_record_sha256 = hashlib.sha256(record.raw_message.encode("utf-8")).hexdigest()
-    ts_device = format_ts_device(record.timestamp)
-
-    def seal(partial: PartialEvent, slot: str, order: int, extra: dict[str, Any]) -> PartialEvent:
-        payload = {
-            **partial.payload,
-            **extra,
-            "request_id": rid,
-            "log_record_sha256": log_record_sha256,
-        }
-        return replace(
-            partial,
-            provider=PROVIDER,
-            model=record.model_id,
-            session_id=session_id,
-            trace_id=trace_id,
-            span_id=span_id,
-            parent_span_id=None,
-            continues_from=None,
-            ts_device=ts_device,
-            ts_monotonic_ns=record.ts_ns + max(order, 0),
-            payload=payload,
-            event_id="evt_" + deterministic_id(account, region, rid, slot)[:32],
-        )
-
-    base = PartialEvent(
-        session_id=session_id,
-        kind="",
-        ts_device=ts_device,
-        ts_monotonic_ns=record.ts_ns,
-        tool_use_id=None,
-        tool_name=None,
-        payload={},
-        model=record.model_id,
-    )
-
-    if linked_call is None:
-        start_payload: dict[str, Any] = {
-            "source": PROVIDER,
-            "operation": record.operation,
-            "account_id": account,
-            "region": region,
-            "principal_arn": record.principal,
-            "model_id": record.model_id,
-            "log_group": log_group,
-            "tools_offered": tools_offered,
-            "tool_choice": tool_choice,
-            "tool_config_sha256": tool_config_sha256,
-            "request_metadata": record.request_metadata,
-            "log_schema_version": record.schema_version,
-            "reader_config_sha256": reader_config_sha256,
-            "linked": False,
-        }
-        if refusals:
-            start_payload["link_refused"] = sorted(set(refusals.values()))[0]
+    links = _link(record, cited, index, link_gap_minutes * 60_000, result)
+    sealer = _sealer(record, links.linked_call)
+    if links.linked_call is None:
         result.partials.append(
-            seal(
-                replace(base, kind=EventKind.SESSION_START.value), "session_start", 0, start_payload
+            _session_start(
+                sealer,
+                links,
+                log_group=log_group,
+                tools_offered=tools_offered,
+                tool_choice=tool_choice,
+                tool_config_sha256=tool_config_sha256,
+                reader_config_sha256=reader_config_sha256,
             )
         )
         if names_dropped:
             result.count("tools_offered_dropped", names_dropped)
+    result.partials.extend(_seal_request_events(request, sealer, links, index))
 
-    for position, partial in enumerate(extract_request_events(request, session_id=session_id)):
-        call = calls_for.get(partial.tool_use_id or "")
-        extra: dict[str, Any] = {"linked": call is not None}
-        if partial.tool_use_id in refusals:
-            extra["link_refused"] = refusals[partial.tool_use_id]
-        slot = _id_slot("tool_result", partial.tool_use_id, position)
-        sealed = seal(partial, slot, position, extra)
-        if call is not None:
-            sealed = replace(sealed, tool_name=call.tool_name)
-            index.mark_result_seen(call.tool_use_id)
-        result.partials.append(sealed)
-
-    stop_reason = response.stop_reason
-    if streamed:
-        extractor = StreamExtractor(session_id=session_id, model=record.model_id)
-        frames = (
-            _converse_stream_as_sse(record.output_body)
-            if shape == SHAPE_CONVERSE_STREAM
-            else _anthropic_stream_as_sse(
-                record.output_body, lambda: result.count("stream_chunks_undecodable")
-            )
-        )
-        response_partials = [
-            p for frame in frames for p in extractor.feed(frame)
-        ] + extractor.close()
-    else:
-        response_partials = extract_response_events(response.body, session_id=session_id)
+    response_partials = _response_partials(
+        record, shape, response, streamed, sealer.session_id, result
+    )
     if response.dropped_blocks:
         result.count("blocks_not_sealed", response.dropped_blocks)
-
-    for partial in response_partials:
-        index_in_body = (
-            partial.payload.get("index") if isinstance(partial.payload.get("index"), int) else 0
-        )
-        extra = {"stop_reason": stop_reason}
-        if partial.kind == EventKind.TOOL_USE.value:
-            slot = _id_slot("tool_use", partial.tool_use_id, index_in_body)
-            extra["tool_config_sha256"] = tool_config_sha256
-            if partial.tool_use_id in response.server_tool_ids:
-                extra["executed_by"] = "bedrock"
-            if partial.tool_use_id:
-                index.put(
-                    IndexedCall(
-                        tool_use_id=partial.tool_use_id,
-                        account=account,
-                        region=region,
-                        principal=record.principal,
-                        ts_ms=record.ts_ms,
-                        request_id=rid,
-                        session_id=session_id,
-                        trace_id=trace_id,
-                        span_id=span_id,
-                        tool_name=partial.tool_name,
-                    )
-                )
-        elif partial.kind == EventKind.MESSAGE.value:
-            slot = f"message:{index_in_body}"
-        elif partial.kind == EventKind.API_ERROR.value:
-            slot = "api_error"
-        else:
-            slot = f"{partial.kind}:{index_in_body if index_in_body is not None else 'end'}"
-        result.partials.append(seal(partial, slot, 100 + (index_in_body or 0), extra))
-
-    guardrail = _guardrail(response.trace, stop_reason)
-    if guardrail is not None:
-        result.partials.append(
-            seal(
-                replace(base, kind=EventKind.GUARDRAIL_INTERVENTION.value),
-                "guardrail",
-                900,
-                guardrail,
-            )
-        )
-    if record.error_code or stop_reason in _ERROR_STOP_REASONS:
-        error = (
-            {"error_type": "bedrock_invocation_error", "error_code": record.error_code}
-            if record.error_code
-            else {"error_type": "bedrock_stop_reason", "stop_reason": stop_reason}
-        )
-        if not any(p.kind == EventKind.API_ERROR.value for p in result.partials):
-            result.partials.append(
-                seal(replace(base, kind=EventKind.API_ERROR.value), "api_error", 950, error)
-            )
-        result.count(f"stop_reason:{stop_reason}" if not record.error_code else "error_records")
+    result.partials.extend(
+        _seal_response_events(response_partials, response, sealer, index, tool_config_sha256)
+    )
+    _seal_outcome(record, response, sealer, result)
     return result
