@@ -36,8 +36,9 @@ GENESIS_PREV_HASH = "sha256:" + "00" * 32
 _CHAIN_COLUMNS = frozenset({"prev_hash", "entry_hash", "event_digest"})
 #: Row columns that describe how the entry was recorded, not the event: never part of
 #: event_digest or entry_hash, so never folded into the event a verifier re-hashes.
-#: payload_mode (W8) is the mode applied when the row was written; it travels beside the
-#: event on the wire, outside every digest.
+#: payload_mode (W8) is the mode applied when the row was written. The ledger keeps it in its
+#: own table; only a file from the first W8 build, not yet reopened by a recorder (or on SQLite
+#: before 3.35), still has it as an agent_events column.
 _ENTRY_ONLY_COLUMNS = frozenset({"payload_mode"})
 
 # Columns that exist only from schema v2 onward (trace

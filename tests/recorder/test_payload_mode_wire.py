@@ -11,6 +11,7 @@ from __future__ import annotations
 import gzip
 import json
 import logging
+import sqlite3
 import threading
 
 import httpx
@@ -88,6 +89,61 @@ def test_a_ledger_with_modes_stored_still_verifies(tmp_path):
     led.append(_event(), payload_mode="hash-only")
     led.append(_event(), payload_mode="full")
     led.close()
+
+    assert verify_ledger(path).ok
+
+
+def test_the_mode_is_stored_outside_the_event_table(tmp_path):
+    """A verifier released before W8 rebuilds each event from every agent_events column but
+    the chain ones, so a mode stored there would read as a changed event on every row."""
+    path = tmp_path / "ledger.sqlite3"
+    led = Ledger(path, DEVICE)
+    led.append(_event(), payload_mode="redacted")
+    led.close()
+
+    conn = sqlite3.connect(path)
+    try:
+        event_columns = {row[1] for row in conn.execute("PRAGMA table_info(agent_events)")}
+        stored_modes = conn.execute("SELECT seq, payload_mode FROM agent_event_payload_modes").fetchall()
+    finally:
+        conn.close()
+
+    assert "payload_mode" not in event_columns
+    assert stored_modes == [(1, "redacted")]
+
+
+def test_a_ledger_from_the_first_w8_build_moves_its_modes_out_on_open(tmp_path):
+    """The first W8 build kept the mode in an agent_events column; reopening such a file moves
+    the modes to their own table, so they still read back and the file verifies."""
+    path = tmp_path / "ledger.sqlite3"
+    led = Ledger(path, DEVICE)
+    led.append(_event(), payload_mode="hash-only")
+    led.append(_event())
+    led.close()
+    conn = sqlite3.connect(path, isolation_level=None)
+    conn.execute("ALTER TABLE agent_events ADD COLUMN payload_mode TEXT")
+    conn.execute("UPDATE agent_events SET payload_mode = 'hash-only' WHERE seq = 1")
+    conn.execute("DELETE FROM agent_event_payload_modes")
+    conn.close()
+
+    led = Ledger(path, DEVICE)
+    led.append(_event(), payload_mode="full")
+    modes = [entry.payload_mode for entry in led.read_unsynced()]
+    led.close()
+
+    assert modes == ["hash-only", None, "full"]
+    assert verify_ledger(path).ok
+
+
+def test_a_ledger_with_the_mode_column_still_verifies_before_it_is_reopened(tmp_path):
+    path = tmp_path / "ledger.sqlite3"
+    led = Ledger(path, DEVICE)
+    led.append(_event())
+    led.close()
+    conn = sqlite3.connect(path, isolation_level=None)
+    conn.execute("ALTER TABLE agent_events ADD COLUMN payload_mode TEXT")
+    conn.execute("UPDATE agent_events SET payload_mode = 'redacted'")
+    conn.close()
 
     assert verify_ledger(path).ok
 

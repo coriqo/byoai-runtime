@@ -179,12 +179,15 @@ does not check it in any mode. In `hash-only` and `redacted` mode,
 `payload_hash` commits to content the verifier never sees. Whoever holds the
 raw payload can later prove it matches.
 
-The ledger row also keeps the mode it was written in, in a `payload_mode`
-column (`full`, `redacted`, `hash-only`, or `runtime` for payloads the
-runtime writes itself: mandate verdicts, worker stop acks, key rotations and
-the failure marker, heartbeats). It describes how the row was recorded, not the event:
-it is not part of `event_digest` or `entry_hash`, and a verifier leaves it out
-of the event it re-hashes. Rows written before the column existed hold NULL.
+The ledger also keeps the mode each row was written in (`full`, `redacted`,
+`hash-only`, or `runtime` for payloads the runtime writes itself: mandate
+verdicts, worker stop acks, key rotations, the failure marker and heartbeats).
+It lives in a separate table, `agent_event_payload_modes (seq, payload_mode)`,
+written in the same transaction as the row, and not in `agent_events`: it
+describes how the row was recorded, not the event, so it is not part of
+`event_digest` or `entry_hash`, and `agent_events` keeps the columns every
+released verifier rebuilds the event from. A row written before the mode was
+stored has no entry in that table.
 
 ### 4.4 Heartbeat
 

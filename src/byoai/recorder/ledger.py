@@ -87,11 +87,18 @@ CREATE TABLE IF NOT EXISTS agent_events (
     trace_id        TEXT,
     span_id         TEXT,
     parent_span_id  TEXT,
-    continues_from  TEXT,
-    payload_mode    TEXT
+    continues_from  TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_agent_events_session ON agent_events(session_id);
 CREATE INDEX IF NOT EXISTS idx_agent_events_tool_use ON agent_events(tool_use_id);
+
+-- W8: the payload mode each row was recorded in. Kept beside agent_events, not in it, so the
+-- event table, and every verifier that rebuilds an event from its columns, is unchanged.
+-- One row per seq; no row for an entry written before the mode was stored.
+CREATE TABLE IF NOT EXISTS agent_event_payload_modes (
+    seq           INTEGER PRIMARY KEY,
+    payload_mode  TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS checkpoints (
     seq_end     INTEGER PRIMARY KEY,
@@ -114,6 +121,23 @@ CREATE TABLE IF NOT EXISTS sync_state (
     updated_at                   TEXT NOT NULL
 );
 """
+
+
+#: agent_events' columns in the order _row_to_entry reads them. Named, not ``*``, so a column a
+#: ledger file has beyond these cannot shift what is read.
+_EVENT_COLUMNS = (
+    "seq", "event_id", "schema_version", "device_id", "session_id", "kind", "ts_device",
+    "ts_monotonic_ns", "tool_use_id", "tool_name", "payload", "payload_hash", "model", "provider",
+    "event_digest", "prev_hash", "entry_hash", "trace_id", "span_id", "parent_span_id",
+    "continues_from",
+)
+
+#: Every read of entries: the event row and, beside it, the payload mode it was recorded in (W8).
+#: A subquery rather than a join, so the WHERE clauses callers append stay unambiguous.
+_SELECT_ENTRIES = (
+    "SELECT " + ", ".join(_EVENT_COLUMNS) + ", (SELECT m.payload_mode FROM "
+    "agent_event_payload_modes m WHERE m.seq = agent_events.seq) FROM agent_events"
+)
 
 
 class LedgerHeadError(RuntimeError):
@@ -214,10 +238,7 @@ class Ledger:
         # AgentEvent.to_dict()/event_digest() continue to treat them as v1
         # and never fold these NULLs into the digest. New rows are always v2
         # and populate all four.
-        # payload_mode (W8) is added the same way and kept last, so a migrated ledger and
-        # a fresh one have the
-        # same column order. It is not part of any digest; NULL on rows written before it existed.
-        for column in ("trace_id", "span_id", "parent_span_id", "continues_from", "payload_mode"):
+        for column in ("trace_id", "span_id", "parent_span_id", "continues_from"):
             try:
                 self._conn.execute(f"ALTER TABLE agent_events ADD COLUMN {column} TEXT")
             except sqlite3.OperationalError:
@@ -225,8 +246,38 @@ class Ledger:
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_agent_events_trace ON agent_events(trace_id)"
         )
+        self._move_payload_mode_column()
 
         self._head, self._next_seq = self._resume()
+
+    def _move_payload_mode_column(self) -> None:
+        """A ledger written by the first W8 build kept the payload mode in an agent_events
+        column, which a verifier released before W8 takes into the event it re-hashes. Copy the
+        modes into agent_event_payload_modes and drop the column, so the file verifies again."""
+        columns = {row[1] for row in self._conn.execute("PRAGMA table_info(agent_events)")}
+        if "payload_mode" not in columns:
+            return
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO agent_event_payload_modes (seq, payload_mode) "
+                "SELECT seq, payload_mode FROM agent_events WHERE payload_mode IS NOT NULL"
+            )
+            self._conn.execute("ALTER TABLE agent_events DROP COLUMN payload_mode")
+        except sqlite3.OperationalError as exc:
+            self._conn.execute("ROLLBACK")
+            # SQLite before 3.35 cannot drop a column. Reads name their columns, so the ledger
+            # still works here; only a verifier released before W8 would reject this file.
+            log.warning(
+                "ledger %s keeps the payload_mode column in agent_events (%s); "
+                "a verifier released before W8 will not verify it",
+                self.path, exc,
+            )
+            return
+        except BaseException:
+            self._conn.execute("ROLLBACK")
+            raise
+        self._conn.execute("COMMIT")
 
     # ---------------------------------------------------------------- state
 
@@ -355,7 +406,7 @@ class Ledger:
         prev, expected = known_hash, known_seq + 1
         bad = None
         for r in self._conn.execute(
-            "SELECT * FROM agent_events WHERE seq > ? ORDER BY seq", (known_seq,)
+            _SELECT_ENTRIES + " WHERE seq > ? ORDER BY seq", (known_seq,)
         ).fetchall():
             next_hash = None
             try:
@@ -513,7 +564,7 @@ class Ledger:
         with self._lock:
             self._require_open()
             row = self._conn.execute(
-                "SELECT * FROM agent_events WHERE kind = ? ORDER BY seq DESC LIMIT 1",
+                _SELECT_ENTRIES + " WHERE kind = ? ORDER BY seq DESC LIMIT 1",
                 (_kind_value(kind),),
             ).fetchone()
         return _row_to_entry(row) if row is not None else None
@@ -558,8 +609,8 @@ class Ledger:
                     "INSERT INTO agent_events (seq, event_id, schema_version, device_id, "
                     "session_id, kind, ts_device, ts_monotonic_ns, tool_use_id, tool_name, "
                     "payload, payload_hash, model, provider, event_digest, prev_hash, "
-                    "entry_hash, trace_id, span_id, parent_span_id, continues_from, payload_mode) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "entry_hash, trace_id, span_id, parent_span_id, continues_from) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         seq,
                         stamped.event_id,
@@ -582,9 +633,16 @@ class Ledger:
                         stamped.span_id,
                         stamped.parent_span_id,
                         stamped.continues_from,
-                        payload_mode,
                     ),
                 )
+                # Same transaction as the row: a crash leaves both or neither. A mode left at
+                # this seq by anything else is cleared, so it cannot attach to this event.
+                self._conn.execute("DELETE FROM agent_event_payload_modes WHERE seq = ?", (seq,))
+                if payload_mode is not None:
+                    self._conn.execute(
+                        "INSERT INTO agent_event_payload_modes (seq, payload_mode) VALUES (?, ?)",
+                        (seq, payload_mode),
+                    )
             except sqlite3.IntegrityError:
                 try:
                     self._conn.execute("ROLLBACK")
@@ -725,7 +783,7 @@ class Ledger:
         with self._lock:
             self._require_open()
             rows = self._conn.execute(
-                "SELECT * FROM agent_events WHERE seq >= ? AND seq <= ? ORDER BY seq",
+                _SELECT_ENTRIES + " WHERE seq >= ? AND seq <= ? ORDER BY seq",
                 (start, end),
             ).fetchall()
         return [_row_to_entry(r) for r in rows]
@@ -764,7 +822,7 @@ class Ledger:
         with self._lock:
             self._require_open()
             rows = self._conn.execute(
-                "SELECT * FROM agent_events WHERE session_id = ? ORDER BY seq",
+                _SELECT_ENTRIES + " WHERE session_id = ? ORDER BY seq",
                 (session_id,),
             ).fetchall()
         return [_row_to_entry(r) for r in rows]
@@ -779,7 +837,7 @@ class Ledger:
         """
         with self._lock:
             self._require_open()
-            cur = self._conn.execute("SELECT * FROM agent_events ORDER BY seq")
+            cur = self._conn.execute(_SELECT_ENTRIES + " ORDER BY seq")
         try:
             while True:
                 with self._lock:
@@ -832,7 +890,7 @@ class Ledger:
         """
         with self._lock:
             self._require_open()
-            sql = "SELECT * FROM agent_events WHERE seq > ? ORDER BY seq"
+            sql = _SELECT_ENTRIES + " WHERE seq > ? ORDER BY seq"
             params: tuple[Any, ...] = (self._get_synced_up_to_locked(),)
             if limit is not None:
                 sql += " LIMIT ?"
@@ -1130,9 +1188,9 @@ def _with_seq(event: AgentEvent, seq: int) -> AgentEvent:
 
 
 def _row_to_entry(row: tuple) -> LedgerEntry:
-    # 22 columns since W8 (payload_mode last); a 21-column row is a ledger opened before the
-    # migration ran.
-    payload_mode = row[21] if len(row) > 21 else None
+    # A row read with _SELECT_ENTRIES: the _EVENT_COLUMNS, then the payload mode from
+    # agent_event_payload_modes (NULL when the entry has none).
+    payload_mode = row[21]
     row = tuple(row[:21])
     (
         seq,
