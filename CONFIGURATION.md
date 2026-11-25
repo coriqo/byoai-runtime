@@ -950,14 +950,19 @@ nothing new.
 | `BYOAI_RECORDER_PAYLOAD_MODE` | `redacted` | as for every recorder |
 | `BYOAI_BEDROCK_LOG_S3_MAX_BYTES` | 10 MiB | largest body read from the large-data S3 location |
 | `--once` / `--loop` / `--check` | (one required) | one sweep then ship and exit; sweep at Coriqo's interval until stopped; check access and the logging configuration |
-| `--set KEY=VALUE` | none | `--once` only, for testing: override one Coriqo setting; the status names it |
 
 The policy knobs (pause, scope, interval, overlap, settle, link limit,
 first backfill, catch-up limit) are Coriqo's tenant setting
 `bedrock_log_capture`, fetched from `GET /api/v1/agent-runtime/capture-config`
 at the start of each sweep; unreachable Coriqo means the last cached copy,
 then Coriqo's defaults. After every sweep the reader posts a signed status
-block to `POST /api/v1/agent-runtime/source-state`.
+block to `POST /api/v1/agent-runtime/source-state`. No setting is overridden
+on the host.
+
+Exit codes: `0` done (or paused in Coriqo), `1` the sweep or the check failed,
+`2` a setting is missing or not valid (no log group or region, an unknown
+`BYOAI_RECORDER_PAYLOAD_MODE`, boto3 not installed), `3` another reader
+holds this recorder directory.
 
 `ts_device` and `ts_monotonic_ns` carry the **log time** of the record (epoch
 nanoseconds plus the block's position), not the time of the sweep, so the

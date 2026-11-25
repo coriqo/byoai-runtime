@@ -104,7 +104,8 @@ if hasattr(os, "register_at_fork"):
 __all__ = ["Recorder", "get_recorder", "reset_recorder_for_tests"]
 
 
-def _default_dir() -> Path:
+def default_recorder_dir() -> Path:
+    """The recorder directory when none is given: ``BYOAI_RECORDER_DIR``, else ~/.byoai/recorder."""
     return Path(os.getenv("BYOAI_RECORDER_DIR", str(Path.home() / ".byoai" / "recorder")))
 
 
@@ -125,7 +126,7 @@ class Recorder:
         from .checkpoint import Checkpointer
         from .keys import load_or_create_device_key
 
-        base = Path(dir) if dir is not None else _default_dir()
+        base = Path(dir) if dir is not None else default_recorder_dir()
         base.mkdir(parents=True, exist_ok=True)
         self.strict_mode = (
             strict_mode

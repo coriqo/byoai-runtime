@@ -9,6 +9,9 @@ optional role in another account, the recorder directory, the payload mode); Cor
 decides the policy (pause, scope, interval, overlap, link limit, backfill), which the reader
 fetches at the start of each sweep. The recorder directory must be this reader's own, enrolled
 as its own device with ``byoai-recorder-enroll``.
+
+Exit codes: 0 done (or paused), 1 the sweep or the check failed, 2 a setting is missing or
+not valid, 3 another reader holds this recorder directory.
 """
 
 from __future__ import annotations
@@ -23,7 +26,6 @@ import threading
 from pathlib import Path
 
 from .bedrock_invocation_log_source import (
-    CONFIG_DEFAULTS,
     STATE_DB_NAME,
     AwsLogSource,
     ReaderBusy,
@@ -32,7 +34,6 @@ from .bedrock_invocation_log_source import (
     Sweeper,
     coriqo_config_fetcher,
     coriqo_status_poster,
-    effective_config,
     reader_lock,
     s3_max_bytes_from_env,
 )
@@ -45,7 +46,10 @@ DRAIN_SECONDS = 60.0
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="byoai-bedrock-log-reader", description=__doc__.split("\n\n")[0]
+        prog="byoai-bedrock-log-reader",
+        description=__doc__.split("\n\n")[0],
+        epilog="Exit codes: 0 done (or paused), 1 the sweep or the check failed, "
+        "2 a setting is missing or not valid, 3 another reader holds this recorder directory.",
     )
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--once", action="store_true", help="One sweep, ship what it sealed, exit.")
@@ -80,33 +84,7 @@ def _parser() -> argparse.ArgumentParser:
         default=os.getenv("BYOAI_RECORDER_DIR"),
         help="This reader's own recorder directory (BYOAI_RECORDER_DIR).",
     )
-    parser.add_argument(
-        "--set",
-        action="append",
-        default=[],
-        metavar="KEY=VALUE",
-        help="--once only, for testing: override one Coriqo setting on this host. "
-        "The status block names every overridden key.",
-    )
     return parser
-
-
-def _overrides(pairs: list[str]) -> dict:
-    out: dict = {}
-    for pair in pairs:
-        key, sep, raw = pair.partition("=")
-        if not sep or key not in CONFIG_DEFAULTS:
-            raise SystemExit(
-                f"--set {pair!r}: expected KEY=VALUE with KEY one of {', '.join(CONFIG_DEFAULTS)}"
-            )
-        try:
-            value = json.loads(raw)
-        except ValueError:
-            value = raw
-        if effective_config({key: value})[key] != value:
-            raise SystemExit(f"--set {pair!r}: value out of bounds")
-        out[key] = value
-    return out
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -119,8 +97,17 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
-    if args.set and not args.once:
-        print("--set is for --once test runs only.", file=sys.stderr)
+    from .redact import PayloadMode
+
+    mode_raw = os.getenv("BYOAI_RECORDER_PAYLOAD_MODE", PayloadMode.REDACTED.value)
+    try:
+        mode = PayloadMode(mode_raw)
+    except ValueError:
+        print(
+            f"BYOAI_RECORDER_PAYLOAD_MODE={mode_raw!r} is not a payload mode; use one of "
+            f"{', '.join(m.value for m in PayloadMode)}.",
+            file=sys.stderr,
+        )
         return 2
     try:
         source = AwsLogSource.from_environment(
@@ -137,14 +124,12 @@ def main(argv: list[str] | None = None) -> int:
 
     from .. import __version__
     from .enroll import load_enrollment_state
-    from .integration import Recorder, _default_dir
-    from .redact import PayloadMode
+    from .integration import Recorder, default_recorder_dir
 
-    directory = Path(args.dir) if args.dir else _default_dir()
+    directory = Path(args.dir) if args.dir else default_recorder_dir()
     directory.mkdir(parents=True, exist_ok=True)
     try:
         with reader_lock(directory):
-            mode = PayloadMode(os.getenv("BYOAI_RECORDER_PAYLOAD_MODE", PayloadMode.REDACTED.value))
             recorder = Recorder(dir=directory, payload_mode=mode)
             enrollment = load_enrollment_state(directory)
             fetch = (
@@ -169,7 +154,6 @@ def main(argv: list[str] | None = None) -> int:
                 fetch_config=fetch,
                 post_status=coriqo_status_poster(recorder),
                 s3_max_bytes=s3_max_bytes_from_env(),
-                overrides=_overrides(args.set),
                 runtime_version=__version__,
             )
             try:

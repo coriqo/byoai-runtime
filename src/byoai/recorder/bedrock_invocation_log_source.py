@@ -597,7 +597,6 @@ class Sweeper:
         post_status: StatusPoster | None = None,
         clock: Callable[[], float] = time.time,
         s3_max_bytes: int = DEFAULT_S3_MAX_BYTES,
-        overrides: dict[str, Any] | None = None,
         runtime_version: str | None = None,
     ) -> None:
         self.recorder = recorder
@@ -607,7 +606,6 @@ class Sweeper:
         self._post_status = post_status
         self._clock = clock
         self._s3_max_bytes = s3_max_bytes
-        self._overrides = overrides or {}
         self._runtime_version = runtime_version
         self.last_status: dict[str, Any] | None = None
         self._state_recreated = False
@@ -632,13 +630,6 @@ class Sweeper:
                 if cached is not None
                 else (dict(CONFIG_DEFAULTS), "defaults")
             )
-        config.update(
-            {
-                k: v
-                for k, v in effective_config({**config, **self._overrides}).items()
-                if k in self._overrides
-            }
-        )
         return config, origin
 
     def sweep(self) -> dict[str, Any]:
@@ -838,7 +829,6 @@ class Sweeper:
             "payload_mode": self.recorder.payload_mode.value,
             "config_sha256": config_sha256(config),
             "config_source": origin,
-            "overridden_on_host": sorted(self._overrides),
             "runtime_version": self._runtime_version,
         }
 

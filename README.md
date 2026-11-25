@@ -1170,6 +1170,10 @@ hash-chained events, through the same extractor. Its limit is honest and worth
 repeating: it sees exactly what the trace says, and a caller who invokes
 without `enableTrace` leaves nothing behind — see
 **[CONFIGURATION.md](CONFIGURATION.md#managed-agents-you-cannot-intercept-byoairecorderbedrock_agent)**.
+For direct `Converse` or `InvokeModel` calls, which leave no agent trace,
+`byoai-bedrock-log-reader` reads Bedrock's model-invocation log on a schedule
+and seals the tool calls in it — see
+**[CONFIGURATION.md](CONFIGURATION.md#direct-bedrock-model-calls-the-invocation-log-reader-w10)**.
 
 The ledger also syncs to Coriqo once the device is enrolled. Coriqo serves
 `/v1/enroll`, `/v1/ingest/batch` and `/v1/checkpoints/batch`, and Coriqo's
