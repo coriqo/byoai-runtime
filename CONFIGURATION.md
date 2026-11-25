@@ -1807,9 +1807,11 @@ Hashes use RFC 8785 canonical JSON.
   changed a title, or made a hint riskier, so every hash mismatch follows
   `on_drift`. `class_actions` is carried and recorded with the snapshot but this
   runtime does not interpret it.
-- Each recorded verdict gains two fields when the agent has pins:
-  `pin_status` (`match`, `drift` or `unpinned`) and `definition_sha256` (the
-  hash seen on the server; absent when the tool was not seen). Both are in the
+- Each recorded verdict gains three fields when the agent has pins:
+  `pin_status` (`match`, `drift` or `unpinned`), `definition_sha256` (the
+  hash seen on the server; absent when the tool was not seen) and `server` (the
+  `--server` name, checked against `[A-Za-z0-9_.-]{1,64}`, else
+  `<invalid name>`; absent when no `--server` was given). Both are in the
   local ledger record and in the batch sent to Coriqo. The reason is
   `tool_pin_drift` or `tool_unpinned`. The operator detail names only the
   server and the tool, after the name is checked against `[A-Za-z0-9_.-]{1,64}`

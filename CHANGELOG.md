@@ -20,8 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   follows `on_drift`, an allowed tool with no pin follows `on_unpinned`, and a
   tool not seen and checked in time counts as unpinned. `flag` allows and flags;
   `refuse` denies and, under `enforce`, hides the tool from `tools/list`;
-  `shadow` never blocks. Recorded verdicts gain optional `pin_status` and
-  `definition_sha256` (absent for an agent with no pins). `tool_pins` and
+  `shadow` never blocks. Recorded verdicts gain optional `pin_status`,
+  `definition_sha256` and `server` (absent for an agent with no pins). `tool_pins` and
   `tool_pin_policy` are now read from the snapshot; `class_actions` is carried
   but not interpreted. The runtime's own answers are never relayed to the host
   (HTTP and event streams too); over HTTP its first fetch waits until the

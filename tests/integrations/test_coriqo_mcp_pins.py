@@ -1257,3 +1257,52 @@ def test_inventory_ambiguity_spans_pages_and_resets():
     assert inv.host_seen("search") == (True, None)
     inv.reset_host_seen()
     assert inv.host_seen("search") == (False, None)
+
+
+# -- the server name on the record ----------------------------------------------------
+
+
+async def test_the_server_name_is_on_the_record_only_when_pins_are_in_force(tmp_path, monkeypatch):
+    h = await host(tmp_path, monkeypatch)
+    await h.handshake()
+    h.send(call("search", 1))
+    await h.reply(1)
+    rows = await h.finish()
+    assert rows[0]["server"] == "srv"
+
+    async def same(_etag):  # pragma: no cover
+        return None, "e"
+
+    gate = MandateGate(same, agent_id="agent-1")
+    gate.apply_snapshot({"mandate_enforcement": "enforce", "status": "active",
+                         "allowed_tools": ["search"]}, etag="e")
+    other = tmp_path / "b"
+    other.mkdir()
+    h = await host(other, monkeypatch, gate)
+    await h.handshake()
+    h.send(call("search", 1))
+    await h.reply(1)
+    assert "server" not in (await h.finish())[0]
+
+
+async def test_a_hostile_server_name_is_sanitised_on_the_record(tmp_path, monkeypatch):
+    h = await host(tmp_path, monkeypatch, pin_gate(mode="observe"), server="bad name\nx")
+    await h.handshake()
+    h.send(call("search", 1))
+    await h.reply(1)
+    rows = await h.finish()
+    assert rows[0]["server"] == "<invalid name>"
+
+
+def test_the_server_name_round_trips_through_the_outbox(tmp_path):
+    from byoai.recorder.mandate import Flag
+    from byoai.recorder.verdicts import VerdictOutbox, wire_verdict
+
+    box = VerdictOutbox(tmp_path / "o.db")
+    body = wire_verdict(Flag(reason="tool_unpinned", tool="t"), decided_at="x",
+                        pin_status="unpinned", server="srv")
+    box.add("agent-1", body)
+    claimed = box.claim()
+    assert claimed is not None
+    assert json.dumps(claimed.verdicts[0], sort_keys=True) == json.dumps(body, sort_keys=True)
+    assert "server" not in wire_verdict(Flag(reason="r", tool="t"), decided_at="x")

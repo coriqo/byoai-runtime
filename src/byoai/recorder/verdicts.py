@@ -165,6 +165,7 @@ def wire_verdict(
     decided_at: str | None = None,
     pin_status: str | None = None,
     definition_sha256: str | None = None,
+    server: str | None = None,
 ) -> dict[str, Any]:
     """The verdict as Coriqo's batch endpoint wants it.
 
@@ -189,6 +190,8 @@ def wire_verdict(
         out["pin_status"] = pin_status
     if definition_sha256 is not None:
         out["definition_sha256"] = definition_sha256
+    if server is not None:
+        out["server"] = server
     return out
 
 
@@ -206,6 +209,7 @@ def ledger_payload(
     arguments: Any = None,
     pin_status: str | None = None,
     definition_sha256: str | None = None,
+    server: str | None = None,
 ) -> dict[str, Any]:
     """The fuller local record: the wire fields plus what only an operator sees.
 
@@ -248,6 +252,7 @@ def ledger_payload(
             decided_at=decided_at,
             pin_status=pin_status,
             definition_sha256=definition_sha256,
+            server=server,
         )
     )
     on_behalf_of = (
@@ -544,6 +549,7 @@ class VerdictRecorder:
         arguments: Any = None,
         pin_status: str | None = None,
         definition_sha256: str | None = None,
+        server: str | None = None,
     ) -> LedgerEntry | None:
         """Record one verdict. Returns the ledger entry, if one was written.
 
@@ -572,11 +578,12 @@ class VerdictRecorder:
                 arguments=arguments,
                 pin_status=pin_status,
                 definition_sha256=definition_sha256,
+                server=server,
             )
             entry = self._append(verdict, payload)
             if entry is not None and self._checkpointer is not None:
                 self._checkpointer.note(entry.seq)
-            self._enqueue(agent_id, verdict, decided_at, pin_status, definition_sha256)
+            self._enqueue(agent_id, verdict, decided_at, pin_status, definition_sha256, server)
             return entry
         except Exception:  # noqa: BLE001 - policy: recording never breaks a call
             log.exception("coriqo: failed to record a mandate verdict")
@@ -687,6 +694,7 @@ class VerdictRecorder:
         decided_at: str,
         pin_status: str | None = None,
         definition_sha256: str | None = None,
+        server: str | None = None,
     ) -> None:
         if self._outbox is None:
             return
@@ -705,6 +713,7 @@ class VerdictRecorder:
                 decided_at=decided_at,
                 pin_status=pin_status,
                 definition_sha256=definition_sha256,
+                server=server,
             ),
         )
 

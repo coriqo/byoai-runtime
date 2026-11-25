@@ -454,6 +454,7 @@ class ProxyEnforcer:
             arguments_sha256=digest,
             pin_status=None if pin is None else pin.status,
             definition_sha256=None if pin is None else pin.definition_sha256,
+            server=None if pin is None else pin.server,
         )
 
     def _record_unresolved(self, verdict: Verdict) -> None:

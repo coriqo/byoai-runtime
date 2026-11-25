@@ -56,6 +56,7 @@ import time
 import uuid
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from dataclasses import replace
 from typing import Any, cast
 from urllib.parse import urlsplit
 
@@ -280,6 +281,8 @@ class Interposer:
         if inventory is not None and settled:
             live, hashable = inventory.lookup(tool)
         check = evaluate_pin(snapshot, self.pin_server, tool, live, hashable=hashable)
+        if check is not None and self.pin_server is not None:
+            check = replace(check, server=safe_name(self.pin_server))
         if check is None or inventory is None or not settled or self.pin_server is None:
             return check
         seen, host = inventory.host_seen(tool)
@@ -299,6 +302,7 @@ class Interposer:
                 pin_actions(snapshot)[0],
                 f"tool {safe_name(tool)} on server {safe_name(self.pin_server)}: the host was "
                 "shown a different definition than the one the runtime holds",
+                server=safe_name(self.pin_server),
             )
         return check
 

@@ -68,6 +68,8 @@ class PinCheck:
     #: Operator-facing. Built from sanitized names only; never a tool
     #: description, and never sent to the model.
     detail: str | None = None
+    #: The sanitised ``--server`` name, for the record; ``None`` when none was given.
+    server: str | None = None
 
 
 _NAME_RE = re.compile(r"[A-Za-z0-9_.\-]{1,64}")
