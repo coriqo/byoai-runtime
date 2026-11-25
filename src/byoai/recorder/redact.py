@@ -282,6 +282,13 @@ def redact_free_text(text: str) -> str:
 #: sensitive there" is not one.
 _VOCABULARY_FIELDS: dict[str, frozenset[str]] = {
     "guardrail_intervention": frozenset({"action", "stage", "categories"}),
+    # W10 §7.2, NEEDS MAINTAINER REVIEW before release. `source` and `operation` are constants
+    # or AWS enum values; `tools_offered` is built by the Bedrock log reader only from names
+    # matching [a-zA-Z0-9_-]{1,64} (the Bedrock tool-name pattern), which cannot hold a sentence,
+    # an email address or a number with separators. This also lets Path 3's constant `source`
+    # through under REDACTED. Coriqo's server port (api/domains/agents/payload_redact.py
+    # VOCABULARY_FIELDS) must carry the same entry, or masking on arrival differs from here.
+    "session_start": frozenset({"source", "operation", "tools_offered"}),
 }
 
 

@@ -531,6 +531,13 @@ class Shipper:
         """See :func:`post_signed_batch`; bound to this shipper's device."""
         return post_signed_batch(self._client, self._base_url, self._key, path, body)
 
+    def post_signed(self, path: str, body: dict) -> dict:
+        """POST one signed body to a device route other than the ledger batches, with this
+        shipper's device key and client. The Bedrock log reader posts its status this way
+        after every sweep, including one with nothing to ship (W10). Raises :class:`ShipError`
+        like the batches; never retries itself."""
+        return self._post_signed_batch(path, body)
+
     def _advance_watermark(
         self,
         get_current: Callable[[], int],

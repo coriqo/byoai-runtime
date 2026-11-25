@@ -17,6 +17,7 @@ import logging
 import os
 import secrets
 import threading
+import time
 import weakref
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -309,6 +310,37 @@ class Recorder:
             self._shipper_stop = None
             self._shipper_thread = None
 
+    @property
+    def shipper(self) -> Shipper | None:
+        """The background shipper, or None while this device is not enrolled."""
+        return self._shipper
+
+    def drain(self, timeout_s: float) -> bool:
+        """Wait until everything sealed so far, and its checkpoint, has been shipped.
+
+        For a process that seals a batch and exits (the Bedrock log reader's ``--once``): the
+        background shipper keeps sending while this waits, so nothing races it. Returns False
+        when the time runs out or the device is not enrolled; what is unsent stays on disk and
+        goes with the next run.
+        """
+        if self._shipper is None:
+            return False
+        try:
+            self.checkpointer.flush()
+        except Exception:  # noqa: BLE001 - an unsigned tail is shipped by the next run
+            log.exception("recorder: checkpoint flush before drain failed")
+        last_seq = self.ledger.next_seq - 1
+        last_checkpoint = self.ledger.latest_checkpoint()
+        last_checkpoint_seq = last_checkpoint["seq_end"] if last_checkpoint else 0
+        deadline = time.monotonic() + max(0.0, timeout_s)
+        while True:
+            if (self.ledger.get_synced_up_to() >= last_seq
+                    and self.ledger.get_synced_checkpoint_up_to() >= last_checkpoint_seq):
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.2)
+
     def close(self, *, final_ship: bool = False) -> None:
         """Stop the shipper and close the ledger.
 
@@ -361,7 +393,7 @@ class Recorder:
         )
         return AgentEvent(
             schema_version=partial.schema_version,
-            event_id=new_event_id(),
+            event_id=partial.event_id or new_event_id(),
             device_id=self.key.device_id,
             session_id=partial.session_id,
             seq=0,  # stamped by Ledger.append

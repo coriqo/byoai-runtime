@@ -1,0 +1,1 @@
+{"timestamp": "2026-11-12T13:22:27Z", "accountId": "111122223333", "region": "us-east-1", "requestId": "req-T1", "operation": "Converse", "modelId": "us.anthropic.claude-haiku-4-5-20251001-v1:0", "identity": {"arn": "arn:aws:sts::111122223333:assumed-role/PaymentsAgentRole/i-0abc"}, "errorCode": "ThrottlingException", "schemaVersion": "1.0", "schemaType": "ModelInvocationLog"}

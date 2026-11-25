@@ -34,7 +34,7 @@ import logging
 import os
 import sqlite3
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -729,6 +729,28 @@ class Ledger:
                 (start, end),
             ).fetchall()
         return [_row_to_entry(r) for r in rows]
+
+    def existing_event_ids(self, event_ids: Iterable[str]) -> set[str]:
+        """Which of ``event_ids`` are already in the ledger.
+
+        For a source that derives ids from what it reads (the Bedrock invocation log reader, W10):
+        checking before appending keeps a re-read record from ever reaching the UNIQUE
+        constraint, so a re-sweep writes no ``record_failure`` marker and never trips strict
+        mode. One query per 500 ids, under the ledger lock.
+        """
+        wanted = list(dict.fromkeys(event_ids))
+        found: set[str] = set()
+        with self._lock:
+            self._require_open()
+            for start in range(0, len(wanted), 500):
+                chunk = wanted[start:start + 500]
+                placeholders = ",".join("?" for _ in chunk)
+                rows = self._conn.execute(
+                    f"SELECT event_id FROM agent_events WHERE event_id IN ({placeholders})",  # noqa: S608 - placeholders only
+                    chunk,
+                ).fetchall()
+                found.update(r[0] for r in rows)
+        return found
 
     def read_session(self, session_id: str) -> list[LedgerEntry]:
         """Every entry belonging to one session, in seq order.
