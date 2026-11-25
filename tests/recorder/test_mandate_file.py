@@ -22,7 +22,7 @@ from .test_mandate import FakeClock
 #: SHA-256 of seal-verifier/mandate_format.py in the coriqo repo at the
 #: version copied here. The reader is copied byte-for-byte; to update it,
 #: re-copy the file and change this constant in the same commit.
-REFERENCE_READER_SHA256 = "848461da509fe1ab0229849fc1ab38cac7f8382fef696ef108672e7acdd722fb"
+REFERENCE_READER_SHA256 = "d303eb09359f83a9d68c1b80114300baccd5a770759a0aa213ce8fe8198d2fc1"
 
 VENDORED = Path(mandate_format.__file__)
 

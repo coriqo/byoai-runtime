@@ -1,0 +1,4 @@
+# The smallest valid file: every other field takes the default in MANDATE_SPEC.md section 4.
+spec: coriqo.mandate/v1
+agent:
+  name: refund-triage
