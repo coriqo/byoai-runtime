@@ -54,6 +54,7 @@ from .mandate import (
     RequireApproval,
     Verdict,
 )
+from .tool_pins import PinAction, PinCheck, PinStatus, pin_blocks
 from .verdicts import verdict_recorder
 
 __all__ = [
@@ -286,11 +287,17 @@ class ProxyEnforcer:
         arguments: dict[str, Any] | None = None,
         step_index: int | None = None,
         arguments_sha256: str | None = None,
+        pin: PinCheck | None = None,
     ) -> ProxyDecision:
         """Allow, flag or deny one ``tool_use`` block. Never raises.
 
         ``arguments_sha256``, when given, is written on the verdict's ledger
         record (``coriqo-mcp`` passes one; the provider proxy does not).
+
+        ``pin`` (``coriqo-mcp``, tool pinning) is what the agent's tool pins
+        say about this tool. A call the mandate allows is flagged or refused
+        by it; either way its status and the definition hash seen go on the
+        record. ``None`` (no pins) changes nothing.
         """
         try:
             decision = self._decide(
@@ -298,6 +305,7 @@ class ProxyEnforcer:
                 arguments=arguments,
                 step_index=step_index,
                 arguments_sha256=arguments_sha256,
+                pin=pin,
             )
         except Exception:  # noqa: BLE001 - enforcement must not break the proxy
             log.exception("coriqo: proxy enforcement failed deciding %r", tool)
@@ -314,6 +322,7 @@ class ProxyEnforcer:
         arguments: dict[str, Any] | None,
         step_index: int | None,
         arguments_sha256: str | None = None,
+        pin: PinCheck | None = None,
     ) -> ProxyDecision:
         if self._gate is None:
             return self._unresolved(tool, step_index, self._unresolved_detail)
@@ -331,7 +340,9 @@ class ProxyEnforcer:
         digest = arguments_sha256
         latched = latch.check(self._run_id, principal, tool, version)
         if latched is not None:
-            self._record(latched.verdict, action, principal, latched=latched, digest=digest)
+            self._record(
+                latched.verdict, action, principal, latched=latched, digest=digest, pin=pin
+            )
             return ProxyDecision(latched.verdict, allowed=False, halted=latched.halted)
 
         verdict = self._gate.decide(action)
@@ -341,14 +352,20 @@ class ProxyEnforcer:
             # this branch a RequireApproval fell into the allow path below,
             # because it is neither an Allow nor a Deny.
             self._gate.report_approval_request(verdict)
-            self._record(verdict, action, principal, digest=digest)
+            self._record(verdict, action, principal, digest=digest, pin=pin)
             return ProxyDecision(verdict, allowed=False)
         if isinstance(verdict, Allow) or not isinstance(verdict, Deny):
-            self._record(verdict, action, principal, digest=digest)
+            verdict = self._apply_pin(verdict, pin)
+            self._record(verdict, action, principal, digest=digest, pin=pin)
+            if isinstance(verdict, Deny):
+                # Not latched: the pin is checked against the live tool every
+                # time, and a server that restores the tool must be let back in.
+                log.warning("coriqo: withheld a tool call at the proxy - %s", _operator_detail(verdict))
+                return ProxyDecision(verdict, allowed=False)
             return ProxyDecision(verdict, allowed=True)
 
         recorded = latch.record(self._run_id, principal, verdict, version)
-        self._record(verdict, action, principal, latched=recorded, digest=digest)
+        self._record(verdict, action, principal, latched=recorded, digest=digest, pin=pin)
         log.warning(
             "coriqo: withheld a tool_use block at the proxy - %s run=%s attempts=%d%s",
             _operator_detail(verdict),
@@ -357,6 +374,29 @@ class ProxyEnforcer:
             " HALTED" if recorded.halted else "",
         )
         return ProxyDecision(verdict, allowed=False, halted=recorded.halted)
+
+    def _apply_pin(self, verdict: Verdict, pin: PinCheck | None) -> Verdict:
+        """Turn an allowed call into a flagged or refused one when its tool's
+        pin says so. A refusal only stops the call where the mandate enforces;
+        under ``observe`` and ``alert_only`` it is flagged."""
+        if pin is None or pin.action == PinAction.ALLOW or self._gate is None:
+            return verdict
+        reason = Reason.TOOL_PIN_DRIFT if pin.status == PinStatus.DRIFT else Reason.TOOL_UNPINNED
+        snapshot = self._gate.snapshot
+        common: dict[str, Any] = {
+            "mandate_version_id": verdict.mandate_version_id,
+            "snapshot_age_s": verdict.snapshot_age_s,
+            "tool": verdict.tool,
+            "posture": verdict.posture,
+            "enforcement": verdict.enforcement,
+            "trajectory_id": verdict.trajectory_id,
+            "step_index": verdict.step_index,
+        }
+        if pin.action == PinAction.REFUSE and snapshot is not None and pin_blocks(snapshot):
+            return Deny(reason=reason, detail=pin.detail, **common)
+        if isinstance(verdict, Flag):
+            return verdict
+        return Flag(reason=reason, detail=pin.detail, **common)
 
     def _unresolved(self, tool: str, step_index: int | None, detail: str) -> ProxyDecision:
         """No gate, or no way to know which one: decide by posture, loudly.
@@ -398,6 +438,7 @@ class ProxyEnforcer:
         *,
         latched: LatchedDenial | None = None,
         digest: str | None = None,
+        pin: PinCheck | None = None,
     ) -> None:
         recorder = verdict_recorder()
         if recorder is None or self._gate is None:
@@ -411,6 +452,8 @@ class ProxyEnforcer:
             argument_count=None if action.arguments is None else len(action.arguments),
             arguments=action.arguments,
             arguments_sha256=digest,
+            pin_status=None if pin is None else pin.status,
+            definition_sha256=None if pin is None else pin.definition_sha256,
         )
 
     def _record_unresolved(self, verdict: Verdict) -> None:

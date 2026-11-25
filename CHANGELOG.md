@@ -9,13 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `coriqo-mcp` enforces tool pins. New `--server NAME` (the server's key in
+  `tool_pins.servers`) and `--pin-hold-timeout SECONDS` (default 10). The
+  runtime fetches the server's full tool list itself (every page, at most 100
+  pages and 5000 tools) after the host's `initialize`, on each
+  `notifications/tools/list_changed` and when a call names an unseen tool, using
+  its own `byoai-pin-` request ids and, over HTTP, the host's `Mcp-Session-Id`.
+  A `tools/call` is held while that runs. Each tool's definition and
+  annotations are hashed (RFC 8785) and compared with the pins: a mismatch
+  follows `on_drift`, an allowed tool with no pin follows `on_unpinned`, and a
+  tool not seen and checked in time counts as unpinned. `flag` allows and flags;
+  `refuse` denies and, under `enforce`, hides the tool from `tools/list`;
+  `shadow` never blocks. Recorded verdicts gain optional `pin_status` and
+  `definition_sha256` (absent for an agent with no pins). `tool_pins` and
+  `tool_pin_policy` are now read from the snapshot; `class_actions` is carried
+  but not interpreted. The runtime's own answers are never relayed to the host
+  (HTTP and event streams too); over HTTP its first fetch waits until the
+  upstream has accepted the host's `notifications/initialized`; paged fetches to
+  one upstream are spaced at least 1 second apart across sessions; inventories
+  are kept per session and credential fingerprint; a tool the host was shown
+  differently from what the runtime fetched counts as drift; and the legacy
+  two-endpoint SSE transport (a 202 to the runtime's request) stops fetching,
+  so pinned tools are refused under `enforce` and flagged under `shadow`. A
+  pinned tool that cannot be checked in time (not seen, failed or timed-out
+  fetch, stale list) follows `on_drift`, not `on_unpinned`; a name listed twice
+  differently to the host, on one page or across the pages of one list, counts as drift. Under `enforce`, `coriqo-mcp` refuses to start without
+  `--server` when the mandate pins tools.
 - The mandate file reader is now at format revision 1.4 (accepts `tool_pins`,
   asset scope and payment limits) and the golden tool-hash vectors are vendored
   with a checksum test.
 - The mandate gate reads `required_fields` from the snapshot (fields the runtime
-  must understand, like the JWT `crit` header). A field it cannot read (first:
-  `tool_pins`) is recorded as `unreadable_keys` and the gate refuses to
-  evaluate: denied under `enforce` with `fail_closed`, allowed and flagged
+  must understand, like the JWT `crit` header). A field it cannot read is
+  recorded as `unreadable_keys` and the gate refuses to evaluate: denied under `enforce` with `fail_closed`, allowed and flagged
   otherwise, with a reason telling you to upgrade byoai-runtime. Other unknown
   keys are ignored and logged once at INFO. Key names are sanitized.
 
@@ -23,9 +48,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Running from a mandate file now passes every field the reader accepts to the
   gate. A file that set `max_transaction_usd_per_day`, `max_transaction_usd` or
   `asset_scope` (format v1.2 and v1.3) loaded cleanly and enforced none of them;
-  they are now enforced. A file with `tool_pins` (v1.4) marks the snapshot as
-  needing a field this release cannot read, so the posture applies instead of
-  the pins being ignored. A test fails if the reader gains a field that is not
+  they are now enforced. A file with `tool_pins` (v1.4) passes them to the gate
+  as required, so they are never silently ignored. A test fails if the reader gains a field that is not
   mapped.
 
 ## [0.1.0] - 2026-11-17

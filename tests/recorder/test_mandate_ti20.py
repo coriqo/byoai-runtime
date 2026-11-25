@@ -279,10 +279,11 @@ def test_a_files_stop_grace_s_reaches_the_snapshot_payload():
     assert snapshot_payload({**base, "stop_grace_s": 30}, sha256="0" * 64)["stop_grace_s"] == 30
 
 
-# -- required fields this runtime cannot read (tool_pins, from a newer Coriqo) --
+# -- required fields this runtime cannot read (from a newer Coriqo) --
 
 PINS = {"servers": {"s": {"tools": {"t": {"definition_sha256": "a" * 64}}}}}
-REQ = {"tool_pins": PINS, "required_fields": ["tool_pins"]}
+FUTURE = {"future_field": {"x": 1}}
+REQ = {**FUTURE, "required_fields": ["future_field"]}
 
 
 def _unreadable_gate(**overrides) -> MandateGate:
@@ -290,11 +291,18 @@ def _unreadable_gate(**overrides) -> MandateGate:
 
 
 def test_a_required_field_is_recorded_as_an_unreadable_key():
-    assert _unreadable_gate().unreadable_keys == ("tool_pins",)
+    assert _unreadable_gate().unreadable_keys == ("future_field",)
 
 
-def test_a_pin_key_without_a_declaration_is_still_unreadable():
-    assert gate(tool_pins=PINS).unreadable_keys == ("tool_pins",)
+def test_tool_pins_and_policy_are_read_not_unreadable():
+    policy = {"on_drift": "flag", "on_unpinned": "flag", "class_actions": {}}
+    g = gate(tool_pins=PINS, tool_pin_policy=policy,
+             required_fields=["tool_pins", "tool_pin_policy"])
+    assert g.unreadable_keys == ()
+
+
+def test_an_unknown_pin_key_without_a_declaration_is_still_unreadable():
+    assert gate(tool_pin_future=PINS).unreadable_keys == ("tool_pin_future",)
 
 
 def test_other_unknown_keys_are_ignored_and_logged_at_info(caplog):
@@ -315,7 +323,7 @@ def test_unreadable_snapshot_follows_the_posture_table(posture, enforcement, den
     verdict = g.decide("search")
     assert verdict.reason == Reason.SNAPSHOT_UNREADABLE
     assert isinstance(verdict, Deny if deny else Flag)
-    assert "tool_pins" in verdict.detail and "upgrade byoai-runtime" in verdict.detail
+    assert "future_field" in verdict.detail and "upgrade byoai-runtime" in verdict.detail
 
 
 @pytest.mark.parametrize("posture", ["fail_open", "fail_closed"])
@@ -336,14 +344,14 @@ def test_log_once_per_distinct_key_set(caplog):
     with caplog.at_level("WARNING"):
         g.apply_snapshot(snapshot_payload(**REQ))
         assert [r for r in caplog.records if "cannot read" in r.getMessage()] == []
-        g.apply_snapshot(snapshot_payload(tool_pins=PINS, required_fields=["tool_pin_policy"]))
+        g.apply_snapshot(snapshot_payload(**FUTURE, required_fields=["other_field"]))
         assert len([r for r in caplog.records if "cannot read" in r.getMessage()]) == 1
 
 
 def test_hostile_key_names_are_sanitized(caplog):
     huge = "x" * 1_000_000
-    g = gate(tool_pins=PINS, required_fields=["bad\nname", huge, "tool_pins"])
-    assert set(g.unreadable_keys) == {"<invalid key>", "tool_pins"}
+    g = gate(**FUTURE, required_fields=["bad\nname", huge, "future_field"])
+    assert set(g.unreadable_keys) == {"<invalid key>", "future_field"}
     with caplog.at_level("WARNING"):
         verdict = g.decide("search")
     assert "\n" not in verdict.detail and len(verdict.detail) < 500
