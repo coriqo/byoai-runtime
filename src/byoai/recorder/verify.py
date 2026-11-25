@@ -34,6 +34,11 @@ GENESIS_PREV_HASH = "sha256:" + "00" * 32
 
 # Columns that live on the ledger row itself rather than on the event.
 _CHAIN_COLUMNS = frozenset({"prev_hash", "entry_hash", "event_digest"})
+#: Row columns that describe how the entry was recorded, not the event: never part of
+#: event_digest or entry_hash, so never folded into the event a verifier re-hashes.
+#: payload_mode (W8) is the mode applied when the row was written; it travels beside the
+#: event on the wire, outside every digest.
+_ENTRY_ONLY_COLUMNS = frozenset({"payload_mode"})
 
 # Columns that exist only from schema v2 onward (trace
 # attribution), added to agent_events via an additive ALTER TABLE migration
@@ -1335,7 +1340,9 @@ def _verify(
     all_columns = _columns(conn, "agent_events")
     if not all_columns:
         raise VerifyError("ledger has no agent_events table")
-    event_columns = [c for c in all_columns if c not in _CHAIN_COLUMNS]
+    event_columns = [
+        c for c in all_columns if c not in _CHAIN_COLUMNS and c not in _ENTRY_ONLY_COLUMNS
+    ]
 
     rows = conn.execute("SELECT * FROM agent_events ORDER BY seq ASC").fetchall()
     entries: list[dict[str, Any]] = []

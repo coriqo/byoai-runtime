@@ -293,6 +293,7 @@ class Recorder:
                 coriqo_base_url=state.coriqo_base_url,
                 tenant_slug=state.tenant_slug,
                 runtime_info=self.runtime_info,
+                payload_mode=self.payload_mode.value,
             )
             self._shipper_stop = threading.Event()
             self._shipper_thread = threading.Thread(
@@ -383,7 +384,7 @@ class Recorder:
         """Append one captured event. May raise ``LedgerWriteError`` in strict mode."""
         event = self._promote(partial)
         try:
-            entry = self.ledger.append(event)
+            entry = self.ledger.append(event, payload_mode=self.payload_mode.value)
         except LedgerWriteError:
             raise
         except Exception:  # noqa: BLE001 - never let a capture bug break the proxy

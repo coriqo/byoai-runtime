@@ -167,7 +167,7 @@ def test_a_failing_write_waits_a_full_interval(ledger, monkeypatch):
     hb = _emitter(ledger, clock)
     hb.start()
     clock.advance(INTERVAL)
-    monkeypatch.setattr(ledger, "append_stamped", lambda b: None)  # non-strict drop
+    monkeypatch.setattr(ledger, "append_stamped", lambda b, **_kw: None)  # non-strict drop
     assert hb.tick() is None
     assert hb.seconds_until_due() == INTERVAL  # no tight retry loop
 

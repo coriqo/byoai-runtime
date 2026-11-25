@@ -86,6 +86,7 @@ from .coriqo_agents import (
     trace_body,
 )
 from .identity import CoriqoIdentity, IdentitySource, Signer
+from .redact import PayloadMode, payload_mode_headers
 
 __all__ = [
     "ENFORCEMENT_PREFIX",
@@ -676,6 +677,7 @@ class AsyncCoriqoAgentsClient:
         cost_usd: float | None = None,
         token_count: int | None = None,
         occurred_at: str | None = None,
+        payload_mode: PayloadMode | str | None = None,
     ) -> dict[str, Any]:
         """Record one decision. Never retried — a resent trace is a second
         decision in the record, and there is no idempotency key to collapse it
@@ -683,6 +685,7 @@ class AsyncCoriqoAgentsClient:
         return await self._request(
             "POST",
             f"/api/v1/agents/{coriqo_agent_id}/traces",
+            extra_headers=payload_mode_headers(payload_mode),
             json_body=trace_body(
                 inputs=inputs,
                 output=output,
@@ -698,7 +701,8 @@ class AsyncCoriqoAgentsClient:
         )
 
     async def record_traces(
-        self, coriqo_agent_id: str, traces: Sequence[Mapping[str, Any]]
+        self, coriqo_agent_id: str, traces: Sequence[Mapping[str, Any]], *,
+        payload_mode: PayloadMode | str | None = None,
     ) -> dict[str, Any]:
         """Record up to :data:`MAX_TRACE_BATCH` decisions in one request.
         All-or-nothing on Coriqo's side, and never retried here."""
@@ -711,6 +715,7 @@ class AsyncCoriqoAgentsClient:
         return await self._request(
             "POST",
             f"/api/v1/agents/{coriqo_agent_id}/traces/batch",
+            extra_headers=payload_mode_headers(payload_mode),
             json_body={"traces": [dict(t) for t in traces]},
         )
 

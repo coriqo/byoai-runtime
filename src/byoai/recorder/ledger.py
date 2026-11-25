@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Any
 
 from byoai.recorder.canonical import canonicalize, sha256_hex
+from byoai.recorder.redact import RUNTIME_AUTHORED
 from byoai.recorder.schema import (
     EVENT_SCHEMA_VERSION,
     AgentEvent,
@@ -86,7 +87,8 @@ CREATE TABLE IF NOT EXISTS agent_events (
     trace_id        TEXT,
     span_id         TEXT,
     parent_span_id  TEXT,
-    continues_from  TEXT
+    continues_from  TEXT,
+    payload_mode    TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_agent_events_session ON agent_events(session_id);
 CREATE INDEX IF NOT EXISTS idx_agent_events_tool_use ON agent_events(tool_use_id);
@@ -137,6 +139,11 @@ class LedgerEntry:
     entry_hash: str
     event_digest: str
     event: AgentEvent
+    #: The payload mode applied when this row was recorded (W8): "hash-only", "redacted", "full", or
+    #: "runtime" for a payload the runtime authored. None for rows written before the mode
+    #: was stored.
+    #: Shipped beside the event, outside event_digest and entry_hash.
+    payload_mode: str | None = None
 
 
 def compute_entry_hash(prev_hash: str, seq: int, digest: str) -> str:
@@ -207,7 +214,10 @@ class Ledger:
         # AgentEvent.to_dict()/event_digest() continue to treat them as v1
         # and never fold these NULLs into the digest. New rows are always v2
         # and populate all four.
-        for column in ("trace_id", "span_id", "parent_span_id", "continues_from"):
+        # payload_mode (W8) is added the same way and kept last, so a migrated ledger and
+        # a fresh one have the
+        # same column order. It is not part of any digest; NULL on rows written before it existed.
+        for column in ("trace_id", "span_id", "parent_span_id", "continues_from", "payload_mode"):
             try:
                 self._conn.execute(f"ALTER TABLE agent_events ADD COLUMN {column} TEXT")
             except sqlite3.OperationalError:
@@ -429,13 +439,14 @@ class Ledger:
 
     # --------------------------------------------------------------- append
 
-    def append(self, event: AgentEvent) -> LedgerEntry | None:
-        return self._append(event, None)
+    def append(self, event: AgentEvent, *, payload_mode: str | None = None) -> LedgerEntry | None:
+        return self._append(event, None, payload_mode)
 
     def _append(
         self,
         event: AgentEvent | None,
         builder: Callable[[int], AgentEvent] | None,
+        payload_mode: str | None = None,
     ) -> LedgerEntry | None:
         """Assign a seq, link it into the chain, and commit it in one transaction.
 
@@ -482,20 +493,20 @@ class Ledger:
             if self._pending_failures:
                 self._drain_failures()
             try:
-                return self._append_locked(event, builder)
+                return self._append_locked(event, builder, payload_mode=payload_mode)
             except Exception as exc:  # noqa: BLE001 - policy decision below
                 self._on_write_failure(_for_log(), exc)
                 return None
 
     def append_stamped(
-        self, build: Callable[[int], AgentEvent]
+        self, build: Callable[[int], AgentEvent], *, payload_mode: str | None = None
     ) -> LedgerEntry | None:
         """Append the event ``build(last_seq)`` returns. ``last_seq`` is the
         seq just before the one this entry is written at (0 when empty). It is
         computed inside the write, after any queued ``record_failure`` marker
         has been written and after a stale-head resync, so it is exactly
         ``seq - 1`` of the stored entry. Same failure policy as :meth:`append`."""
-        return self._append(None, build)
+        return self._append(None, build, payload_mode)
 
     def last_entry_of_kind(self, kind: Any) -> LedgerEntry | None:
         """The newest entry whose ``kind`` matches, or ``None``."""
@@ -511,6 +522,8 @@ class Ledger:
         self,
         event: AgentEvent | None,
         builder: Callable[[int], AgentEvent] | None = None,
+        *,
+        payload_mode: str | None = None,
     ) -> LedgerEntry:
         # Up to two attempts: the in-memory (_head, _next_seq) pair can go
         # stale if something else advanced the on-disk chain out from under
@@ -545,8 +558,8 @@ class Ledger:
                     "INSERT INTO agent_events (seq, event_id, schema_version, device_id, "
                     "session_id, kind, ts_device, ts_monotonic_ns, tool_use_id, tool_name, "
                     "payload, payload_hash, model, provider, event_digest, prev_hash, "
-                    "entry_hash, trace_id, span_id, parent_span_id, continues_from) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "entry_hash, trace_id, span_id, parent_span_id, continues_from, payload_mode) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         seq,
                         stamped.event_id,
@@ -569,6 +582,7 @@ class Ledger:
                         stamped.span_id,
                         stamped.parent_span_id,
                         stamped.continues_from,
+                        payload_mode,
                     ),
                 )
             except sqlite3.IntegrityError:
@@ -616,6 +630,7 @@ class Ledger:
                     entry_hash=entry_hash,
                     event_digest=digest,
                     event=stamped,
+                    payload_mode=payload_mode,
                 )
         raise AssertionError("unreachable: loop always returns or raises")
 
@@ -697,7 +712,7 @@ class Ledger:
             continues_from=None,
         )
         try:
-            self._append_locked(marker)
+            self._append_locked(marker, payload_mode=RUNTIME_AUTHORED)
         except Exception as exc:  # noqa: BLE001 - never raise from the marker path
             log.error("could not write record_failure marker: %s", exc)
             return
@@ -1093,6 +1108,10 @@ def _with_seq(event: AgentEvent, seq: int) -> AgentEvent:
 
 
 def _row_to_entry(row: tuple) -> LedgerEntry:
+    # 22 columns since W8 (payload_mode last); a 21-column row is a ledger opened before the
+    # migration ran.
+    payload_mode = row[21] if len(row) > 21 else None
+    row = tuple(row[:21])
     (
         seq,
         event_id,
@@ -1148,4 +1167,5 @@ def _row_to_entry(row: tuple) -> LedgerEntry:
         entry_hash=entry_hash,
         event_digest=digest,
         event=event,
+        payload_mode=payload_mode,
     )

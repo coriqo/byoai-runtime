@@ -89,7 +89,7 @@ def test_rotate_key_leaves_old_key_intact_when_ledger_append_fails(tmp_path):
     old_priv_bytes = (key_dir / PRIVATE_KEY_FILENAME).read_bytes()
     old_pub_text = (key_dir / PUBLIC_KEY_FILENAME).read_text()
 
-    ledger.append = lambda event: None  # simulate a full-disk / I/O failure
+    ledger.append = lambda event, **_kw: None  # simulate a full-disk / I/O failure
 
     try:
         with pytest.raises(RuntimeError, match="staged but NOT promoted"):
@@ -162,8 +162,8 @@ def test_promotion_crash_never_falls_back_to_a_random_key(tmp_path, monkeypatch)
         state = {"append_done": False, "n": 0}
         real_append = ledger.append
 
-        def wrapped_append(event, _real=real_append, _state=state):
-            entry = _real(event)
+        def wrapped_append(event, _real=real_append, _state=state, **kw):
+            entry = _real(event, **kw)
             _state["append_done"] = True
             return entry
 

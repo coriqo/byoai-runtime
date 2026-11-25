@@ -179,6 +179,13 @@ does not check it in any mode. In `hash-only` and `redacted` mode,
 `payload_hash` commits to content the verifier never sees. Whoever holds the
 raw payload can later prove it matches.
 
+The ledger row also keeps the mode it was written in, in a `payload_mode`
+column (`full`, `redacted`, `hash-only`, or `runtime` for payloads the
+runtime writes itself: mandate verdicts, worker stop acks, key rotations and
+the failure marker, heartbeats). It describes how the row was recorded, not the event:
+it is not part of `event_digest` or `entry_hash`, and a verifier leaves it out
+of the event it re-hashes. Rows written before the column existed hold NULL.
+
 ### 4.4 Heartbeat
 
 `heartbeat` is a liveness entry the recorder process writes on a timer
@@ -1079,6 +1086,19 @@ The shipper (`shipper.py`) sends signed, gzipped batches:
   `{"device_id": ..., "entries": [{"seq", "entry_hash", "event"}, ...]}`.
   `event` is `AgentEvent.to_dict()`. `prev_hash` is not sent: the receiver
   gets it from the previous entry's `entry_hash`.
+  An entry whose row has a `payload_mode` (§4.3) also carries it as
+  `entries[].payload_mode`, beside `event` and never inside it; a row without
+  one ships without the key. When a payload mode is configured, the top-level
+  `runtime` block also carries `"name": "byoai-runtime"`, `"version"` and
+  `"payload_mode"`, naming the shipper and the mode it is configured with,
+  beside the capability signal of 4.4 when heartbeats run. The block is left
+  out when there is neither. Both are covered by the batch signature and by no
+  digest.
+- A Coriqo workspace may refuse a batch whose payloads were sent above its
+  payload mode: HTTP 409 with `detail.code == "payload_mode_refused"`,
+  `detail.modes`, `detail.payload_mode`, `detail.message` and a `Retry-After`
+  header. Nothing in the batch is stored; the shipper keeps the entries
+  unsynced, retries after backoff and logs the refusal at most once an hour.
 - `POST /v1/checkpoints/batch` with body
   `{"device_id": ..., "checkpoints": [<checkpoint>, ...]}`.
 - Request body: `gzip(C(body))`. Headers: `content-encoding: gzip`,
@@ -1086,6 +1106,11 @@ The shipper (`shipper.py`) sends signed, gzipped batches:
   The signature covers the uncompressed canonical bytes.
 
 Delivery is at least once. The receiver dedupes on `entry_hash`.
+
+Decision traces sent with `CoriqoAgentsClient.record_trace` or
+`record_traces` carry the mode their text was prepared in as an
+`X-Coriqo-Payload-Mode` header (`full`, `redacted` or `hash-only`); no
+header is sent when the caller passes no mode.
 
 Enrollment (`enroll.py`) posts `{"public_key": <base64>, "token": ...}` to
 `/v1/enroll`. That is where a server gets the device key it later pins.
