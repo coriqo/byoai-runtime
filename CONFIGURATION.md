@@ -1368,7 +1368,7 @@ observing agent can still run under a fail-closed posture.
 | snapshot stale past `max_staleness_s` | allow + flag | **deny** |
 | agent suspended | **deny** | **deny** |
 | no snapshot ever fetched | allow + flag | **deny** |
-| snapshot requires fields this runtime cannot read (for example `tool_pins`), `enforce` | allow + flag | **deny** |
+| snapshot requires fields this runtime cannot read, `enforce` | allow + flag | **deny** |
 | same, `observe` | allow + flag | allow + flag |
 | tool in `approval_required_tools`, no decision yet | **require approval** | **require approval** |
 
@@ -1380,14 +1380,17 @@ it is older than the budget the tenant set.
 
 **Fields this runtime cannot read.** The snapshot may carry `required_fields`,
 the fields the runtime must understand to evaluate the mandate (like the JWT
-`crit` header). If one is not a field this version reads (`tool_pins` and
-`tool_pin_policy` today), the gate records the names as
+`crit` header). If one is not a field this version reads, the gate records the names as
 `MandateGate.unreadable_keys` and treats the mandate as one it cannot evaluate:
 under `enforce` and `fail_closed` every call is denied; under `fail_open` it is
 allowed and flagged; under `observe` it is allowed and flagged under both
 postures, on purpose (the agent is observing). The reason
 (`snapshot_unreadable`) names the fields and says to upgrade byoai-runtime. A
-`tool_pin*` key that is present but not listed is treated the same. Any other
+`tool_pin*` key this version does not know, present but not listed, is treated
+the same, and so is a `tool_pins` or `tool_pin_policy` that is malformed or
+that `required_fields` lists but the snapshot lacks. `tool_pins` and
+`tool_pin_policy` themselves are read: see "Tool pinning" under
+`coriqo-mcp`. Any other
 unknown key is ignored and logged once at INFO. Names from the server are
 shown only if they match `[a-z0-9_]{1,64}` (else `<invalid key>`), at most
 eight, then `+N more`. One WARNING is logged per change in the set of
@@ -1534,10 +1537,9 @@ file keeps the last good copy until it is stale. `MandateGate(default_posture=�
 default_max_staleness_s=…)` overrides them in code. Every field the reader
 accepts reaches the gate: `max_transaction_usd` and `max_transaction_usd_per_day`
 (format v1.2) and `asset_scope` (v1.3) are enforced as they are from Coriqo's
-snapshot. `tool_pins` (v1.4) is not enforced by this release: a file that sets
-it makes the gate unable to evaluate, so `on_stale_snapshot: fail_closed` with
-`mode: enforce` denies every call and the other combinations allow and flag it,
-with a reason that says to upgrade byoai-runtime.
+snapshot. `tool_pins` (v1.4) reach the snapshot with `required_fields:
+["tool_pins"]` and no `tool_pin_policy`; `coriqo-mcp` enforces them with the
+defaults described under "Tool pinning" there.
 
 #### `@governed_tool` — enforcing at the call site (`byoai.recorder.governed_tool`)
 
@@ -1706,6 +1708,8 @@ coriqo-mcp --mandate coriqo.mandate.yaml --http --upstream http://127.0.0.1:9000
 | `--http` | off | relay an HTTP MCP server (streamable HTTP or SSE) instead of a stdio child |
 | `--upstream URL` | — | with `--http`: the server's base URL. Requests keep their path and query |
 | `--listen HOST:PORT` | `127.0.0.1:8808` | with `--http`: where `coriqo-mcp` listens |
+| `--server NAME` | none | tool pinning: the key of this server's entry in the mandate's `tool_pins.servers` (letters, digits, `.`, `-`, `_`, up to 64). Without it, `coriqo-mcp` refuses to start under `enforce` when the mandate pins tools; under `shadow` every tool counts as unpinned and is flagged |
+| `--pin-hold-timeout SECONDS` | `10` | tool pinning: how long a `tools/call` waits for `coriqo-mcp` to fetch the server's tool list before the tool counts as unpinned. Above 0, at most 120 |
 | `--grace SECONDS` | the mandate's `stop_grace_s`, else the file's `x-stop_grace_s`, else `5` | how long the server gets to exit after SIGTERM before SIGKILL goes to its process group |
 | `--on-suspend MODULE:FUNCTION` | none | a function to call when the agent is suspended in Coriqo, to stop workers `coriqo-mcp` does not own. Repeatable. The module must be importable; one that is not stops start-up (exit 2) |
 | `--on-suspend-timeout SECONDS` | `30` | how long each `--on-suspend` function gets before it is recorded as timed out |
@@ -1718,6 +1722,113 @@ written to stdout; everything else goes to stderr. Decisions are sent to
 Coriqo's verdict endpoint every 5 seconds when the device is enrolled and the
 agent has a Coriqo id (`agent.id` in the file, or `--coriqo-agent-id`). The
 README's `coriqo-mcp` section lists what is and is not checked.
+
+**Tool pinning.** A mandate can pin, per MCP server, the SHA-256 of each
+approved tool's definition (`name`, `description`, `inputSchema` and
+`outputSchema` when present) and of its annotations (the title and the hints),
+as `tool_pins` in format v1.4 or in the snapshot Coriqo serves. `coriqo-mcp`
+checks the tools it relays against them. `_meta` and `icons` are not hashed.
+Hashes use RFC 8785 canonical JSON.
+
+- The pins come from the mandate in hand: the file's `tool_pins` with
+  `--mandate`, or the snapshot's `tool_pins` and `tool_pin_policy` with
+  `--coriqo-agent-id`. A snapshot with pins lists `required_fields:
+  ["tool_pins", "tool_pin_policy"]`. An agent with no pins changes nothing:
+  `coriqo-mcp` sends no request of its own and its records carry no pin fields.
+- `coriqo-mcp` asks the server for its **whole** tool list itself (every page,
+  at most 100 pages, and at most 5000 entries counting any that are not valid
+  tools), once the host's `initialize` is done (on stdio, when the host sends
+  `notifications/initialized`; over HTTP, once the upstream has accepted that
+  notification, never before it is forwarded), and again after each
+  `notifications/tools/list_changed` and when a `tools/call` names a tool it
+  has not seen. The server answers as it would to the host. Over HTTP the
+  request reuses the host's `Mcp-Session-Id` and headers (credentials
+  included); each inventory is kept per session and per hash of the host's
+  credential headers (`Authorization`, `Cookie`, `X-API-Key`; never stored in
+  clear), so one client's call is never judged on a list fetched with another
+  client's credentials. At most 64 inventories are kept. The legacy
+  two-endpoint SSE transport answers on a separate stream and is not supported
+  for this fetch: when the upstream answers the runtime's request with 202,
+  `coriqo-mcp` stops fetching (for every session of that upstream) and logs
+  that once. Because the runtime cannot read its own answers on that
+  transport, no tool can be checked: **pinned tools are refused under
+  `enforce` and flagged under `shadow`** (they follow `on_drift`), and tools
+  with no pin follow `on_unpinned`.
+  A host that was already initialized before `coriqo-mcp` started sends no new
+  `notifications/initialized`, so its tools cannot be checked until it
+  reconnects, with the same result.
+- Its requests use string ids starting `byoai-pin-` and a random per-process
+  token, and the answers never reach the host. A host request whose id starts
+  `byoai-pin-` is refused with `-32600`, so ids cannot collide. The refetch
+  waits at least 5 seconds before looking for the same missing name again, and
+  paged fetches to one upstream are spaced at least `MIN_FETCH_INTERVAL_S`
+  (1 second, a constant in `byoai.integrations.coriqo_mcp_pins`) apart across
+  all sessions, so a client that churns session ids cannot multiply the load on
+  the server. A failed fetch backs off 2, 4, 8 ... up to 300 seconds (and honours
+  `Retry-After` over HTTP), and there is one request in flight at a time.
+- A `tools/call` is **held** while a fetch is running or needed, up to
+  `--pin-hold-timeout`. If the wait runs out, the fetch failed, or the tool
+  was never seen, it cannot be checked. A tool that **has a pin** then follows
+  `on_drift` (refused under `enforce`, flagged under `shadow`), and the reason
+  says it could not be checked in time; a tool with **no pin** follows
+  `on_unpinned`. Neither is ever passed as a match. After a `list_changed`
+  nothing is checked against the old list.
+- The host and the runtime can be shown different lists. The runtime keeps, per
+  session, the hash of each tool as it appeared in the host's own `tools/list`
+  answers, across all pages of one list. A call to a tool whose host-seen hash differs from the one the
+  runtime fetched (or, when it could not fetch, from the pin) is drift, follows
+  `on_drift`, and the record's
+  `definition_sha256` is the host-seen hash. A name the host's own list shows
+  twice with different definitions, on one page or on different pages of one
+  list, is ambiguous: it counts as drift, and under `enforce` with `refuse`
+  every later entry of it is hidden (an entry on a page already sent cannot be
+  taken back). The state resets when the host lists again from the first page
+  (a `tools/list` without a cursor) and on a `list_changed`. A `list_changed` clears what the
+  host saw until it lists again.
+- Verdicts. Matching hashes (definition and annotations): allowed as before.
+  A different definition or annotations hash: `on_drift`. A tool the mandate
+  allows that has no pin under `--server`: `on_unpinned`. `flag` allows the call
+  and records it `flagged`; `refuse` denies it (`blocked`) and, under `enforce`,
+  removes the tool from every `tools/list` answer. A live tool the mandate does
+  not allow is not offered under `enforce` and refused if called, as before.
+  Under `shadow` (`observe`) and `on_violation: alert_only` nothing is blocked:
+  a `refuse` is recorded as `flagged`. A refusal is not latched, so a server that
+  restores the tool is let back in.
+- Where the policy comes from. A snapshot from Coriqo carries `tool_pin_policy`
+  (`on_drift` and `on_unpinned`, each `flag` or `refuse`, resolved for the
+  agent's mode; `class_actions`; `policy_sha256`). A mandate file has none:
+  `on_drift` is `refuse` under `enforce` and `flag` under `shadow`, and
+  `on_unpinned` is `flag`.
+- **What the runtime cannot tell.** It holds only the pinned hashes, not the
+  launcher or the lock file. It can say that a definition changed, that
+  annotations changed, that an allowed tool is unpinned, that a pinned tool has
+  gone (logged, since a removed tool cannot be called), or that a tool could
+  not be checked. It cannot say whether a change widened parameters, only
+  changed a title, or made a hint riskier, so every hash mismatch follows
+  `on_drift`. `class_actions` is carried and recorded with the snapshot but this
+  runtime does not interpret it.
+- Each recorded verdict gains three fields when the agent has pins:
+  `pin_status` (`match`, `drift` or `unpinned`), `definition_sha256` (the
+  hash seen on the server; absent when the tool was not seen) and `server` (the
+  `--server` name, checked against `[A-Za-z0-9_.-]{1,64}`, else
+  `<invalid name>`; absent when no `--server` was given). Both are in the
+  local ledger record and in the batch sent to Coriqo. The reason is
+  `tool_pin_drift` or `tool_unpinned`. The operator detail names only the
+  server and the tool, after the name is checked against `[A-Za-z0-9_.-]{1,64}`
+  (else `<invalid name>`); a tool's description never appears in a reason, a
+  log line or a record.
+- A pin check happens before the call is forwarded. It cannot see a change that
+  happens after the check and before the server runs the tool, so pins are not
+  a guarantee about what executes; they catch a tool that changed since it was
+  approved, at the moment of each call.
+- Every server line is parsed while the mandate pins tools, not only those that
+  look like `list_changed`: a substring test can be defeated with JSON
+  escapes, and a hidden change notice is how a changed tool would get past the
+  check.
+- Limits. The hash is of what this client sees on the wire; a server that
+  answers different clients differently can only be pinned per client. Pins are
+  not signed in the snapshot. The runtime fetches the list as one more client of
+  the server; it does not check resources, prompts or tool results.
 
 **When the agent is suspended.** With `--coriqo-agent-id`, the snapshot
 `coriqo-mcp` fetches carries the agent's status. When it changes to
