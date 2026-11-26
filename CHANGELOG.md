@@ -23,6 +23,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ask again on update. Not yet confirmed in a browser.
 
 ### Fixed
+- `coriqo-mcp --mandate FILE`: verdict batches are no longer refused with a 422
+  (`string_too_long`) that dropped the whole batch. A file mandate's id is
+  `sha256:<64 hex>`, longer than the 36 characters Coriqo accepts for
+  `mandate_version_id`, so it is now sent as `null` (Coriqo counts it as
+  unversioned). The local ledger still records the full hash. A Coriqo-issued
+  mandate version id is sent unchanged.
+- A verdict batch Coriqo refuses with any permanent 4xx (not only 422) is parked
+  as `rejected` and logged once at WARNING with the status, the field name and
+  the number of verdicts, never their values. Retryable statuses (401, 403, 408,
+  409, 423, 425, 429) are still resent.
 - Browser extension 0.10.5: Copilot is now covered on copilot.com.
   copilot.microsoft.com redirects there, and the manifest listed only the old
   host, so no extension script ran on the page the user ends up on. The host is

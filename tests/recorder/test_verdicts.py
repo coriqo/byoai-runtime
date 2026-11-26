@@ -434,6 +434,106 @@ async def test_a_422_is_not_retried_and_the_batch_is_parked(tmp_path, recorder):
     assert len(_verdict_events(recorder.ledger)) == 1
 
 
+_FILE_MANDATE_ID = "sha256:" + "ab" * 32
+
+
+def _gate_with_version(version: str):
+    gate = MandateGate(lambda etag=None: None, agent_id=_AGENT)
+    gate.apply_snapshot(
+        {
+            "allowed_tools": ["search"],
+            "mandate_version_id": version,
+            "mandate_enforcement": "enforce",
+            "enforcement_posture": "fail_closed",
+        }
+    )
+    return gate
+
+
+async def _ship_one(tmp_path, recorder, version):
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json={"accepted": 1})
+
+    gate = _gate_with_version(version)
+    with use_gate(gate):
+        recorder.record(
+            gate.decide(ProposedAction(tool="search")), agent_id=_AGENT
+        )
+    client = _device_client(handler, tmp_path)
+    await VerdictShipper(client, recorder.outbox).ship_once()
+    await client.close()
+    return sent
+
+
+async def test_a_file_mandate_id_is_sent_as_null_but_the_ledger_keeps_it(
+    tmp_path, recorder
+):
+    """Coriqo caps mandate_version_id at 36 characters, so the 71-character
+    sha256 of a mandate file was a 422 that dropped the whole batch."""
+    sent = await _ship_one(tmp_path, recorder, _FILE_MANDATE_ID)
+    assert [v["mandate_version_id"] for v in sent[0]["verdicts"]] == [None]
+    assert [
+        e["mandate_version_id"] for e in _verdict_events(recorder.ledger)
+    ] == [_FILE_MANDATE_ID]
+
+
+async def test_a_coriqo_mandate_id_is_sent_unchanged(tmp_path, recorder):
+    version = "3f2b8c1e-9a4d-4e57-8b1a-0c6d5e7f9a12"
+    sent = await _ship_one(tmp_path, recorder, version)
+    assert sent[0]["verdicts"][0]["mandate_version_id"] == version
+
+
+async def test_a_refused_batch_is_logged_with_status_field_and_count_only(
+    tmp_path, recorder, caplog
+):
+    secret = "sha256:" + "cd" * 32
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            422,
+            json={
+                "detail": [
+                    {
+                        "type": "string_too_long",
+                        "loc": ["body", "verdicts", 0, "mandate_version_id"],
+                        "msg": "too long",
+                        "input": secret,
+                    }
+                ]
+            },
+        )
+
+    recorder.record(_deny(tmp_path), agent_id=_AGENT)
+    recorder.record(_deny(tmp_path), agent_id=_AGENT)
+    client = _device_client(handler, tmp_path)
+    with caplog.at_level("WARNING", logger="byoai"):
+        await VerdictShipper(client, recorder.outbox).ship_once()
+    await client.close()
+
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    text = warnings[0].getMessage()
+    assert "422" in text and "mandate_version_id" in text and "2 verdict" in text
+    assert secret not in text
+    note = recorder.outbox.rows(state="rejected")[0]["note"]
+    assert secret not in note and "mandate_version_id" in note
+
+
+async def test_a_400_is_parked_too(tmp_path, recorder):
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"detail": "bad request"})
+
+    recorder.record(_deny(tmp_path), agent_id=_AGENT)
+    client = _device_client(handler, tmp_path)
+    result = await VerdictShipper(client, recorder.outbox).ship_once()
+    await client.close()
+    assert result is not None and result.rejected is True
+    assert recorder.outbox.pending_count() == 0
+
+
 # -- stale mandate versions are surfaced, not rejected ---------------------
 
 
