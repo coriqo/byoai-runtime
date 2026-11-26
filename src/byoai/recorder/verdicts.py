@@ -86,6 +86,7 @@ from pathlib import Path
 from typing import Any
 
 from .canonical import canonicalize, sha256_hex
+from .coriqo_agents import wire_mandate_version_id
 from .delegation import EffectiveScope
 from .denial_latch import LatchedDenial
 from .ledger import Ledger, LedgerEntry
@@ -969,25 +970,12 @@ def _int(value: Any) -> int:
 #: and is resent. Every other 4xx says the batch itself is wrong.
 _RETRYABLE_4XX = frozenset({401, 403, 408, 409, 423, 425, 429})
 
-#: Coriqo caps ``mandate_version_id`` at this many characters (a UUID).
-_MAX_WIRE_MANDATE_VERSION_ID = 36
-
-
 def _for_the_wire(verdict: dict[str, Any]) -> dict[str, Any]:
-    """One outbox row as Coriqo's batch endpoint receives it.
-
-    A mandate read from a file is identified by ``sha256:<64 hex>``, which is
-    not a Coriqo mandate version and is longer than the endpoint accepts (a 422
-    that dropped the whole batch). It goes out as ``None``, which Coriqo counts
-    as unversioned. Wire only: the outbox row and the ledger keep the full
-    hash, so the device record still names the exact file.
-    """
+    """One outbox row as Coriqo's batch endpoint receives it (see
+    ``wire_mandate_version_id``); the outbox row keeps the full hash."""
     version = verdict.get("mandate_version_id")
-    if isinstance(version, str) and (
-        version.startswith("sha256:") or len(version) > _MAX_WIRE_MANDATE_VERSION_ID
-    ):
-        return {**verdict, "mandate_version_id": None}
-    return verdict
+    wire = wire_mandate_version_id(version)
+    return verdict if wire == version else {**verdict, "mandate_version_id": wire}
 
 
 def _refused_fields(exc: Exception) -> str:

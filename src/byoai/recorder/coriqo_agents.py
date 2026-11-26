@@ -80,6 +80,26 @@ from .receipts import ReceiptStore, canonical_hash
 from .redact import PayloadMode, TextRedactor, payload_mode_headers, redact_free_text
 from .schema import EventKind
 
+#: Coriqo caps ``mandate_version_id`` at this many characters (a UUID).
+_MAX_WIRE_MANDATE_VERSION_ID = 36
+
+
+def wire_mandate_version_id(version: str | None) -> str | None:
+    """A mandate id as Coriqo's endpoints receive it.
+
+    A mandate read from a file is identified by ``sha256:<64 hex>``, which is
+    not a Coriqo mandate version and is longer than the endpoints accept (a 422).
+    It goes out as ``None``, which Coriqo records as unversioned. Wire only: the
+    local ledger and outbox keep the full hash, so the device record still names
+    the exact file.
+    """
+    if isinstance(version, str) and (
+        version.startswith("sha256:") or len(version) > _MAX_WIRE_MANDATE_VERSION_ID
+    ):
+        return None
+    return version
+
+
 __all__ = [
     "GROUNDING_SYSTEM",
     "GUARDRAIL_CONTROL_SYSTEM",
@@ -95,6 +115,7 @@ __all__ = [
     "ToolStep",
     "ensure_registered",
     "make_publish_client",
+    "wire_mandate_version_id",
     "parse_response",
     "publish_session",
     "send_device_receipts",
