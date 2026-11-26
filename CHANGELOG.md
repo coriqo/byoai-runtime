@@ -21,6 +21,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   confirmed on copilot.com in a browser.
 
 ### Added
+- **`coriqo-mcp --shield-dir DIR` sends device receipts.** Off by default. Each
+  gated `tools/call` gets a sealed Shield `tool.call` row carrying `payload_hash`
+  (the digest of the call, equal to the step's `args_hash`) and
+  `mandate_verdict` (`allowed`, `flagged`, `blocked`, `pending_approval`),
+  signed with the recorder's device key. An allowed call also gets a `tool_use`
+  ledger event holding the tool name and that digest, never the arguments, in
+  every payload mode. Each MCP connection is its own run; at shutdown, when
+  decisions are being sent to Coriqo and the API credentials are set, each run
+  goes up through `publish_session(..., seal_chain=...)`. Denied and pending calls
+  have a sealed row but no step.
 - **Held calls send their arguments with the approval request, in payload mode
   `full` only.** Coriqo keeps the amount they state and a SHA-256 fingerprint;
   the approved call's ledger entry carries `approval_id` and `amount_usd`,

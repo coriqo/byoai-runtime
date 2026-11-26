@@ -1754,6 +1754,7 @@ coriqo-mcp --mandate coriqo.mandate.yaml --http --upstream http://127.0.0.1:9000
 | `--environment ENV` | `$BYOAI_MANDATE_ENVIRONMENT` | where this runs; see `BYOAI_MANDATE_ENVIRONMENT` |
 | `--recorder-dir DIR` | `$BYOAI_RECORDER_DIR` or `~/.byoai/recorder` | ledger, device key and the outbox of decisions waiting to go to Coriqo (`coriqo_mcp_verdicts.db`) |
 | `--no-record` | off | decide calls but write nothing (no `cryptography` needed) |
+| `--shield-dir DIR` | off | device receipts. Seal a Shield `tool.call` row for every gated call under `DIR`, signed with the recorder's own device key. The row holds the call's digest (`payload_hash`) and the decision (`mandate_verdict`: `allowed`, `flagged`, `blocked` or `pending_approval`), never the arguments, in every payload mode. An allowed call also gets a `tool_use` ledger event with the tool name and the same digest. Each MCP connection is its own run. When the run ends and decisions are being sent to Coriqo (enrolled device, agent id, `BYOAI_CORIQO_*` API credentials in the environment), each run is published once with its receipts. Ignored with `--no-record`; unset, nothing changes |
 | `--http` | off | relay an HTTP MCP server (streamable HTTP or SSE) instead of a stdio child |
 | `--upstream URL` | — | with `--http`: the server's base URL. Requests keep their path and query |
 | `--listen HOST:PORT` | `127.0.0.1:8808` | with `--http`: where `coriqo-mcp` listens |

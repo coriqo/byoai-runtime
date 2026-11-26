@@ -245,6 +245,8 @@ class Interposer:
         self._default_run = run_id or f"mcp-{uuid.uuid4().hex[:16]}"
         self._steps: OrderedDict[str, int] = OrderedDict()
         self._lock = threading.Lock()
+        #: Set when ``--shield-dir`` is on; ``None`` leaves every call as before.
+        self.receipts: Any = None
 
     def run_id(self, session: str | None = None) -> str:
         return f"mcp-session-{session}" if session else self._default_run
@@ -352,13 +354,17 @@ class Interposer:
         raw_args = params.get("arguments")
         run_id = self.run_id(session)
         enforcer = ProxyEnforcer(self.gate, run_id=run_id)
-        return enforcer.decide(
+        digest = arguments_sha256(raw_args)
+        decision = enforcer.decide(
             tool,
             arguments=raw_args if isinstance(raw_args, dict) else None,
             step_index=self._next_step(run_id),
-            arguments_sha256=arguments_sha256(raw_args),
+            arguments_sha256=digest,
             pin=self._pin_check(tool, inventory, settled),
         )
+        if self.receipts is not None:
+            self.receipts.note(run_id, tool, digest, decision.verdict)
+        return decision
 
     def gate_request(
         self,
@@ -1570,6 +1576,14 @@ def _parser() -> argparse.ArgumentParser:
         help="tool pinning: how long a tools/call waits for the runtime to fetch the "
         f"server's tool list before it counts as unpinned (default {DEFAULT_HOLD_TIMEOUT_S:g})",
     )
+    p.add_argument(
+        "--shield-dir", metavar="DIR", default=None,
+        help="turn on device receipts: seal a Shield tool row (digest and decision, "
+        "never the arguments) for every gated call under DIR, signed with the "
+        "recorder's device key, and send them to Coriqo when the run ends. Needs "
+        "--coriqo-agent-id or agent.id, an enrolled device and the Coriqo API "
+        "credentials in the environment. Off by default",
+    )
     p.add_argument("--http", action="store_true", help="relay an HTTP MCP server instead of stdio")
     p.add_argument("--upstream", help="with --http: the server's base URL, e.g. http://127.0.0.1:9000")
     p.add_argument(
@@ -1693,6 +1707,8 @@ class _Record:
 
     def __init__(self, recorder: Any, verdicts: Any, shipper: Any = None,
                  client: Any = None, outbox: Any = None) -> None:
+        self.receipts: Any = None
+        self.agent_id: str | None = None
         self.recorder = recorder
         self.verdicts = verdicts
         self._shipper = shipper
@@ -1728,11 +1744,50 @@ class _Record:
                     delay,
                 )
 
+    def _publish_receipts(self) -> None:
+        """Send each connection's run, with its sealed rows, to Coriqo. Runs
+        once, at close, and only when decisions are being shipped. Never raises."""
+        from ..recorder.coriqo_agents import (
+            CoriqoAgentsClient,
+            CoriqoCredentials,
+            publish_session,
+        )
+
+        creds = CoriqoCredentials.from_env()
+        if creds is None:
+            log.warning(
+                "coriqo-mcp: --shield-dir is on but the Coriqo API credentials are not "
+                "in the environment, so the sealed rows stay on this device"
+            )
+            return
+        client = CoriqoAgentsClient(creds, device_signer=self.recorder.key)
+        try:
+            for session_id in list(self.receipts.sessions):
+                try:
+                    publish_session(
+                        client,
+                        coriqo_agent_id=str(self.agent_id),
+                        ledger=self.recorder.ledger,
+                        session_id=session_id,
+                        payload_mode=self.recorder.payload_mode,
+                        seal_chain=self.receipts.feed.seals,
+                    )
+                except Exception as exc:  # noqa: BLE001 - the run already ended
+                    log.warning("coriqo-mcp: could not publish run %s (%s)", session_id, exc)
+        finally:
+            client.close()
+
     async def close(self) -> None:
         if self._task is not None:
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
+        if self.receipts is not None and self._shipper is not None and self.agent_id:
+            try:
+                await asyncio.wait_for(asyncio.to_thread(self._publish_receipts), 30.0)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("coriqo-mcp: %s; sealed rows stay on this device",
+                            exc or "publishing to Coriqo timed out")
         if self._shipper is not None:
             try:
                 await asyncio.wait_for(self._drain(), 10.0)
@@ -1754,6 +1809,8 @@ class _Record:
 def _build_recorder(args: argparse.Namespace, agent_id: str | None) -> _Record | None:
     if args.no_record:
         log.warning("coriqo-mcp: --no-record: decisions are made but not written down")
+        if getattr(args, "shield_dir", None):
+            log.warning("coriqo-mcp: --shield-dir is ignored with --no-record")
         return None
     from ..recorder.integration import Recorder
     from ..recorder.verdicts import VerdictRecorder
@@ -1790,7 +1847,23 @@ def _build_recorder(args: argparse.Namespace, agent_id: str | None) -> _Record |
         checkpointer=recorder.checkpointer,
         session_id="coriqo-mcp",
     )
-    return _Record(recorder, verdicts, shipper, client, outbox)
+    record = _Record(recorder, verdicts, shipper, client, outbox)
+    if getattr(args, "shield_dir", None):
+        from .coriqo_mcp_receipts import ReceiptSink
+
+        record.receipts = ReceiptSink(
+            verdicts,
+            shield_dir=args.shield_dir,
+            key_dir=recorder.ledger.path.parent,
+        )
+        record.agent_id = agent_id
+        if shipper is None:
+            print(
+                "coriqo-mcp: --shield-dir seals rows locally, but nothing is sent to "
+                "Coriqo until this device is enrolled and an agent id is set.",
+                file=sys.stderr,
+            )
+    return record
 
 
 def _describe(gate: MandateGate) -> str:
@@ -1846,6 +1919,8 @@ async def _amain(args: argparse.Namespace, command: list[str]) -> int:
         print(f"coriqo-mcp: {exc}", file=sys.stderr)
         return 2
     interposer = Interposer(gate, pin_server=pin_server, pin_hold_timeout_s=hold)
+    if record is not None:
+        interposer.receipts = record.receipts
     try:
         await gate.start()
         print(f"coriqo-mcp: {source}; {_describe(gate)}", file=sys.stderr)
