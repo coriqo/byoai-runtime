@@ -1867,6 +1867,7 @@ class Feed:
         self.seals = SealChain(cfg)
         self.items: deque = deque(maxlen=cfg.max_interactions)
         self._offset = 0
+        self._byte_offset = 0  # bytes of the ledger already consumed (whole lines only)
         self._policy = load_policy(cfg)
         self._scanned = False
         self._poll_lock = threading.Lock()
@@ -1881,9 +1882,11 @@ class Feed:
         self._scanned = True
         self._policy = load_policy(self.cfg)
         try:
-            lines = self.cfg.ledger.read_text().splitlines()
+            raw = self.cfg.ledger.read_bytes()
+            lines = raw.decode("utf-8").splitlines()
         except OSError:
             return 0
+        self._byte_offset = len(raw)
         with self.seals.batch():
             for x in lines:
                 try:
@@ -1896,9 +1899,12 @@ class Feed:
     def resync(self) -> None:
         """After a scrub rewrote the ledger, continue from its new end."""
         try:
-            self._offset = len(self.cfg.ledger.read_text().splitlines())
+            raw = self.cfg.ledger.read_bytes()
+            self._offset = len(raw.decode("utf-8").splitlines())
+            self._byte_offset = len(raw)
         except OSError:
             self._offset = 0
+            self._byte_offset = 0
 
     def poll(self) -> int:
         # A watcher thread can start before the first scan; reading from
@@ -1914,18 +1920,27 @@ class Feed:
         if sig == getattr(self, "_poll_sig", None):
             return 0
         self._policy = load_policy(self.cfg)
+        # Read only what was appended since the last poll, not the whole ledger.
         try:
-            lines = self.cfg.ledger.read_text().splitlines()
+            with self.cfg.ledger.open("rb") as fh:
+                size = fh.seek(0, 2)
+                if size >= self._byte_offset:
+                    fh.seek(self._byte_offset)
+                    chunk = fh.read()
+                else:
+                    chunk = None
         except OSError:
             return 0    # not remembered as seen: the next poll reads it again
         self._poll_sig = sig
-        if len(lines) < self._offset:  # rewritten under us (scrub/retention)
-            self._offset = len(lines)
+        if chunk is None:  # rewritten under us (scrub/retention): continue from the new end
+            self.resync()
             return 0
-        if len(lines) == self._offset:
+        end = chunk.rfind(b"\n") + 1  # a half-written last line waits for its newline
+        if end == 0:
             return 0
-        new = [line for line in lines[self._offset:] if line.strip()]
-        self._offset = len(lines)
+        self._byte_offset += end
+        new = [line for line in chunk[:end].decode("utf-8", "replace").splitlines() if line.strip()]
+        self._offset += len(chunk[:end].splitlines())
         with self.seals.batch():
             for line in new:
                 try:
