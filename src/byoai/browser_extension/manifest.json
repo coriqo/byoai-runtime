@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
   "name": "Coriqo Shield - Agent Capture",
-  "version": "0.10.7",
+  "version": "0.10.8",
   "minimum_chrome_version": "137",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArquEH7Gz8s7OHMWvX7vKFz80bep7Ux/DHQ6PuO+2lJCnxwVoJMD9zhAm8GTHKVpBUKvL+EYWrPMu5eDc1RKmWMyTBBsbyNe+xejk2yAzUbjfiMO+cgIUxES1hOhTrtous2TkEvrZljczxKxjge9Jf0H3imswlAaRgJBIED0Hp2sXTBSpPtR9Yy6PNmLfpmlZGV8q9MyVKPCWu55g3YiVFqP6f81Pdf2I1oEkeNWxQa1bjEBcNXji00rfibRcatPFOku/ReOMAE5SjdtoVEu6JfgomIji9mUDl0hEwT5LsJbu3AsCHWUdFPof4lxJF5kHMharY4b/k0U3wHf0g5XhLQIDAQAB",
-  "description": "Stops API keys and checks what you send to Claude, ChatGPT, Gemini and Copilot, and replaces personal details on Claude and ChatGPT. Checks run on your computer.",
+  "description": "Stops secrets and replaces personal details in messages you send to AI chat sites. Checks run on your computer.",
   "permissions": [
     "storage",
     "activeTab",
@@ -73,24 +73,6 @@
         "content-relay.js"
       ],
       "run_at": "document_start"
-    }
-  ],
-  "web_accessible_resources": [
-    {
-      "resources": [
-        "PRIVACY.md"
-      ],
-      "matches": [
-        "https://claude.ai/*",
-        "https://chatgpt.com/*",
-        "https://chat.openai.com/*",
-        "https://gemini.google.com/*",
-        "https://copilot.microsoft.com/*",
-        "https://copilot.com/*",
-        "https://copilot.cloud.microsoft/*",
-        "https://m365.cloud.microsoft/chat",
-        "https://m365.cloud.microsoft/chat/*"
-      ]
     }
   ],
   "icons": {

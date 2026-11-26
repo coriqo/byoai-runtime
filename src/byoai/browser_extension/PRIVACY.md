@@ -1,8 +1,10 @@
 # Coriqo Shield: Agent Capture — privacy notice
 
 This extension records *that* you sent a message to an AI chat, never *what you
-said*. On claude.ai and chatgpt.com it also replaces personal details in your
-message before the message leaves the page, when your Shield's policy says to.
+said*. On claude.ai, chatgpt.com, gemini.google.com and Microsoft Copilot it also
+replaces personal details in the message box before you send, when your
+Shield's policy says to; on claude.ai and chatgpt.com it also does so in the
+network request itself. There is no account and no sign-in.
 It does nothing until you agree on the welcome page it opens when you install
 it, and you can turn it off again at any time from its popup.
 
@@ -140,7 +142,9 @@ Shield (they are off in Shield's default policy, and checked like the others
 until the extension has heard from your Shield), the input gate above still
 checks what you send and attach there, with
 the same actions: it can stop a send, rewrite the message box or clear the file
-picker before the site receives anything. Other sends that don't go through the
+picker before the site receives anything. This is best effort and is not yet
+confirmed on every page; if the extension cannot tell which field is the
+message box, it leaves it alone and the popup says so. Other sends that don't go through the
 page's `fetch` are noted, not rewritten. Attachments are read only as described
 under "File hashing" and "What the input gate reads".
 
@@ -187,7 +191,8 @@ None of this contains message text, and none of it leaves your computer.
   covered, only when you open it.
 - Host access to `127.0.0.1` / `localhost`: to reach Shield.
 - Content scripts on the five chat sites listed above: to notice a send and,
-  on claude.ai and chatgpt.com, replace personal details in it. One runs in
+  replace personal details in the message box (and, on claude.ai and
+  chatgpt.com, in the network request). One runs in
   the page so it can see (and rewrite) the send request (it must wrap `fetch`,
   since the sites' security policies block injecting anything else); the
   other relays the text-free fact to the extension, and passes Shield's mode

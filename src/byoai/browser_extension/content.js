@@ -32,7 +32,7 @@
   } catch { /* cross-origin parent: this frame is its own page */ }
   window.__shieldCapturePatched = true
   // Which build this tab runs (a tab opened before a reload keeps old code).
-  try { Object.defineProperty(window, '__shieldVersion', { value: '0.10.7' }) } catch { /* already set */ }
+  try { Object.defineProperty(window, '__shieldVersion', { value: '0.10.8' }) } catch { /* already set */ }
 
   // Which app this host is: from the generated shield-sites.js (sites.json).
   const site = ((window.__shieldSites && window.__shieldSites.sites) || [])
