@@ -42,6 +42,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from .canonical import canonicalize, sha256_hex
 from .keys import DeviceKey, _mark_promotion_confirmed, load_or_create_device_key
 from .ledger import Ledger
+from .redact import RUNTIME_AUTHORED
 from .schema import (
     EVENT_SCHEMA_VERSION,
     AgentEvent,
@@ -159,7 +160,7 @@ def rotate_key(
     # been attempted.
     _stage_new_key(key_dir, new_private, new_key)
 
-    entry = ledger.append(event)
+    entry = ledger.append(event, payload_mode=RUNTIME_AUTHORED)
     if entry is None:
         raise RuntimeError(
             "failed to append KEY_ROTATED event to the ledger — the new key "

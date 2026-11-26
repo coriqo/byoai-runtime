@@ -76,7 +76,9 @@ class _AnthropicSDKProviderBase:
             response = await self._client.messages.create(**payload)
         except anthropic.APIStatusError as exc:
             raise_for_status(
-                exc.response, provider=self.name, retryable_status=self._retryable_status
+                exc.response,  # pyright: ignore[reportArgumentType]  # newer SDKs return httpx2.Response; raise_for_status only reads status_code, headers, json() and text
+                provider=self.name,
+                retryable_status=self._retryable_status,
             )
             raise AssertionError("unreachable: raise_for_status always raises for 4xx/5xx") from exc
         except anthropic.APIConnectionError as exc:
@@ -139,7 +141,9 @@ class _AnthropicSDKProviderBase:
                 final = await stream.get_final_message()
         except anthropic.APIStatusError as exc:
             raise_for_status(
-                exc.response, provider=self.name, retryable_status=self._retryable_status
+                exc.response,  # pyright: ignore[reportArgumentType]  # newer SDKs return httpx2.Response; raise_for_status only reads status_code, headers, json() and text
+                provider=self.name,
+                retryable_status=self._retryable_status,
             )
             raise AssertionError("unreachable: raise_for_status always raises for 4xx/5xx") from exc
         except anthropic.APIConnectionError as exc:

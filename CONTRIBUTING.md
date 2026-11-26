@@ -6,7 +6,7 @@ running, the checks your change needs to pass, and how PRs get reviewed and rele
 ## Development setup
 
 ```bash
-git clone https://github.com/ravikings/byoai-runtime.git
+git clone https://github.com/coriqo/byoai-runtime.git
 cd byoai-runtime
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate

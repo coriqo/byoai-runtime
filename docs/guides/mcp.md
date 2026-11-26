@@ -26,7 +26,7 @@ asyncio.run(server.run_stdio_async())
 
 `create_server()` returns the underlying MCP SDK server object, so every native method is
 available too — `run_streamable_http_async(port=...)` for a standalone HTTP server, for example.
-See [`examples/mcp_server/main.py`](https://github.com/ravikings/byoai-runtime/blob/main/examples/mcp_server/main.py)
+See [`examples/mcp_server/main.py`](https://github.com/coriqo/byoai-runtime/blob/main/examples/mcp_server/main.py)
 for a runnable script that supports both `--http` and stdio from one entry point.
 
 ## Mounting into an existing app
@@ -65,6 +65,6 @@ Both tools accept `input`, and the same optional `pipeline`, `session_id`, `user
 ## Exact parameters
 
 For the full `create_server()`/`attach()`/`create_app()` signatures, see
-[CONFIGURATION.md](https://github.com/ravikings/byoai-runtime/blob/main/CONFIGURATION.md) —
+[CONFIGURATION.md](https://github.com/coriqo/byoai-runtime/blob/main/CONFIGURATION.md) —
 that file is kept as the authoritative, exact parameter reference across every component; this
 guide covers the narrative "how it fits together."

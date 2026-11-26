@@ -8,10 +8,10 @@ events through the recorder.
 from __future__ import annotations
 
 import pytest
+from examples.agent_showcase.app import app
 from fastapi.testclient import TestClient
 
 from byoai.recorder import integration as recorder_integration
-from examples.agent_showcase.app import app
 
 
 @pytest.fixture
@@ -35,6 +35,7 @@ def test_b1_runs_end_to_end_and_seals_events(demo_client):
     started = demo_client.post("/api/agents/b1-fraud-triage/run").json()
     run_id = started["run_id"]
 
+    summary: dict = {}
     for _ in range(100):
         summary = demo_client.get(f"/api/runs/{run_id}").json()
         if summary["done"]:

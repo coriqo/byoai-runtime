@@ -13,6 +13,7 @@ const APPS = {
   'chat.openai.com': 'ChatGPT',
   'gemini.google.com': 'Gemini',
   'copilot.microsoft.com': 'Copilot',
+  'copilot.com': 'Copilot',
 }
 let lastRender = null
 const STALE_AFTER_MS = 7 * 24 * 3600 * 1000

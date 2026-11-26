@@ -101,6 +101,8 @@ class TestEventKind:
             "guardrail_intervention",
             # TI-25: a worker acknowledging a suspension (hook or process).
             "worker_stop_ack",
+            # C2: liveness entry written on a timer by the recorder process.
+            "heartbeat",
         }
 
 

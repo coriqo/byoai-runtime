@@ -3,8 +3,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
-from typing import Any, Callable
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -35,14 +36,14 @@ class AgentDef:
     # tool name -> the AgentDef of a sub-agent spawned when that tool is called.
     # The tool's dispatch entry (if any) is ignored for these names; the runner
     # runs a nested AgentRunner instead and its final text becomes the tool result.
-    sub_agent_tools: dict[str, "AgentDef"] = field(default_factory=dict)
+    sub_agent_tools: dict[str, AgentDef] = field(default_factory=dict)
     # Business system and regulated use case as a bank's own registry would
     # name them. Empty system falls back to the showcase namespace.
     system: str = ""
     use_case: str | None = None
     cases: tuple[Case, ...] = ()
 
-    def for_case(self, case: Case) -> "AgentDef":
+    def for_case(self, case: Case) -> AgentDef:
         """This agent bound to one case: its prompt and transcript, and its
         sub-agents' too, so a nested run replays the same case."""
         subs = {

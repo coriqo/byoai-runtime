@@ -6,15 +6,14 @@ import json
 import os
 import random
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 
 import httpx
 import redis.asyncio as redis
-from dataclasses import dataclass
-
 from fastapi import FastAPI, Request
-from starlette.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from ..recorder.integration import get_recorder
 from ..recorder.ledger import LedgerWriteError
@@ -28,9 +27,9 @@ from ..recorder.proxy_gate import (
 )
 from ..recorder.schema import new_span_id, new_trace_id
 from ..session_hash import RedisHashStore
+from ..shield_guard import gateway as shield_gw
 from ..stages import PromptCacheInjection, SessionDedup
 from ..stages import _count_cache_control_markers as _stage_count_cache_control_markers
-from ..shield_guard import gateway as shield_gw
 from . import console as console_assets
 from . import db, openai_compat
 
@@ -451,7 +450,7 @@ async def root():
     return {
         "service": "byoai-agent-context-cache",
         "status": "ok",
-        "docs": "https://github.com/ravikings/byoai-runtime#-agent-context-cache",
+        "docs": "https://github.com/coriqo/byoai-runtime#-agent-context-cache",
         "endpoints": {
             "messages": "/v1/messages",
             "count_tokens": "/v1/messages/count_tokens",
@@ -943,7 +942,7 @@ async def proxy_claude_messages(request: Request):
                         gated = sse_enforcer.feed(chunk)
                         if gated:
                             yield gated
-                    if stream_extractor is not None:
+                    if stream_extractor is not None and recorder is not None:
                         try:
                             recorder.feed_stream_chunk(stream_extractor, chunk)
                         except LedgerWriteError as ledger_exc:

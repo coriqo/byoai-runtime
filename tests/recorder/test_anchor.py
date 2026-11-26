@@ -232,7 +232,7 @@ def test_verify_rekor_receipt_reconstruction_never_raises_recursion_error():
     try:
         _root_from_audit_path(leaf_hash, 0, huge_size, path)
     except RecursionError:
-        raise AssertionError("audit path reconstruction must not recurse")
+        raise AssertionError("audit path reconstruction must not recurse") from None
     except ValueError:
         pass  # fine — shape mismatch is an expected, clean failure
 

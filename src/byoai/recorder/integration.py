@@ -17,6 +17,8 @@ import logging
 import os
 import secrets
 import threading
+import time
+import weakref
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -33,10 +35,77 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("byoai.recorder")
 
+#: Recorders that need their heartbeat thread restarted in a forked child.
+_LIVE_RECORDERS: weakref.WeakSet[Recorder] = weakref.WeakSet()
+
+
+#: Per-thread: the ledger locks THIS thread took in ``_before_fork``, so
+#: ``_after_fork_in_parent`` releases exactly those and never one that another
+#: forking thread owns.
+_FORK_LOCAL = threading.local()
+#: How long ``fork()`` may wait for a busy ledger before going ahead without it.
+FORK_LOCK_TIMEOUT_S = 1.0
+_fork_warned = False
+
+
+def _held() -> list[threading.RLock]:
+    held = getattr(_FORK_LOCAL, "held", None)
+    if held is None:
+        held = _FORK_LOCAL.held = []
+    return held
+
+
+def _before_fork() -> None:
+    # Hold every live ledger's lock across fork(), so no thread of ours is inside
+    # SQLite when the child is cloned (a child that inherits a half-finished
+    # SQLite call can deadlock on its first query). Fixed order (by id) so two
+    # threads, or two Recorders, never lock in opposite orders. Bounded wait: a
+    # fork (also ``subprocess`` with ``preexec_fn``) must not stall behind a slow
+    # append; on timeout go ahead without that lock and warn once.
+    global _fork_warned
+    try:
+        locks = sorted((rec.ledger._lock for rec in list(_LIVE_RECORDERS)), key=id)
+    except RuntimeError:  # the set changed while copying; skip rather than fail fork
+        return
+    held = _held()
+    for lock in locks:
+        if lock.acquire(timeout=FORK_LOCK_TIMEOUT_S):
+            held.append(lock)
+        elif not _fork_warned:
+            _fork_warned = True
+            log.warning(
+                "recorder: a ledger write was still running after %.0fs; forking without "
+                "its lock (the child reopens its own connection)", FORK_LOCK_TIMEOUT_S,
+            )
+
+
+def _after_fork_in_parent() -> None:
+    held = _held()
+    while held:
+        held.pop().release()
+
+
+def _restart_after_fork() -> None:
+    # Only cheap state swaps here. A child that just execs (subprocess with
+    # preexec_fn) must not open a connection or start a thread: the ledger
+    # reopens, and the heartbeat restarts, on the child's first use of it.
+    _held().clear()  # the child's copies of the parent's locks are replaced below
+    for rec in list(_LIVE_RECORDERS):
+        rec._after_fork_in_child()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(
+        before=_before_fork,
+        after_in_parent=_after_fork_in_parent,
+        after_in_child=_restart_after_fork,
+    )
+
 __all__ = ["Recorder", "get_recorder", "reset_recorder_for_tests"]
 
 
-def _default_dir() -> Path:
+def default_recorder_dir() -> Path:
+    """The recorder directory when none is given: ``BYOAI_RECORDER_DIR``, else ~/.byoai/recorder."""
     return Path(os.getenv("BYOAI_RECORDER_DIR", str(Path.home() / ".byoai" / "recorder")))
 
 
@@ -57,7 +126,7 @@ class Recorder:
         from .checkpoint import Checkpointer
         from .keys import load_or_create_device_key
 
-        base = Path(dir) if dir is not None else _default_dir()
+        base = Path(dir) if dir is not None else default_recorder_dir()
         base.mkdir(parents=True, exist_ok=True)
         self.strict_mode = (
             strict_mode
@@ -73,6 +142,9 @@ class Recorder:
         self.ledger = Ledger(base / "ledger.db", self.key.device_id, strict_mode=self.strict_mode)
         self.checkpointer: Checkpointer = Checkpointer(self.ledger, self.key)
 
+        self._heartbeat_stop: threading.Event | None = None
+        self._heartbeat_thread: threading.Thread | None = None
+        self._heartbeat_interval_s = 0.0
         self._shipper: Shipper | None = None
         self._shipper_stop: threading.Event | None = None
         self._shipper_thread: threading.Thread | None = None
@@ -80,6 +152,97 @@ class Recorder:
 
         self._receipt_fetcher = None
         self._start_receipt_fetcher()
+
+        self._start_heartbeat()
+        _LIVE_RECORDERS.add(self)
+
+    def runtime_info(self) -> dict | None:
+        """What this process may tell a server about itself: ``None`` unless
+        the heartbeat thread is running, so ``heartbeat_chain_v1`` is never
+        claimed while heartbeats are off or failed to start. The server should
+        treat it as self-asserted (covered only by the body signature)."""
+        t = self._heartbeat_thread
+        if t is None or not t.is_alive() or self._heartbeat_interval_s <= 0:
+            return None
+        from .shipper import runtime_info as _info
+
+        return _info(self._heartbeat_interval_s)
+
+    def _after_fork_in_child(self) -> None:
+        """Mark this recorder as forked. Nothing is opened or started here.
+
+        The ledger gets a fresh lock (one a vanished thread held would never
+        release) and reopens its own SQLite connection on first use; the
+        heartbeat thread restarts at that moment too, so a child that only
+        execs does neither. Each forked worker that uses the ledger writes its
+        own heartbeats into the shared ledger: N workers write N times the
+        volume, and under ``gunicorn --preload`` the master heartbeats too
+        (N + 1 writers).
+        """
+        self.ledger.mark_forked_in_child()
+        self.checkpointer._lock = threading.RLock()
+        self._heartbeat_stop = None
+        self._heartbeat_thread = None
+        if self._heartbeat_interval_s > 0:
+            self.ledger.after_reopen = self._restart_heartbeat_in_child
+
+    def _restart_heartbeat_in_child(self) -> None:
+        log.warning(
+            "recorder: forked; restarting the heartbeat thread in pid %d "
+            "(the shipper thread is not restarted)", os.getpid(),
+        )
+        self._start_heartbeat()
+
+    def _start_heartbeat(self) -> None:
+        """Write a signed ``heartbeat`` chain entry on a timer (C2).
+
+        ``BYOAI_RECORDER_HEARTBEAT_SECONDS`` sets the interval (default 900,
+        ``0`` = off). Runs only while this process runs; see
+        :mod:`byoai.recorder.heartbeat` for the cadence rules.
+        """
+        from .heartbeat import HeartbeatEmitter, heartbeat_interval_from_env
+
+        interval = heartbeat_interval_from_env()
+        self._heartbeat_interval_s = interval
+        if interval <= 0:
+            log.info("recorder: heartbeat off (BYOAI_RECORDER_HEARTBEAT_SECONDS=0)")
+            # Say so in the chain: a verifier must not read "no heartbeats"
+            # as "none were written" when the operator turned them off.
+            try:
+                from .heartbeat import write_disabled_marker
+
+                entry = write_disabled_marker(self.ledger, self.key.device_id)
+                if entry is not None:
+                    self.checkpointer.note(entry.seq)
+            except Exception:  # noqa: BLE001
+                log.exception("recorder: could not write the heartbeat-disabled marker")
+            return
+        try:
+            emitter = HeartbeatEmitter(
+                self.ledger,
+                self.key.device_id,
+                interval_s=interval,
+                on_entry=self._after_heartbeat,
+            )
+            self._heartbeat_stop = threading.Event()
+            self._heartbeat_thread = threading.Thread(
+                target=emitter.run_forever,
+                kwargs={"stop": self._heartbeat_stop},
+                name="byoai-recorder-heartbeat",
+                daemon=True,
+            )
+            self._heartbeat_thread.start()
+        except Exception:  # noqa: BLE001
+            log.exception("recorder: failed to start heartbeat")
+            self._heartbeat_stop = None
+            self._heartbeat_thread = None
+
+    def _after_heartbeat(self, entry) -> None:
+        # Feed the checkpoint window like any other entry. The next note (the
+        # next heartbeat at the latest) fires the time trigger, so an idle
+        # recorder gets about one checkpoint per two heartbeats, and close()
+        # flushes the rest.
+        self.checkpointer.note(entry.seq)
 
     def _start_receipt_fetcher(self) -> None:
         """Fetch evidence receipts in the background (R-3).
@@ -131,6 +294,8 @@ class Recorder:
                 self.key,
                 coriqo_base_url=state.coriqo_base_url,
                 tenant_slug=state.tenant_slug,
+                runtime_info=self.runtime_info,
+                payload_mode=self.payload_mode.value,
             )
             self._shipper_stop = threading.Event()
             self._shipper_thread = threading.Thread(
@@ -146,6 +311,37 @@ class Recorder:
             self._shipper_stop = None
             self._shipper_thread = None
 
+    @property
+    def shipper(self) -> Shipper | None:
+        """The background shipper, or None while this device is not enrolled."""
+        return self._shipper
+
+    def drain(self, timeout_s: float) -> bool:
+        """Wait until everything sealed so far, and its checkpoint, has been shipped.
+
+        For a process that seals a batch and exits (the Bedrock log reader's ``--once``): the
+        background shipper keeps sending while this waits, so nothing races it. Returns False
+        when the time runs out or the device is not enrolled; what is unsent stays on disk and
+        goes with the next run.
+        """
+        if self._shipper is None:
+            return False
+        try:
+            self.checkpointer.flush()
+        except Exception:  # noqa: BLE001 - an unsigned tail is shipped by the next run
+            log.exception("recorder: checkpoint flush before drain failed")
+        last_seq = self.ledger.next_seq - 1
+        last_checkpoint = self.ledger.latest_checkpoint()
+        last_checkpoint_seq = last_checkpoint["seq_end"] if last_checkpoint else 0
+        deadline = time.monotonic() + max(0.0, timeout_s)
+        while True:
+            if (self.ledger.get_synced_up_to() >= last_seq
+                    and self.ledger.get_synced_checkpoint_up_to() >= last_checkpoint_seq):
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.2)
+
     def close(self, *, final_ship: bool = False) -> None:
         """Stop the shipper and close the ledger.
 
@@ -155,6 +351,10 @@ class Recorder:
         writes its last word on the way out (coriqo-mcp's record of stopping
         its server, TI-25) passes True. A failure is logged, not raised.
         """
+        if self._heartbeat_stop is not None:
+            self._heartbeat_stop.set()
+        if self._heartbeat_thread is not None:
+            self._heartbeat_thread.join(timeout=5.0)
         if self._receipt_fetcher is not None:
             self._receipt_fetcher.stop()  # closes its client once the thread has exited
         try:
@@ -194,7 +394,7 @@ class Recorder:
         )
         return AgentEvent(
             schema_version=partial.schema_version,
-            event_id=new_event_id(),
+            event_id=partial.event_id or new_event_id(),
             device_id=self.key.device_id,
             session_id=partial.session_id,
             seq=0,  # stamped by Ledger.append
@@ -217,7 +417,7 @@ class Recorder:
         """Append one captured event. May raise ``LedgerWriteError`` in strict mode."""
         event = self._promote(partial)
         try:
-            entry = self.ledger.append(event)
+            entry = self.ledger.append(event, payload_mode=self.payload_mode.value)
         except LedgerWriteError:
             raise
         except Exception:  # noqa: BLE001 - never let a capture bug break the proxy

@@ -12,6 +12,7 @@ for byte by an offline verifier holding only the ledger and the public key.
 
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -19,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from byoai.recorder.canonical import canonicalize
 from byoai.recorder.keys import DeviceKey
+from byoai.recorder.ledger import LedgerHeadError
 from byoai.recorder.schema import format_ts_device
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -87,6 +89,9 @@ class Checkpointer:
         self._monotonic = monotonic
         self._wall_clock = wall_clock
 
+        # note() runs on request threads and, since C2, on the heartbeat
+        # thread too; the pending window must change under one lock.
+        self._lock = threading.RLock()
         self._pending_start: int | None = None
         self._pending_end: int | None = None
         self._pending_count = 0
@@ -106,13 +111,22 @@ class Checkpointer:
     # -- driving ----------------------------------------------------------
 
     def note(self, seq: int) -> dict | None:
+        with self._lock:
+            return self._note(seq)
+
+    def _note(self, seq: int) -> dict | None:
         """Record that the ledger appended ``seq``. Returns a checkpoint if due."""
+        if self._last_emitted_end is not None and seq <= self._last_emitted_end:
+            # Noted late: a checkpoint already covers it (threads can note out
+            # of seq order, since append and note are not one atomic step).
+            return None
         if self._pending_start is None:
             self._pending_start = seq
             # The clock window starts with the first uncheckpointed event, not
             # at construction: an idle recorder must not emit empty checkpoints.
             self._window_started_at = self._monotonic()
-        self._pending_end = seq
+        self._pending_start = min(self._pending_start, seq)
+        self._pending_end = seq if self._pending_end is None else max(self._pending_end, seq)
         self._pending_count += 1
 
         if self._pending_count >= self._every_events:
@@ -122,6 +136,10 @@ class Checkpointer:
         return None
 
     def tick(self) -> dict | None:
+        with self._lock:
+            return self._tick()
+
+    def _tick(self) -> dict | None:
         """Emit if the time trigger has fired, without a new event arriving."""
         if self._pending_count == 0:
             return None
@@ -130,6 +148,10 @@ class Checkpointer:
         return None
 
     def flush(self) -> dict | None:
+        with self._lock:
+            return self._flush()
+
+    def _flush(self) -> dict | None:
         """Force a checkpoint on shutdown. ``None`` if nothing is pending."""
         if self._pending_count == 0:
             return None
@@ -137,20 +159,40 @@ class Checkpointer:
 
     # -- internals --------------------------------------------------------
 
-    def _emit(self) -> dict:
+    def _emit(self) -> dict | None:
         assert self._pending_start is not None and self._pending_end is not None
+        seq_start, seq_end = self._pending_start, self._pending_end
+        snapshot = getattr(self._ledger, "snapshot", None)
+        if snapshot is not None:
+            # Cover everything written so far and sign the hash that belongs
+            # to that seq, both read under the ledger lock. Reading ``head``
+            # separately signs whatever another thread appended meanwhile.
+            try:
+                last_seq, chain_head, snapped_at = snapshot(self._wall_clock)
+            except LedgerHeadError:
+                # The ledger already logged it and queued a record_failure.
+                # Sign nothing; keep the pending window so a later try can.
+                return None
+            if self._last_emitted_end is not None and last_seq <= self._last_emitted_end:
+                return None  # nothing verified beyond what is already signed
+            seq_end = max(seq_end, last_seq)
+            if self._last_emitted_end is not None:
+                seq_start = min(seq_start, self._last_emitted_end + 1)
+        else:
+            chain_head = self._ledger.head
+            snapped_at = self._wall_clock()
         checkpoint: dict[str, Any] = {
             "device_id": self._key.device_id,
-            "seq_start": self._pending_start,
-            "seq_end": self._pending_end,
-            "chain_head": self._ledger.head,
-            "ts_device": _rfc3339_utc(self._wall_clock()),
+            "seq_start": seq_start,
+            "seq_end": seq_end,
+            "chain_head": chain_head,
+            "ts_device": _rfc3339_utc(snapped_at),
         }
         checkpoint[_SIG_FIELD] = self._key.sign(checkpoint_signing_bytes(checkpoint))
 
         self._ledger.append_checkpoint(checkpoint)
 
-        self._last_emitted_end = self._pending_end
+        self._last_emitted_end = seq_end
         self._pending_start = None
         self._pending_end = None
         self._pending_count = 0

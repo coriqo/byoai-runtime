@@ -12,7 +12,7 @@ requires-python = ">=3.10"
 authors = [{ name = "ByoAI Runtime Contributors" }]
 keywords = ["ai", "llm", "runtime", "pipeline", "fastapi", "rag", "openai", "anthropic"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
@@ -23,12 +23,11 @@ classifiers = [
     "Framework :: AsyncIO",
 ]
 dependencies = [
-    # Upper bound is load-bearing, not defensive habit. Installing this package
-    # requires `pip install --pre` while it is an alpha, and --pre applies to
-    # every dependency in the resolve, not just this one — so an uncapped
-    # `httpx>=0.25` resolves to httpx 1.0.dev*, whose API drops `httpx.Timeout`
-    # and breaks the proxy on import. Raise the ceiling only after the code is
-    # verified against the 1.x API.
+    # Upper bound is load-bearing, not defensive habit. The code is verified
+    # against httpx 0.x only: httpx 1.0 drops `httpx.Timeout` and breaks the
+    # proxy on import (an uncapped `httpx>=0.25` resolved to 1.0.dev* for anyone
+    # installing with `--pre`, which is how this was found). Raise the ceiling
+    # only after the code is verified against the 1.x API.
     "httpx>=0.25,<1.0",
 ]
 
@@ -93,16 +92,17 @@ byoai-agent-context-cache = "byoai.agent_context_cache.main:cli"
 coriqo-verify = "byoai.recorder.cli:main"
 byoai-recorder-enroll = "byoai.recorder.enroll:enroll_cli"
 byoai-recorder-rotate-key = "byoai.recorder.rotation:rotate_cli"
+byoai-bedrock-log-reader = "byoai.recorder.bedrock_invocation_log_cli:main"
 byoai-shield = "byoai.integrations.shield_launcher:main"
 byoai-shield-server = "byoai.shield_server.cli:main"
 coriqo-mcp = "byoai.integrations.coriqo_mcp:main"
 
 [project.urls]
-Homepage = "https://github.com/ravikings/byoai-runtime"
-Repository = "https://github.com/ravikings/byoai-runtime"
-Documentation = "https://ravikings.github.io/byoai-runtime/"
-Changelog = "https://github.com/ravikings/byoai-runtime/blob/main/CHANGELOG.md"
-Issues = "https://github.com/ravikings/byoai-runtime/issues"
+Homepage = "https://github.com/coriqo/byoai-runtime"
+Repository = "https://github.com/coriqo/byoai-runtime"
+Documentation = "https://coriqo.github.io/byoai-runtime/"
+Changelog = "https://github.com/coriqo/byoai-runtime/blob/main/CHANGELOG.md"
+Issues = "https://github.com/coriqo/byoai-runtime/issues"
 
 [tool.hatch.version]
 path = "src/byoai/_version.py"
@@ -132,9 +132,9 @@ src = ["src", "tests"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC"]
 # B008: `Depends(...)` in argument defaults is the standard FastAPI idiom.
-ignore = ["B008"]
-
-[tool.ruff.lint.per-file-ignores]
-# Copied byte-for-byte from coriqo-seal-verifier's reference reader; a test
-# fails if it drifts, so it is not reformatted here.
-"src/byoai/recorder/mandate_format.py" = ["E501"]
+# E501: line length is a formatting concern and this repo has no formatter; main
+# carried ~5,100 over-long lines (4,900 of them generated mock data in
+# examples/agent_showcase), and hand-wrapping them in trust-surface code
+# (recorder/, shield_server/) risks edits to signed-byte paths for no gain.
+# `line-length` still applies to `ruff format` if someone adopts it.
+ignore = ["B008", "E501"]

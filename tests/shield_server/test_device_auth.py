@@ -7,7 +7,6 @@ import time
 
 import httpx
 import pytest
-
 from tests.shield_server.conftest import make_device_key, now_iso, signed_headers
 
 

@@ -1,0 +1,20 @@
+# v1.4: the hash of each approved MCP tool's definition, so a change after approval is seen.
+spec: coriqo.mandate/v1.4
+agent:
+  name: refund-agent
+tools:
+  allowed: [stripe.refund, search_orders, fetch_doc]
+tool_pins:
+  servers:
+    payments-mcp:
+      tools:
+        stripe.refund:
+          definition_sha256: "9304d8e313e4d66a6d39068ea04eba04f4c9e3c208e685009337c91ffb2606fa"
+          annotations_sha256: "90c26ad34ea13f71aa6f4d51aeb90695afe1920a588889dcd30260afcb72696a"
+        search_orders:
+          definition_sha256: "d1074376048ccb852ab651c70e43418e6d269e5cbd93c159386d4db99154d4cd"
+    docs.example:
+      tools:
+        fetch_doc:
+          annotations_sha256: "f1631f761755c65be2ebd588432378e6d482eaa4e4956b6034bf0f8b61bffaa6"
+          definition_sha256: "9bc52dc9e22dbeff413f6243cb89c4612c7c4435b0d087e96c0e4975fec9c8cf"

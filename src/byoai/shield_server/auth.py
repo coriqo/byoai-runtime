@@ -111,7 +111,7 @@ async def read_signed_request(
     in hand) can look up; see :func:`verify_against_key`."""
     missing = [name for name, value in (("X-Coriqo-Device", x_coriqo_device),
                                         ("X-Coriqo-Signature", x_coriqo_signature)) if not value]
-    if missing:
+    if missing or not x_coriqo_device or not x_coriqo_signature:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                             detail=f"Missing required header(s): {', '.join(missing)}.")
     raw = await request.body()

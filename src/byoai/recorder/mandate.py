@@ -35,6 +35,19 @@ agent suspended                               **deny**        **deny**
 no snapshot ever fetched                      allow + flag    **deny**
 ============================================  ==============  ===============
 
+A snapshot that needs fields this runtime cannot read is also "cannot
+evaluate". Coriqo lists the fields the runtime must understand in the snapshot's
+``required_fields`` (like the JWT ``crit`` header); one this version does not
+read makes the snapshot unreadable, and an unknown ``tool_pin*`` key present
+without being listed does the same. ``tool_pins`` and ``tool_pin_policy`` are
+read here; a malformed one makes the snapshot unreadable too. ``enforce`` + ``fail_closed``
+denies; ``fail_open`` allows and flags. ``observe`` allows and flags under
+BOTH postures, on purpose: the agent is observing, so ``observe`` +
+``fail_closed`` is a Flag here, and a later change must not turn it into a
+Deny. Other unknown keys are ignored and logged once at INFO. Key names from
+the server are sanitized before they reach a log or a reason. See
+``unreadable_keys``.
+
 Suspension denies under both postures: a suspension is a decision Coriqo
 already made and this runtime read, not a failure to evaluate. And what trips
 the fail-closed branch is *staleness*, not network reachability — a bounded,
@@ -92,6 +105,7 @@ import hashlib
 import logging
 import math
 import os
+import re
 import threading
 import time
 from collections import OrderedDict, deque
@@ -202,6 +216,9 @@ class Reason:
     NO_SNAPSHOT = "no_snapshot"
     AGENT_SUSPENDED = "agent_suspended"
     ENFORCEMENT_UNCONFIGURED = "enforcement_unconfigured"
+    #: The snapshot carries mandate fields this runtime version cannot read
+    #: (a newer Coriqo). Could not evaluate: the posture decides.
+    SNAPSHOT_UNREADABLE = "snapshot_unreadable"
     #: A tool already denied for this run, refused from the latch without
     #: re-evaluating scope: the answer cannot have changed.
     REPEAT_DENIED = "repeat_denied"
@@ -244,6 +261,12 @@ class Reason:
     #: nothing it can stand behind and the posture decides, as for
     #: NO_SNAPSHOT.
     ENVIRONMENT_MISMATCH = "environment_mismatch"
+    #: Tool pinning: a tool's definition or annotations no longer hash to the
+    #: pinned values.
+    TOOL_PIN_DRIFT = "tool_pin_drift"
+    #: Tool pinning: an allowed tool has no pin, or its definition could not be
+    #: read and checked in time.
+    TOOL_UNPINNED = "tool_unpinned"
 
 
 class ViolationAction:
@@ -498,6 +521,174 @@ def _coerce_float(value: Any, fallback: float) -> float:
 MAX_STOP_GRACE_S = 600.0
 
 
+#: Mandate fields this runtime reads. A snapshot whose ``required_fields`` names
+#: anything outside this set cannot be evaluated here. ``tool_pins`` and
+#: ``tool_pin_policy`` are enforced by ``coriqo-mcp``, which checks each tool it
+#: relays against the pinned hashes (see ``byoai.recorder.tool_pins``).
+UNDERSTOOD_SNAPSHOT_KEYS = frozenset({
+    "allowed_tools", "approval_required_tools", "resolved_approvals",
+    "max_run_cost_usd", "max_calls_per_minute", "max_run_steps",
+    "mandate_version_id", "status", "mandate_enforcement", "enforcement_posture",
+    "max_staleness_s", "delegation_policy", "max_delegation_depth", "served_at",
+    "reassessment_required", "prohibited_tools", "on_violation", "environment",
+    "output_inspection", "stop_grace_s", "asset_scope", "max_transaction_usd",
+    "max_transaction_usd_per_day", "tool_pins", "tool_pin_policy",
+})
+#: Every key this runtime knows about: the fields above, the declaration
+#: itself and the envelope Coriqo adds around the mandate (informational).
+KNOWN_SNAPSHOT_KEYS = UNDERSTOOD_SNAPSHOT_KEYS | frozenset({
+    "required_fields",
+    "agent_id", "agent_name", "mandate", "scope_source", "capability_digest",
+})
+#: Fallback for a snapshot that carries a pinning key without listing it.
+_FALLBACK_PREFIX = "tool_pin"
+
+INVALID_KEY = "<invalid key>"
+_KEY_RE = re.compile(r"[a-z0-9_]{1,64}")
+_MAX_SHOWN_KEYS = 8
+#: Names examined per snapshot; the rest only count toward "+N more".
+_MAX_KEYS_EXAMINED = 256
+
+
+def _sanitize_keys(
+    names: Iterable[Any], pattern: re.Pattern[str] = _KEY_RE, placeholder: str = INVALID_KEY
+) -> tuple[str, ...]:
+    """Names from the server, made safe to log and to put in a reason.
+
+    Only ``[a-z0-9_]{1,64}`` passes (or ``pattern``, for tool and server
+    names); anything else becomes a fixed placeholder. At most eight are shown,
+    then ``+N more``.
+    """
+    seen: list[str] = []
+    total = 0
+    for name in names:
+        total += 1
+        if total > _MAX_KEYS_EXAMINED:
+            continue
+        ok = isinstance(name, str) and len(name) <= 64 and pattern.fullmatch(name)
+        clean = name if ok else placeholder
+        if clean not in seen:
+            seen.append(clean)
+    shown = sorted(seen)[:_MAX_SHOWN_KEYS]
+    extra = max(total - len(shown), 0) if len(seen) > _MAX_SHOWN_KEYS else 0
+    if extra:
+        shown.append(f"+{extra} more")
+    return tuple(shown)
+
+
+#: Most pinned tools a snapshot may carry; more is a snapshot this runtime will
+#: not enforce (the mandate file format caps pins far lower).
+MAX_PINNED_TOOLS = 5000
+_HASH_RE = re.compile(r"[0-9a-f]{64}")
+_PIN_ACTIONS = frozenset({"flag", "refuse"})
+
+
+def parse_tool_pin_fields(
+    payload: Mapping[str, Any],
+) -> tuple[dict[str, dict[str, dict[str, str]]] | None, dict[str, Any] | None, list[str]]:
+    """``(tool_pins, tool_pin_policy, problems)`` from a snapshot payload.
+
+    ``problems`` names the field (``tool_pins`` or ``tool_pin_policy``) when it
+    is malformed, or when ``required_fields`` lists it and the payload has
+    none: a mandate this runtime cannot read is not one it may enforce.
+    """
+    problems: list[str] = []
+    required = payload.get("required_fields")
+    listed = set(required) if isinstance(required, (list, tuple)) else set()
+
+    pins: dict[str, dict[str, dict[str, str]]] | None = None
+    raw = payload.get("tool_pins")
+    if raw is None:
+        if "tool_pins" in listed:
+            problems.append("tool_pins")
+    else:
+        servers = raw.get("servers") if isinstance(raw, Mapping) else None
+        parsed: dict[str, dict[str, dict[str, str]]] = {}
+        total = 0
+        ok = isinstance(servers, Mapping)
+        for sname, sv in (servers.items() if isinstance(servers, Mapping) else ()):
+            tools = sv.get("tools") if isinstance(sv, Mapping) else None
+            if not isinstance(sname, str) or not isinstance(tools, Mapping):
+                ok = False
+                break
+            entries: dict[str, dict[str, str]] = {}
+            for tname, entry in tools.items():
+                d = entry.get("definition_sha256") if isinstance(entry, Mapping) else None
+                a = entry.get("annotations_sha256") if isinstance(entry, Mapping) else None
+                if (not isinstance(tname, str) or not isinstance(d, str)
+                        or not _HASH_RE.fullmatch(d)
+                        or (a is not None and not (isinstance(a, str) and _HASH_RE.fullmatch(a)))):
+                    ok = False
+                    break
+                entries[tname] = {"definition_sha256": d, **({"annotations_sha256": a} if a else {})}
+                total += 1
+            if not ok or total > MAX_PINNED_TOOLS:
+                ok = False
+                break
+            parsed[sname] = entries
+        if not ok:
+            problems.append("tool_pins")
+        elif total:
+            pins = parsed
+
+    policy: dict[str, Any] | None = None
+    raw_policy = payload.get("tool_pin_policy")
+    if raw_policy is None:
+        if "tool_pin_policy" in listed:
+            problems.append("tool_pin_policy")
+    else:
+        classes = raw_policy.get("class_actions", {}) if isinstance(raw_policy, Mapping) else None
+        sha = raw_policy.get("policy_sha256") if isinstance(raw_policy, Mapping) else None
+        if (
+            not isinstance(raw_policy, Mapping)
+            or raw_policy.get("on_drift") not in _PIN_ACTIONS
+            or raw_policy.get("on_unpinned") not in _PIN_ACTIONS
+            or not isinstance(classes, Mapping)
+            or not all(isinstance(k, str) and isinstance(v, str) for k, v in classes.items())
+            or (sha is not None and not isinstance(sha, str))
+        ):
+            problems.append("tool_pin_policy")
+        else:
+            policy = {
+                "on_drift": raw_policy["on_drift"],
+                "on_unpinned": raw_policy["on_unpinned"],
+                "class_actions": dict(classes),
+                "policy_sha256": sha,
+            }
+    return pins, policy, problems
+
+
+def _unreadable_keys(payload: Mapping[str, Any]) -> tuple[str, ...]:
+    """Required fields this runtime does not understand (sanitized)."""
+    bad: list[Any] = []
+    required = payload.get("required_fields")
+    if isinstance(required, (list, tuple)):
+        bad.extend(
+            n for n in required
+            if not (isinstance(n, str) and n in UNDERSTOOD_SNAPSHOT_KEYS)
+        )
+    elif required is not None:
+        bad.append(INVALID_KEY)
+    bad.extend(
+        k for k in payload
+        if isinstance(k, str) and k not in KNOWN_SNAPSHOT_KEYS
+        and k.startswith(_FALLBACK_PREFIX)
+    )
+    pins, policy, pin_problems = parse_tool_pin_fields(payload)
+    del pins, policy
+    bad.extend(pin_problems)
+    return _sanitize_keys(bad)
+
+
+def _ignored_keys(payload: Mapping[str, Any]) -> tuple[str, ...]:
+    """Unknown keys that are not required: ignored, but never silently."""
+    return _sanitize_keys(
+        k for k in payload
+        if not (isinstance(k, str) and k in KNOWN_SNAPSHOT_KEYS)
+        and not (isinstance(k, str) and k.startswith(_FALLBACK_PREFIX))
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class MandateSnapshot:
     """One immutable copy of what Coriqo said this agent's mandate is.
@@ -555,10 +746,21 @@ class MandateSnapshot:
     #: DA-2: per-transaction and rolling-24h USD limits (mandate format v1.2).
     max_transaction_usd: float | None = None
     max_transaction_usd_per_day: float | None = None
+    #: Mandate v1.4: ``{server: {tool: {"definition_sha256": h,
+    #: "annotations_sha256": h?}}}``. ``None`` when the agent has no pins.
+    tool_pins: Mapping[str, Mapping[str, Mapping[str, str]]] | None = None
+    #: The pinning policy Coriqo resolved for this agent: ``on_drift`` and
+    #: ``on_unpinned`` (``flag`` or ``refuse``), ``class_actions`` (carried and
+    #: recorded, not interpreted here) and ``policy_sha256``. ``None`` when the
+    #: snapshot has no policy (a mandate file): the defaults apply.
+    tool_pin_policy: Mapping[str, Any] | None = None
     #: Monotonic reading from when this snapshot was received. Monotonic, not
     #: wall clock, so an NTP correction mid-run cannot make a snapshot look
     #: fresher (or older) than it is.
     received_at: float = 0.0
+    #: Mandate-field keys in the payload this runtime cannot read; empty for
+    #: an ordinary snapshot.
+    unreadable_keys: tuple[str, ...] = ()
     raw: Mapping[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -632,6 +834,7 @@ class MandateSnapshot:
 
         scope = payload.get("asset_scope")
         scope = scope if isinstance(scope, Mapping) else {}
+        pins, pin_policy, _ = parse_tool_pin_fields(payload)
 
         return cls(
             allowed_tools=tools,
@@ -666,7 +869,10 @@ class MandateSnapshot:
             max_transaction_usd_per_day=_opt_limit(
                 payload.get("max_transaction_usd_per_day")
             ),
+            tool_pins=pins,
+            tool_pin_policy=pin_policy,
             received_at=received_at,
+            unreadable_keys=_unreadable_keys(payload),
             raw=dict(payload),
         )
 
@@ -938,8 +1144,8 @@ class MandateGate:
         min_refresh_interval_s: float = MIN_REFRESH_INTERVAL_S,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] | None = None,
-        on_suspend_observed: Callable[["MandateSnapshot"], None] | None = None,
-        report_approval_request: Callable[["RequireApproval"], None] | None = None,
+        on_suspend_observed: Callable[[MandateSnapshot], None] | None = None,
+        report_approval_request: Callable[[RequireApproval], None] | None = None,
         report_capability_snapshot: Callable[[dict[str, Any]], None] | None = None,
         environment: str | None = None,
         on_suspend: SuspendHook | Iterable[SuspendHook] | None = None,
@@ -988,7 +1194,7 @@ class MandateGate:
         # purely local bookkeeping: it prevents re-attesting on every run
         # start within one process, not across processes or restarts.
         self._last_capability_digest: str | None = None
-        self._reported_approval_requests: "OrderedDict[str, None]" = OrderedDict()
+        self._reported_approval_requests: OrderedDict[str, None] = OrderedDict()
         # AD-11: enforced budgets — local bookkeeping only, no I/O. A sliding
         # window of call timestamps for the rate ceiling; per-trajectory step
         # counts and accumulated cost for the other two. All under self._lock,
@@ -997,8 +1203,8 @@ class MandateGate:
         # DA-2: (clock reading, amount_usd) of ALLOWED calls that carried an
         # asset amount, for the rolling-24h payment limit. Same lock.
         self._asset_spend: deque[tuple[float, float]] = deque()
-        self._trajectory_steps: "OrderedDict[str, set[int]]" = OrderedDict()
-        self._trajectory_costs: "OrderedDict[str, float]" = OrderedDict()
+        self._trajectory_steps: OrderedDict[str, set[int]] = OrderedDict()
+        self._trajectory_costs: OrderedDict[str, float] = OrderedDict()
         self._agent_id = agent_id
         # TI-20: where this runtime runs. None (the default, and an unset
         # BYOAI_MANDATE_ENVIRONMENT) means the snapshot's environment is not
@@ -1022,6 +1228,8 @@ class MandateGate:
         self._etag: str | None = None
         self._last_refresh_error: Exception | None = None
         self._noop_logged = False
+        self._unreadable_logged: tuple[str, ...] | None = None
+        self._ignored_logged: tuple[str, ...] | None = None
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
 
@@ -1085,6 +1293,12 @@ class MandateGate:
             return self._snapshot
 
     @property
+    def unreadable_keys(self) -> tuple[str, ...]:
+        """Mandate fields in the current snapshot this runtime cannot read."""
+        snapshot = self.snapshot
+        return () if snapshot is None else snapshot.unreadable_keys
+
+    @property
     def last_refresh_error(self) -> Exception | None:
         with self._lock:
             return self._last_refresh_error
@@ -1127,6 +1341,28 @@ class MandateGate:
             )
         if payload.get("enforcement_posture") is None:
             snapshot = replace(snapshot, enforcement_posture=self._default_posture)
+        ignored = _ignored_keys(payload)
+        with self._lock:
+            fresh_unreadable = bool(snapshot.unreadable_keys) and (
+                snapshot.unreadable_keys != self._unreadable_logged
+            )
+            if snapshot.unreadable_keys:
+                self._unreadable_logged = snapshot.unreadable_keys
+            fresh_ignored = bool(ignored) and ignored != self._ignored_logged
+            if ignored:
+                self._ignored_logged = ignored
+        if fresh_unreadable:
+            log.warning(
+                "coriqo: the mandate snapshot needs fields this byoai-runtime "
+                "cannot read (%s); it cannot evaluate the mandate until you "
+                "upgrade byoai-runtime",
+                ", ".join(repr(k) for k in snapshot.unreadable_keys),
+            )
+        if fresh_ignored:
+            log.info(
+                "coriqo: ignoring unknown mandate snapshot keys (%s)",
+                ", ".join(repr(k) for k in ignored),
+            )
         with self._lock:
             previous = self._snapshot
             self._snapshot = snapshot
@@ -1231,6 +1467,36 @@ class MandateGate:
                     f"the mandate applies to environment {snapshot.environment!r}; "
                     f"this runtime is {self._environment!r}"
                 ),
+            )
+
+        # A newer Coriqo sent mandate fields this runtime cannot enforce
+        # (the first is tool_pins). Not a failure of the network: the gate
+        # has a mandate it cannot stand behind, so the posture decides.
+        if snapshot.unreadable_keys:
+            detail = (
+                "the mandate snapshot carries fields this byoai-runtime cannot "
+                f"read ({', '.join(repr(k) for k in snapshot.unreadable_keys)}); upgrade byoai-runtime"
+            )
+            if snapshot.observing:
+                return Flag(
+                    reason=Reason.SNAPSHOT_UNREADABLE,
+                    mandate_version_id=snapshot.mandate_version_id,
+                    snapshot_age_s=age,
+                    tool=action.tool,
+                    posture=snapshot.enforcement_posture,
+                    enforcement=snapshot.mandate_enforcement,
+                    trajectory_id=action.trajectory_id,
+                    step_index=action.step_index,
+                    detail=detail,
+                )
+            return self._unevaluable(
+                action,
+                reason=Reason.SNAPSHOT_UNREADABLE,
+                age=age,
+                version=snapshot.mandate_version_id,
+                enforcement=snapshot.mandate_enforcement,
+                posture=snapshot.enforcement_posture,
+                detail=detail,
             )
 
         # W-7 TODO: this is deliberately coarse. `reassessment_required` is a
@@ -1416,7 +1682,7 @@ class MandateGate:
             **common,
         )
 
-    def report_approval_request(self, verdict: "RequireApproval") -> None:
+    def report_approval_request(self, verdict: RequireApproval) -> None:
         """AD-10: tell Coriqo about a pending approval-required call.
 
         Call this once, explicitly, after `decide()` returns a
@@ -1549,8 +1815,8 @@ class MandateGate:
         return True
 
     def _check_budgets(
-        self, action: ProposedAction, snapshot: "MandateSnapshot", age: float, now: float,
-    ) -> "Verdict | None":
+        self, action: ProposedAction, snapshot: MandateSnapshot, age: float, now: float,
+    ) -> Verdict | None:
         """AD-11: call-rate, step, and cost ceilings — `None` if none apply,
         a terminal `Deny` if one is breached. Called from `decide()` ONLY at
         the points where the call is otherwise about to be permitted (the
@@ -1920,7 +2186,7 @@ def mandate_gate(
 
         client = AsyncCoriqoAgentsClient(identity)
 
-    def _on_suspend_observed(snapshot: "MandateSnapshot") -> None:
+    def _on_suspend_observed(snapshot: MandateSnapshot) -> None:
         # Best-effort: schedule and forget. If there's no running
         # loop (apply_snapshot called outside the async refresh path — e.g.
         # a test seeding a snapshot directly) there is nothing to schedule
@@ -1945,7 +2211,7 @@ def mandate_gate(
 
         loop.create_task(_ack())
 
-    def _report_approval_request(verdict: "RequireApproval") -> None:
+    def _report_approval_request(verdict: RequireApproval) -> None:
         # Same best-effort/schedule-and-forget shape as the suspend ack above.
         try:
             loop = asyncio.get_running_loop()

@@ -36,15 +36,15 @@ import time
 from pathlib import Path
 
 from byoai.integrations.shield import (
+    _MIME,
     COVERED_APPS,
-    flags_for,
     RULE_LABEL,
     RULE_TIER,
     action_for,
     all_message_text,
     append_row,
-    _MIME,
     evaluate,
+    flags_for,
     inspect_file,
     inspect_text,
     message_text,
@@ -305,7 +305,7 @@ class ShieldProxy:
         from byoai.recorder.keys import atomic_write_bytes
         port = None
         try:
-            from mitmproxy import ctx
+            from mitmproxy import ctx  # pyright: ignore[reportMissingImports]  # optional dependency, not installed in CI
             port = int(ctx.options.listen_port or 8080)
         except Exception:  # noqa: BLE001 - outside mitmproxy, or no port option
             pass
@@ -388,11 +388,11 @@ class ShieldProxy:
                                  data, app, policy, raw_upload=raw)
             action = facts.pop("action")
             if action in ("warn", "block"):  # no place to ask here: warn stops it too
-                stop.append(action)
+                stop.append(str(action))
                 for f in facts["flags"]:
                     rule = f.partition(":")[2]
                     if action_for(rule, policy) in ("warn", "block", "redact"):
-                        label = RULE_LABEL.get(rule, rule)
+                        label = str(RULE_LABEL.get(rule, rule))
                         if label not in stop:
                             stop.append(label)
             state["n"] += 1
@@ -513,7 +513,7 @@ class ShieldProxy:
 
 def _refuse(flow, message: str) -> None:
     """Answer the app locally; the request never leaves the machine."""
-    from mitmproxy import http
+    from mitmproxy import http  # pyright: ignore[reportMissingImports]  # optional dependency, not installed in CI
 
     flow.response = http.Response.make(
         403,

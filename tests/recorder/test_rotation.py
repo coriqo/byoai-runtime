@@ -28,7 +28,6 @@ from byoai.recorder.schema import (
     new_span_id,
     new_trace_id,
     now_monotonic_ns,
-    now_ts_device,
 )
 from byoai.recorder.verify import verify_ledger
 
@@ -90,7 +89,7 @@ def test_rotate_key_leaves_old_key_intact_when_ledger_append_fails(tmp_path):
     old_priv_bytes = (key_dir / PRIVATE_KEY_FILENAME).read_bytes()
     old_pub_text = (key_dir / PUBLIC_KEY_FILENAME).read_text()
 
-    ledger.append = lambda event: None  # simulate a full-disk / I/O failure
+    ledger.append = lambda event, **_kw: None  # simulate a full-disk / I/O failure
 
     try:
         with pytest.raises(RuntimeError, match="staged but NOT promoted"):
@@ -163,8 +162,8 @@ def test_promotion_crash_never_falls_back_to_a_random_key(tmp_path, monkeypatch)
         state = {"append_done": False, "n": 0}
         real_append = ledger.append
 
-        def wrapped_append(event, _real=real_append, _state=state):
-            entry = _real(event)
+        def wrapped_append(event, _real=real_append, _state=state, **kw):
+            entry = _real(event, **kw)
             _state["append_done"] = True
             return entry
 
@@ -534,7 +533,7 @@ def test_verify_ledger_reports_forged_new_device_id_in_rotation(tmp_path):
     key_dir, old_key, ledger = _make_ledger(tmp_path)
     try:
         _append_event(ledger, old_key.device_id, "message")
-        new_key = rotate_key(key_dir, ledger, reason="rotation")
+        rotate_key(key_dir, ledger, reason="rotation")
 
         # Tamper the already-written KEY_ROTATED event's new_device_id
         # directly in the DB, bypassing the writer entirely (this must never

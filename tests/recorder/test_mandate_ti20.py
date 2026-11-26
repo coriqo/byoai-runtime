@@ -277,3 +277,101 @@ def test_a_files_stop_grace_s_reaches_the_snapshot_payload():
             "delegation": {"policy": "none", "max_depth": 3}, "output_inspection": {}}
     assert "stop_grace_s" not in snapshot_payload(base, sha256="0" * 64)
     assert snapshot_payload({**base, "stop_grace_s": 30}, sha256="0" * 64)["stop_grace_s"] == 30
+
+
+# -- required fields this runtime cannot read (from a newer Coriqo) --
+
+PINS = {"servers": {"s": {"tools": {"t": {"definition_sha256": "a" * 64}}}}}
+FUTURE = {"future_field": {"x": 1}}
+REQ = {**FUTURE, "required_fields": ["future_field"]}
+
+
+def _unreadable_gate(**overrides) -> MandateGate:
+    return gate(**{**REQ, **overrides})
+
+
+def test_a_required_field_is_recorded_as_an_unreadable_key():
+    assert _unreadable_gate().unreadable_keys == ("future_field",)
+
+
+def test_tool_pins_and_policy_are_read_not_unreadable():
+    policy = {"on_drift": "flag", "on_unpinned": "flag", "class_actions": {}}
+    g = gate(tool_pins=PINS, tool_pin_policy=policy,
+             required_fields=["tool_pins", "tool_pin_policy"])
+    assert g.unreadable_keys == ()
+
+
+def test_an_unknown_pin_key_without_a_declaration_is_still_unreadable():
+    assert gate(tool_pin_future=PINS).unreadable_keys == ("tool_pin_future",)
+
+
+def test_other_unknown_keys_are_ignored_and_logged_at_info(caplog):
+    with caplog.at_level("INFO"):
+        g = gate(some_future_hint=1)
+    assert g.unreadable_keys == ()
+    assert any("some_future_hint" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize("posture,enforcement,deny", [
+    ("fail_closed", "enforce", True),
+    ("fail_open", "enforce", False),
+    ("fail_open", "observe", False),
+    ("fail_closed", "observe", False),
+])
+def test_unreadable_snapshot_follows_the_posture_table(posture, enforcement, deny):
+    g = _unreadable_gate(enforcement_posture=posture, mandate_enforcement=enforcement)
+    verdict = g.decide("search")
+    assert verdict.reason == Reason.SNAPSHOT_UNREADABLE
+    assert isinstance(verdict, Deny if deny else Flag)
+    assert "future_field" in verdict.detail and "upgrade byoai-runtime" in verdict.detail
+
+
+@pytest.mark.parametrize("posture", ["fail_open", "fail_closed"])
+def test_suspension_still_wins_over_unreadable_keys(posture):
+    g = _unreadable_gate(status="suspended", enforcement_posture=posture)
+    verdict = g.decide("search")
+    assert isinstance(verdict, Deny) and verdict.reason == Reason.AGENT_SUSPENDED
+
+
+def test_environment_mismatch_is_reported_before_unreadable_keys():
+    g = gate("prod", environment="staging", **REQ)
+    assert g.decide("search").reason == Reason.ENVIRONMENT_MISMATCH
+
+
+def test_log_once_per_distinct_key_set(caplog):
+    g = _unreadable_gate()
+    caplog.clear()
+    with caplog.at_level("WARNING"):
+        g.apply_snapshot(snapshot_payload(**REQ))
+        assert [r for r in caplog.records if "cannot read" in r.getMessage()] == []
+        g.apply_snapshot(snapshot_payload(**FUTURE, required_fields=["other_field"]))
+        assert len([r for r in caplog.records if "cannot read" in r.getMessage()]) == 1
+
+
+def test_hostile_key_names_are_sanitized(caplog):
+    huge = "x" * 1_000_000
+    g = gate(**FUTURE, required_fields=["bad\nname", huge, "future_field"])
+    assert set(g.unreadable_keys) == {"<invalid key>", "future_field"}
+    with caplog.at_level("WARNING"):
+        verdict = g.decide("search")
+    assert "\n" not in verdict.detail and len(verdict.detail) < 500
+
+
+def test_many_keys_are_capped_with_a_count():
+    g = gate(required_fields=[f"f{i}" for i in range(30)])
+    assert len(g.unreadable_keys) == 9 and g.unreadable_keys[-1] == "+22 more"
+
+
+def test_the_logged_memory_does_not_grow():
+    g = _unreadable_gate()
+    for i in range(50):
+        g.apply_snapshot(snapshot_payload(required_fields=[f"k{i}"], **{f"future_{i}": 1}))
+    assert isinstance(g._unreadable_logged, tuple) and isinstance(g._ignored_logged, tuple)
+
+
+def test_an_ordinary_snapshot_has_no_unreadable_keys_and_behaves_as_before():
+    g = gate()
+    assert g.unreadable_keys == ()
+    assert g.decide("search").reason in (Reason.IN_SCOPE, Reason.UNRESTRICTED)
+    g.apply_snapshot(snapshot_payload(agent_id="a", scope_source="x", capability_digest=None))
+    assert g.unreadable_keys == ()

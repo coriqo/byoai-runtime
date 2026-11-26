@@ -60,7 +60,8 @@ from __future__ import annotations
 from typing import Any
 
 from byoai.recorder.canonical import canonicalize
-from byoai.recorder.merkle import _leaf_hash, _node_hash as _rfc6962_node_hash
+from byoai.recorder.merkle import _leaf_hash
+from byoai.recorder.merkle import _node_hash as _rfc6962_node_hash
 
 __all__ = [
     "verify_rfc3161_receipt",

@@ -54,7 +54,7 @@ class SyncASGIClient:
     def __init__(self, app) -> None:
         self._app = app
 
-    def __enter__(self) -> "SyncASGIClient":
+    def __enter__(self) -> SyncASGIClient:
         return self
 
     def __exit__(self, *exc: object) -> None:

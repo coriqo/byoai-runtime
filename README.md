@@ -2,7 +2,7 @@
 
 > **Bring Your Own Infrastructure (BYOI). ByoAI Brings the Runtime.**
 
-[![CI](https://github.com/ravikings/byoai-runtime/actions/workflows/ci.yml/badge.svg)](https://github.com/ravikings/byoai-runtime/actions/workflows/ci.yml)
+[![CI](https://github.com/coriqo/byoai-runtime/actions/workflows/ci.yml/badge.svg)](https://github.com/coriqo/byoai-runtime/actions/workflows/ci.yml)
 [![PyPI version](https://badge.fury.io/py/byoai-runtime.svg)](https://badge.fury.io/py/byoai-runtime)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-brightgreen.svg)](https://www.python.org/downloads/)
@@ -45,7 +45,7 @@ The built console ships inside the wheel, so there is no Node toolchain to
 install at your end:
 
 ```bash
-pip install --pre "byoai-runtime[agent-context-cache]"
+pip install "byoai-runtime[agent-context-cache]"
 byoai-cache console      # starts the proxy in the background, prints the URL
 #   → http://localhost:8787/console/
 ```
@@ -155,10 +155,25 @@ ByoAI Runtime executes as an unopinionated, process-level orchestrator sitting a
 ### 1. Installation
 
 ```bash
-pip install --pre byoai-runtime
+pip install byoai-runtime
 ```
 
-`--pre` is required while the package is in pre-release (`0.1.0a7`).
+#### What is stable
+
+`byoai-runtime` is a beta (`0.1.x`): the parts below are a stable contract, and
+the rest may change in a minor release, with the change listed in the
+[changelog](CHANGELOG.md).
+
+- **Stable.** A breaking change is announced one minor release ahead and
+  documented in the changelog:
+  - the seal format and its verification ([docs/seal-format.md](docs/seal-format.md));
+  - the ledger and checkpoint ingest wire format the recorder ships to Coriqo;
+  - the `coriqo-verify` commands and their exit codes (0 verified, 1 failed,
+    2 unreadable input or bad usage);
+  - the versioned mandate file format.
+- **Provisional.** The pipeline runtime and stages, providers, framework
+  integrations, the Shield and Shield server, the MCP interposer, the console
+  and the optional extras.
 
 ### 2. Hello world
 
@@ -178,7 +193,7 @@ asyncio.run(main())
 No cache, no vector store, no telemetry — just a provider. Everything else in this README is
 opt-in: add `cache=`/`vector_store=`/`semantic_cache=`/`telemetry=` only for what you need, when
 you need it. The next example shows all of them wired up against real infrastructure. See
-[Getting Started](https://ravikings.github.io/byoai-runtime/getting-started/) for environment
+[Getting Started](https://coriqo.github.io/byoai-runtime/getting-started/) for environment
 variables, `system_prompt=`, and `async with Runtime(...)`.
 
 ### 3. Execution Example (Production Setup)
@@ -260,7 +275,7 @@ See `examples/fastapi_app/` for a runnable app with events, caching, and fallbac
 Run an unauthenticated MCP surface plus its behavioral-capture sidecar:
 
 ```bash
-pip install --pre 'byoai-runtime[mcp,shield]' mitmproxy
+pip install 'byoai-runtime[mcp,shield]' mitmproxy
 python examples/mcp_capture/server.py --http          # MCP over :8800/mcp
 python examples/mcp_capture/client.py                 # real session → ledger
 npm --prefix web install && npm --prefix web run build   # once, from a checkout
@@ -273,7 +288,7 @@ byoai-shield examples/mcp_capture/captures.jsonl      # or point it at another l
 | `examples/mcp_server/` | ByoAI-over-MCP tool server (stdio or streamable HTTP). |
 | `examples/mcp_capture/` | Real MCP session (`client.py`) against an echo-backed `server.py`: tool calls, cache hits, stream deltas, and client identity from the `initialize` handshake land in `captures.jsonl`. |
 | `examples/desktop_proxy_capture.py` | Loads the packaged capture proxy (`byoai.integrations.shield_proxy`) against the example ledger: Claude Desktop chat sends and replies go through the same rules → redact → seal path (admin-consented CA + `NODE_EXTRA_CA_CERTS`). |
-| `src/byoai/browser_extension/` | Chrome (MV3) extension that records agent chat sends in the browser (claude.ai, chatgpt.com, gemini.google.com, copilot.microsoft.com) into the same ledger. Load it unpacked from `chrome://extensions` → Developer mode → Load unpacked; it ships text-free facts to `POST /api/browser` on `127.0.0.1:17831` (endpoint configurable, enforced local-only, in the popup). On claude.ai and chatgpt.com it also applies Shield's mode in the page, before the message leaves the browser: what happens comes from the policy's `actions` (see "Privacy-first by default"): by default a detected secret stops the send (a `403`), personal details (emails, card and phone numbers, SSN-like numbers, wallet addresses) become numbered placeholders such as `[EMAIL_1]`, and flag-tier hits are only recorded; in *Record only* (`observe`) the message goes out unchanged. A tier set to *warn* holds the send behind a small bar in the page (*Send redacted*, *Send anyway*, *Cancel*; no answer in 60 s cancels, and the original is never sent on a timeout). The mode, actions and per-app toggles come from the paired Shield's `GET /api/policy` (defaults until it has heard from Shield), and an app switched off there is left alone. The rules are the desktop proxy's own: `shield-rules.js` is generated from `byoai.integrations.shield` by `python scripts/gen_extension_rules.py`, a test fails if it is stale, and `tests/fixtures/shield_redaction_cases.json` is checked against both the Python and the extension code. Gemini and Copilot send form-encoded or websocket traffic the extension can't safely rewrite on the network, so there the network layer records only; the input gate (0.10.0: it checks the message and files when you send, before the page's code runs, and uses `sites.json` for each app's message box and send button) covers them like the others. A file attached in the page is recorded as a fact (`browser.chat.attachment`: type and size), never read or scanned. If three send-looking POSTs to a chat host go unrecognised in ten minutes with none inspected, the extension emits `browser.health.unmatched` (a path prefix, no body) and the popup says Shield may be out of date for that app. The message text itself never leaves the page: what lands in the ledger is "a message was sent, N characters", plus the names of the rules it matched and what was replaced (`flags`, `redactions`, `verdict`; the server keeps only known rule names), sealed like every other row. From a copy of the reply stream it also records which tools the AI ran on its own servers for that reply (`tools`, e.g. `web.run` for ChatGPT's web search, and `sources`, how many sites a search returned), attached to and sealed with the message; Shield shows them as "Web search", "Code run" and so on. That is a record, not a control: those tools run after the message has left, so turning them off is a setting of the ChatGPT or Claude workspace. Version 0.6 asks for agreement again, since rewriting messages is new. Rows obey the per-app policy toggles, the queue survives service-worker restarts (session storage, 50-row cap), and retries are deduped by row id. Unpacked, it has a fixed extension ID (`jbbongpiablbbmfflcaafjbeejeododc`, set by the `key` in its manifest), so `BYOAI_SHIELD_EXTENSION_IDS` can be set once for every install; a Chrome Web Store copy gets the store's own ID, which the popup shows under Details. `python scripts/package_extension.py --minify` (or `npm run build:extension` from `web/`) builds the store zip, `dist/coriqo-shield-<version>.zip`, with every script minified and no sourcemaps; the readable source stays in this repo. Nothing is recorded until you agree: installing opens a welcome page that says exactly what is noted, and capture stays off until you choose *Agree and turn on capture* (the popup's *Turn capture off* reverses it and clears anything waiting). It pairs with your Shield the first time it connects (Shield signs a fresh nonce with its device key; the extension pins the public key), and afterwards refuses to send anything to a different program listening on the same port. If Shield's sealed count is ever lower than the extension remembers, the popup warns and keeps warning (badge `!`) until you press Accept, even when the count later catches up. A Shield too old to answer the pairing check is retried every 30 seconds and recovers on its own once updated and restarted. Its popup shows reachability, whether it is talking to *your* Shield, when the last message on the current tab was noted, the seal chain height, the id to pin trust, and a direct link to the Shield UI (`/shield`), which is where the full experience lives (the extension itself has no timeline by design — the local server already has one). See its data-protection record in `src/byoai/browser_extension/PRIVACY.md`; real-browser end-to-end tests live in `web/tests/extension/` (they skip themselves unless a Chromium is available — see `CHROMIUM_PATH` in CONFIGURATION.md). |
+| `src/byoai/browser_extension/` | Chrome (MV3) extension that records agent chat sends in the browser (claude.ai, chatgpt.com, gemini.google.com, copilot.microsoft.com, copilot.com) into the same ledger. Load it unpacked from `chrome://extensions` → Developer mode → Load unpacked; it ships text-free facts to `POST /api/browser` on `127.0.0.1:17831` (endpoint configurable, enforced local-only, in the popup). On claude.ai and chatgpt.com it also applies Shield's mode in the page, before the message leaves the browser: what happens comes from the policy's `actions` (see "Privacy-first by default"): by default a detected secret stops the send (a `403`), personal details (emails, card and phone numbers, SSN-like numbers, wallet addresses) become numbered placeholders such as `[EMAIL_1]`, and flag-tier hits are only recorded; in *Record only* (`observe`) the message goes out unchanged. A tier set to *warn* holds the send behind a small bar in the page (*Send redacted*, *Send anyway*, *Cancel*; no answer in 60 s cancels, and the original is never sent on a timeout). The mode, actions and per-app toggles come from the paired Shield's `GET /api/policy` (defaults until it has heard from Shield), and an app switched off there is left alone. The rules are the desktop proxy's own: `shield-rules.js` is generated from `byoai.integrations.shield` by `python scripts/gen_extension_rules.py`, a test fails if it is stale, and `tests/fixtures/shield_redaction_cases.json` is checked against both the Python and the extension code. Gemini and Copilot send form-encoded or websocket traffic the extension can't safely rewrite on the network, so there the network layer records only; the input gate (0.10.0: it checks the message and files when you send, before the page's code runs, and uses `sites.json` for each app's message box and send button) covers them like the others. A file attached in the page is recorded as a fact (`browser.chat.attachment`: type and size), never read or scanned. If three send-looking POSTs to a chat host go unrecognised in ten minutes with none inspected, the extension emits `browser.health.unmatched` (a path prefix, no body) and the popup says Shield may be out of date for that app. The message text itself never leaves the page: what lands in the ledger is "a message was sent, N characters", plus the names of the rules it matched and what was replaced (`flags`, `redactions`, `verdict`; the server keeps only known rule names), sealed like every other row. From a copy of the reply stream it also records which tools the AI ran on its own servers for that reply (`tools`, e.g. `web.run` for ChatGPT's web search, and `sources`, how many sites a search returned), attached to and sealed with the message; Shield shows them as "Web search", "Code run" and so on. That is a record, not a control: those tools run after the message has left, so turning them off is a setting of the ChatGPT or Claude workspace. Version 0.6 asks for agreement again, since rewriting messages is new. Rows obey the per-app policy toggles, the queue survives service-worker restarts (session storage, 50-row cap), and retries are deduped by row id. Unpacked, it has a fixed extension ID (`jbbongpiablbbmfflcaafjbeejeododc`, set by the `key` in its manifest), so `BYOAI_SHIELD_EXTENSION_IDS` can be set once for every install; a Chrome Web Store copy gets the store's own ID, which the popup shows under Details. `python scripts/package_extension.py --minify` (or `npm run build:extension` from `web/`) builds the store zip, `dist/coriqo-shield-<version>.zip`, with every script minified and no sourcemaps; the readable source stays in this repo. Nothing is recorded until you agree: installing opens a welcome page that says exactly what is noted, and capture stays off until you choose *Agree and turn on capture* (the popup's *Turn capture off* reverses it and clears anything waiting). It pairs with your Shield the first time it connects (Shield signs a fresh nonce with its device key; the extension pins the public key), and afterwards refuses to send anything to a different program listening on the same port. If Shield's sealed count is ever lower than the extension remembers, the popup warns and keeps warning (badge `!`) until you press Accept, even when the count later catches up. A Shield too old to answer the pairing check is retried every 30 seconds and recovers on its own once updated and restarted. Its popup shows reachability, whether it is talking to *your* Shield, when the last message on the current tab was noted, the seal chain height, the id to pin trust, and a direct link to the Shield UI (`/shield`), which is where the full experience lives (the extension itself has no timeline by design — the local server already has one). See its data-protection record in `src/byoai/browser_extension/PRIVACY.md`; real-browser end-to-end tests live in `web/tests/extension/` (they skip themselves unless a Chromium is available — see `CHROMIUM_PATH` in CONFIGURATION.md). |
 | `examples/ui/keepalive.sh` | launchd-friendly supervisor for the three surfaces (MCP gateway, capture proxy, shield): runs them as a group and exits nonzero if any dies, so `com.coriqo.keepalive` (see the script header) restarts what's missing — survives crashes and reboots. |
 
 ### `coriqo-mcp` — check an MCP server's tool calls against a mandate
@@ -290,7 +305,7 @@ in the background), and the check reads memory.
 **Install**
 
 ```bash
-pip install --pre "byoai-runtime[coriqo-mcp]"
+pip install "byoai-runtime[coriqo-mcp]"
 ```
 
 **Run it.** Put `coriqo-mcp --mandate <file> --` in front of the command you
@@ -314,6 +329,23 @@ coriqo-mcp --mandate coriqo.mandate.yaml --http \
 ```
 
 Add `-- <server command>` to have `coriqo-mcp` start and stop that server too.
+
+**Pinned tools.** A v1.4 mandate can pin the hash of each approved tool's
+definition and annotations per server (`tool_pins`). Start with
+`--server NAME`, the server's key in `tool_pins.servers`:
+
+```bash
+coriqo-mcp --mandate coriqo.mandate.yaml --server payments-mcp -- node server.js
+```
+
+`coriqo-mcp` fetches the server's full tool list itself, hashes each tool and
+compares. A changed or unpinned tool is flagged under `shadow`; under `enforce`
+it is hidden from `tools/list` and refused, as the policy says. A call
+whose tool could not be checked in time (`--pin-hold-timeout`, default 10
+seconds) is treated as changed if it has a pin (refused under `enforce`) and as
+unpinned if it has none. Records gain `pin_status`, `definition_sha256` and `server`.
+With pins and `enforce`, `--server` is required. What it checks and cannot
+tell: CONFIGURATION.md, "Tool pinning".
 
 **When the agent is suspended.** With `--coriqo-agent-id`, a suspension in
 Coriqo reaches `coriqo-mcp` on its next mandate fetch. From then on every call
@@ -395,6 +427,8 @@ that decisions stay local.
   amount. Set `BYOAI_APPROVAL_SEND_ARGS=0` to keep arguments and amounts on
   the host; approvals then cannot sign off an above-limit action (see
   [CONFIGURATION.md](CONFIGURATION.md)).
+- Checked when the mandate pins tools: each tool's definition and annotations
+  hashes, on every call and in every `tools/list` answer.
 - Not checked: `max_cost_usd`. An MCP call carries no cost, so there is
   nothing to count against it.
 - Not checked: resources (`resources/read`), prompts, sampling and elicitation
@@ -430,7 +464,7 @@ The demo's analyzer, seal chain, and UI backend are promoted into the package
 as `byoai.integrations.shield` with a console script (see `pyproject.toml`):
 
 ```bash
-pip install --pre 'byoai-runtime[shield]'   # Shield alone needs only this (it signs its record with `cryptography`)
+pip install 'byoai-runtime[shield]'   # Shield alone needs only this (it signs its record with `cryptography`)
 byoai-shield ./examples/mcp_capture/captures.jsonl --host 127.0.0.1 --port 17831
 byoai-shield --install-login-item   # start at login (macOS launchd, Linux systemd user unit, Windows Task Scheduler), low priority; --remove-login-item undoes it
 ```
@@ -763,7 +797,7 @@ enrols against it, polls it for policy, and reports checkpoints to it with
 address.
 
 ```bash
-pip install --pre 'byoai-runtime[shield-server]'
+pip install 'byoai-runtime[shield-server]'
 byoai-shield-server serve
 # ByoAI Shield server: org='default' data=~/.byoai/shield-server/
 # Listening on http://127.0.0.1:17840 (public url: http://127.0.0.1:17840)
@@ -1002,7 +1036,7 @@ collapses repeated large tool results within a request, cutting token spend
 without any client-side changes.
 
 ```bash
-pip install --pre "byoai-runtime[agent-context-cache]"
+pip install "byoai-runtime[agent-context-cache]"
 byoai-cache                                    # runs in the foreground
 export ANTHROPIC_BASE_URL=http://localhost:8787
 ```
@@ -1112,7 +1146,7 @@ is off by default and separate from the caching/dedup behavior above — the
 usage/benchmark stats keep working whether or not it's on.
 
 ```bash
-pip install --pre "byoai-runtime[recorder]"
+pip install "byoai-runtime[recorder]"
 BYOAI_RECORDER_ENABLED=1 byoai-cache
 coriqo-verify ~/.byoai/recorder/ledger.db   # check it offline, anytime
 ```
@@ -1138,6 +1172,10 @@ hash-chained events, through the same extractor. Its limit is honest and worth
 repeating: it sees exactly what the trace says, and a caller who invokes
 without `enableTrace` leaves nothing behind — see
 **[CONFIGURATION.md](CONFIGURATION.md#managed-agents-you-cannot-intercept-byoairecorderbedrock_agent)**.
+For direct `Converse` or `InvokeModel` calls, which leave no agent trace,
+`byoai-bedrock-log-reader` reads Bedrock's model-invocation log on a schedule
+and seals the tool calls in it — see
+**[CONFIGURATION.md](CONFIGURATION.md#direct-bedrock-model-calls-the-invocation-log-reader-w10)**.
 
 The ledger also syncs to Coriqo once the device is enrolled. Coriqo serves
 `/v1/enroll`, `/v1/ingest/batch` and `/v1/checkpoints/batch`, and Coriqo's
@@ -1354,7 +1392,7 @@ see [SECURITY.md](SECURITY.md) rather than opening a public issue.
 
 ## 🌐 Community & Documentation
 
-* **Documentation:** [ravikings.github.io/byoai-runtime](https://ravikings.github.io/byoai-runtime/)
+* **Documentation:** [coriqo.github.io/byoai-runtime](https://coriqo.github.io/byoai-runtime/)
 * **GitHub Repository:** [github.com/coriqo/byoai-runtime](https://github.com/coriqo/byoai-runtime)
 * **PyPI Package:** [pypi.org/project/byoai-runtime](https://pypi.org/project/byoai-runtime)
 * **Changelog:** [CHANGELOG.md](CHANGELOG.md)

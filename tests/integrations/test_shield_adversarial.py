@@ -105,7 +105,7 @@ def _adversarial(n=100_000):
 def test_no_rule_is_slow_on_100kb_adversarial_input():
     slow = []
     for name, text in _adversarial().items():
-        for tier, rules in (("secret", SECRET_RULES), ("pii", PII_RULES), ("flag", FLAG_RULES)):
+        for _tier, rules in (("secret", SECRET_RULES), ("pii", PII_RULES), ("flag", FLAG_RULES)):
             for rule, pattern in rules:
                 t0 = time.perf_counter()
                 list(pattern.finditer(text))
@@ -153,10 +153,10 @@ def test_names_types_roles_and_times_are_scanned_but_ids_are_not():
 
 def test_warn_still_redacts_redact_tier_pii_in_the_proxy(tmp_path, monkeypatch):
     pytest.importorskip("mitmproxy")
+    import byoai.integrations.shield as sh
     from byoai.integrations.shield_proxy import ShieldProxy
 
     from .test_shield_proxy import _Flow
-    import byoai.integrations.shield as sh
     real = sh._fingerprint_key
     monkeypatch.setattr(sh, "_fingerprint_key", lambda p=None: real(tmp_path / "fp.key"))
     px = ShieldProxy(ledger=tmp_path / "l.jsonl", policy_path=tmp_path / "p.json")

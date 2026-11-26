@@ -8,9 +8,11 @@ import json
 
 import httpx
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from byoai.integrations.shield import SealChain, ShieldConfig
+from byoai.integrations.shield import SealChain, ShieldConfig, load_managed_policy
 from byoai.integrations.shield_publish import BACKOFF_CAP_S, Publisher
+from byoai.recorder.canonical import canonicalize
 from byoai.recorder.enroll import enroll
 
 
@@ -111,7 +113,7 @@ def _enrol(cfg, coriqo):
 
 
 def _grow(seals, n=1):
-    for i in range(n):
+    for _ in range(n):
         seals.stamp({"interaction": f"i{seals.height}", "flags": [], "chars": 3})
 
 
@@ -656,10 +658,7 @@ def test_the_proxy_marks_itself_running_and_clears_on_stop(tmp_path):
 # already-enrolled device) by fetching the public-keys list once; verify and
 # apply via byoai.integrations.shield.apply_managed_envelope.
 
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from byoai.integrations.shield import load_managed_policy
-from byoai.recorder.canonical import canonicalize
 
 # Coriqo signs with its own server key, not a device key: lowercase hex of the
 # raw 32-byte public key and the raw 64-byte signature, no "ed25519:" prefix.

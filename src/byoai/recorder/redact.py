@@ -50,10 +50,19 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Callable
 from enum import Enum
-from typing import Any, Callable
+from typing import Any
 
-__all__ = ["PayloadMode", "TextRedactor", "apply_payload_mode", "redact_free_text"]
+__all__ = [
+    "PAYLOAD_MODE_HEADER",
+    "RUNTIME_AUTHORED",
+    "PayloadMode",
+    "TextRedactor",
+    "apply_payload_mode",
+    "payload_mode_headers",
+    "redact_free_text",
+]
 
 #: A callable that takes free text and returns it with PII/secrets masked.
 #: ``redact_free_text`` (this module's default) implements this signature;
@@ -69,6 +78,27 @@ class PayloadMode(str, Enum):
     HASH_ONLY = "hash-only"
     REDACTED = "redacted"
     FULL = "full"
+
+
+#: The mode label for a payload the runtime writes itself (mandate verdicts, worker stop acks,
+#: key rotation,
+#: the ledger's failure marker). Not a PayloadMode: nobody chooses it, and no mode is ever
+#: applied to these.
+#: It travels beside the entry so the server never masks a payload it has to read.
+RUNTIME_AUTHORED = "runtime"
+
+#: The header a trace publish carries to say its payload mode (W8). A header, not a body field:
+#: the trace body
+#: schema forbids unknown fields, so a body field would be refused by every older server; a
+#: header is ignored.
+PAYLOAD_MODE_HEADER = "X-Coriqo-Payload-Mode"
+
+
+def payload_mode_headers(mode: PayloadMode | str | None) -> dict[str, str]:
+    """The header for a trace sent under `mode`; empty when no mode is given."""
+    if mode is None:
+        return {}
+    return {PAYLOAD_MODE_HEADER: PayloadMode(mode).value}
 
 
 # ------------------------------------------------------------- detection
@@ -252,6 +282,13 @@ def redact_free_text(text: str) -> str:
 #: sensitive there" is not one.
 _VOCABULARY_FIELDS: dict[str, frozenset[str]] = {
     "guardrail_intervention": frozenset({"action", "stage", "categories"}),
+    # W10 §7.2, NEEDS MAINTAINER REVIEW before release. `source` and `operation` are constants
+    # or AWS enum values; `tools_offered` is built by the Bedrock log reader only from names
+    # matching [a-zA-Z0-9_-]{1,64} (the Bedrock tool-name pattern), which cannot hold a sentence,
+    # an email address or a number with separators. This also lets Path 3's constant `source`
+    # through under REDACTED. Coriqo's server port (api/domains/agents/payload_redact.py
+    # VOCABULARY_FIELDS) must carry the same entry, or masking on arrival differs from here.
+    "session_start": frozenset({"source", "operation", "tools_offered"}),
 }
 
 

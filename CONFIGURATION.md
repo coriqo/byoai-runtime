@@ -74,7 +74,7 @@ the recorder's shipped evidence; it never writes to a ledger.
 
 ### Installing Shield
 
-`pip install --pre "byoai-runtime[shield]"` installs what `byoai-shield` needs on top of the base package
+`pip install "byoai-runtime[shield]"` installs what `byoai-shield` needs on top of the base package
 (`cryptography`, used to sign the seal chain). Without it the command prints that line and exits, instead of a
 traceback. The `all` extra includes it.
 
@@ -253,7 +253,7 @@ protocol Coriqo's managed mode does, so
 `byoai.integrations.shield_publish.Publisher` enrols and polls it with no
 code changes. `byoai.shield_server.create_app(config)` builds the FastAPI
 app; the console script wraps it. Install with
-`pip install --pre 'byoai-runtime[shield-server]'`.
+`pip install 'byoai-runtime[shield-server]'`.
 
 | Var | Default | Meaning |
 |---|---|---|
@@ -732,7 +732,7 @@ The proxy needs FastAPI, uvicorn, and redis, so it ships behind its own extra �
 a base install has none of them and `byoai-cache` will fail to import:
 
 ```bash
-pip install --pre "byoai-runtime[agent-context-cache]"
+pip install "byoai-runtime[agent-context-cache]"
 ```
 
 Start it with `byoai-cache` (the long `byoai-agent-context-cache` name is an
@@ -788,7 +788,7 @@ Requires the `cryptography` package (and, for verifying RFC 3161 anchor
 receipts, `rfc3161ng`), behind its own extra:
 
 ```bash
-pip install --pre "byoai-runtime[recorder]"
+pip install "byoai-runtime[recorder]"
 export BYOAI_RECORDER_ENABLED=1
 ```
 
@@ -797,6 +797,7 @@ export BYOAI_RECORDER_ENABLED=1
 | `BYOAI_RECORDER_ENABLED` | `0` | Set to `1` to turn the recorder on. Everything below is a no-op while it's off |
 | `BYOAI_RECORDER_DIR` | `~/.byoai/recorder` | Where the device key and ledger (`ledger.db`) live |
 | `BYOAI_RECORDER_STRICT` | `0` | `1` = a ledger write failure returns `503` to the client instead of being logged and skipped — for deployments where an unrecorded action is unacceptable |
+| `BYOAI_RECORDER_HEARTBEAT_SECONDS` | `900` | How often the running recorder writes a signed `heartbeat` entry into the ledger (a normal chain entry, covered by the device-signed checkpoints). `0` turns it off, and the recorder then writes one `heartbeat` with `interval_s: 0` so the chain says so (a verifier with the heartbeat check on reports that window as not covered). An unparseable or negative value logs a warning and uses 900, never "off". Nothing is written while the process is not running, and a restart writes at most one (none if the last heartbeat is younger than the interval). Volume at 900: 96 heartbeats a day (35,040 a year) and about 48 checkpoints a day (about 17,500 a year, one per two idle heartbeats), per device. A forked worker restarts its own heartbeat thread (with its own SQLite connection), so N workers write N times that, and under `gunicorn --preload` the master heartbeats too (N + 1 writers). All processes that write one ledger file are trusted: entry hashes are unkeyed, so a writer with file access can forge consistent rows, and a checkpoint signature vouches for the file's content at that moment. A process re-derives the rows other writers added before it signs or appends past them, and stops (logged, with a `record_failure` queued) if the file's head went backwards, its history changed, or a row does not verify. A keyed per-row MAC is a possible future hardening (`docs/seal-format.md` §4.4). See `docs/seal-format.md` §4.4 |
 | `BYOAI_RECORDER_PAYLOAD_MODE` | `redacted` | What payload bytes actually reach the ledger. `hash-only` ships no payload bytes at all (only the tamper-evident `payload_hash`); `redacted` masks detected secrets/PII and salted-hashes everything else before it's written; `full` ships payloads unchanged. `payload_hash` always commits to the raw, unredacted payload regardless of mode |
 
 #### Trace attribution (sub-agents, resumed sessions)
@@ -830,6 +831,26 @@ tool-call pairing findings (a `tool_use` with no matching `tool_result`, or a
 `tool_result` with none — see the recorder's `verify.py` docstring for what
 each finding means). Exit code `0` on a clean ledger, `1` on any integrity
 failure, `2` if the file can't be read at all.
+
+To check heartbeats, add `--max-heartbeat-silence SECONDS` (off by default; `nan`,
+`inf`, 0 and negatives are refused with exit 2). With it on, the check fails a
+record when: two consecutive heartbeats, or the last heartbeat and the end of the
+record, are further apart than that; the recorder declared heartbeats off; an
+`interval_s` is invalid; or the record spans longer than that and has no
+heartbeats at all (`--allow-no-heartbeats` accepts an older record). A laptop or VM
+that slept shows as a gap. Accept a window you reviewed with `--heartbeat-gap NAME`,
+the name shown in the finding: `FROM-TO`, `tail:SEQ` or `off:SEQ` (repeatable).
+Clock inconsistencies (time going backwards, disagreeing with the monotonic counter
+or the signed checkpoints) are printed as advisory clock notes and do not fail:
+NTP steps, VM resume, a moved ledger and several writer processes cause them in
+honest records. `--strict-clock` makes them fail (for a single-host, single-process
+deployment under review); `--accept-clock-note SEQ` accepts a reviewed one.
+`coriqo-verify bundle FILE.json` takes the same flags for an export bundle, and
+with the check on it fails a bundle with no entries or no checkpoints. The same
+policy is `max_heartbeat_silence_seconds`, `heartbeat_gaps_allowed`,
+`allow_no_heartbeats`, `strict_clock` and `clock_notes_accepted` on `verify_ledger`
+and `verify_bundle`. The check bounds what the device's own clock claims; it is not
+proof of liveness or of what the host did (`docs/seal-format.md` §4.4, §11.6).
 
 #### Managed agents you cannot intercept (`byoai.recorder.bedrock_agent`)
 
@@ -887,7 +908,7 @@ it. `boto3` is confined to `bedrock_agent_source.py` and lives behind an
 extra:
 
 ```bash
-pip install --pre "byoai-runtime[bedrock-agent,recorder]"
+pip install "byoai-runtime[bedrock-agent,recorder]"
 ```
 
 `iter_cloudwatch_invocations(...)` replays Bedrock's model-invocation logs
@@ -904,6 +925,49 @@ says, and an agent invoked without `enableTrace` leaves nothing here. Unlike
 the proxy, which cannot be switched off from inside the agent, that flag
 belongs to the caller — and an empty ledger for an untraced agent looks
 identical to an agent that never ran.
+
+##### Direct Bedrock model calls: the invocation log reader (W10)
+
+`iter_cloudwatch_invocations` above groups records by a session id, and a
+plain model-invocation record has none, so it seals nothing for a direct
+`Converse` or `InvokeModel` call. `byoai-bedrock-log-reader` does: it reads
+the model-invocation log on a schedule, joins a tool call to its result by
+`toolUseId` (same account, region and caller, within the link limit), and
+seals `session_start`, `tool_use`, `tool_result`, `message`,
+`guardrail_intervention` and `api_error` events with
+`provider = "bedrock_invocation_log"`. Prompts and system text are not
+sealed. Ids are derived from the record, so re-reading a window seals
+nothing new.
+
+| Variable / flag | Default | Meaning |
+|---|---|---|
+| AWS credentials | standard chain | the reader's role (see OPERATIONS.md) |
+| `BYOAI_BEDROCK_LOG_GROUP` / `--log-group` | required | log group name, or its ARN for a monitoring-account read |
+| `AWS_REGION` / `--region` | required | region of the log group |
+| `BYOAI_BEDROCK_LOG_ROLE_ARN` / `--role-arn` | unset | role to assume for a log group in another account |
+| `BYOAI_BEDROCK_LOG_EXTERNAL_ID` / `--external-id` | unset | external id that role requires |
+| `BYOAI_RECORDER_DIR` / `--dir` | `~/.byoai/recorder` | must be the reader's own directory, enrolled as its own device |
+| `BYOAI_RECORDER_PAYLOAD_MODE` | `redacted` | as for every recorder |
+| `BYOAI_BEDROCK_LOG_S3_MAX_BYTES` | 10 MiB | largest body read from the large-data S3 location |
+| `--once` / `--loop` / `--check` | (one required) | one sweep then ship and exit; sweep at Coriqo's interval until stopped; check access and the logging configuration |
+
+The policy knobs (pause, scope, interval, overlap, settle, link limit,
+first backfill, catch-up limit) are Coriqo's tenant setting
+`bedrock_log_capture`, fetched from `GET /api/v1/agent-runtime/capture-config`
+at the start of each sweep; unreachable Coriqo means the last cached copy,
+then Coriqo's defaults. After every sweep the reader posts a signed status
+block to `POST /api/v1/agent-runtime/source-state`. No setting is overridden
+on the host.
+
+Exit codes: `0` done (or paused in Coriqo), `1` the sweep or the check failed,
+`2` a setting is missing or not valid (no log group or region, an unknown
+`BYOAI_RECORDER_PAYLOAD_MODE`, boto3 not installed), `3` another reader
+holds this recorder directory.
+
+`ts_device` and `ts_monotonic_ns` carry the **log time** of the record (epoch
+nanoseconds plus the block's position), not the time of the sweep, so the
+latency between a call and its result is the real interval. One reader per
+log group, each enrolled as its own device; two log groups need two readers.
 
 ##### What a Bedrock run looks like in Coriqo
 
@@ -1347,6 +1411,8 @@ observing agent can still run under a fail-closed posture.
 | snapshot stale past `max_staleness_s` | allow + flag | **deny** |
 | agent suspended | **deny** | **deny** |
 | no snapshot ever fetched | allow + flag | **deny** |
+| snapshot requires fields this runtime cannot read, `enforce` | allow + flag | **deny** |
+| same, `observe` | allow + flag | allow + flag |
 | tool in `approval_required_tools`, no decision yet | **require approval** | **require approval** |
 
 Suspension denies under both postures — it is a decision Coriqo made and this
@@ -1354,6 +1420,25 @@ runtime read, not a failure to evaluate. And what trips the fail-closed branch
 is *staleness*, not reachability: a failed refresh keeps the cached snapshot,
 so one blip cannot become an outage, and the snapshot stops counting only when
 it is older than the budget the tenant set.
+
+**Fields this runtime cannot read.** The snapshot may carry `required_fields`,
+the fields the runtime must understand to evaluate the mandate (like the JWT
+`crit` header). If one is not a field this version reads, the gate records the names as
+`MandateGate.unreadable_keys` and treats the mandate as one it cannot evaluate:
+under `enforce` and `fail_closed` every call is denied; under `fail_open` it is
+allowed and flagged; under `observe` it is allowed and flagged under both
+postures, on purpose (the agent is observing). The reason
+(`snapshot_unreadable`) names the fields and says to upgrade byoai-runtime. A
+`tool_pin*` key this version does not know, present but not listed, is treated
+the same, and so is a `tool_pins` or `tool_pin_policy` that is malformed or
+that `required_fields` lists but the snapshot lacks. `tool_pins` and
+`tool_pin_policy` themselves are read: see "Tool pinning" under
+`coriqo-mcp`. Any other
+unknown key is ignored and logged once at INFO. Names from the server are
+shown only if they match `[a-z0-9_]{1,64}` (else `<invalid key>`), at most
+eight, then `+N more`. One WARNING is logged per change in the set of
+fields. A snapshot without these keys behaves as before. The mandate file
+reader is at format revision 1.4.
 
 **`allowed_tools: null` is not `allowed_tools: []`.** `null` means
 unrestricted; `[]` means nothing is permitted. Both are valid on the wire and
@@ -1498,7 +1583,12 @@ Coriqo account: `mode: shadow`/`enforce` map to `observe`/`enforce`,
 byte-for-byte as `byoai/recorder/mandate_format.py` (YAML needs PyYAML; JSON
 needs nothing), and re-read on the refresh schedule; an unreadable or invalid
 file keeps the last good copy until it is stale. `MandateGate(default_posture=…,
-default_max_staleness_s=…)` overrides them in code.
+default_max_staleness_s=…)` overrides them in code. Every field the reader
+accepts reaches the gate: `max_transaction_usd` and `max_transaction_usd_per_day`
+(format v1.2) and `asset_scope` (v1.3) are enforced as they are from Coriqo's
+snapshot. `tool_pins` (v1.4) reach the snapshot with `required_fields:
+["tool_pins"]` and no `tool_pin_policy`; `coriqo-mcp` enforces them with the
+defaults described under "Tool pinning" there.
 
 #### `@governed_tool` — enforcing at the call site (`byoai.recorder.governed_tool`)
 
@@ -1649,7 +1739,7 @@ either way, so the same enforcer runs on it unchanged, buffered and streaming.
 
 #### Gating an MCP server (`coriqo-mcp`, `byoai.integrations.coriqo_mcp`)
 
-`pip install --pre "byoai-runtime[coriqo-mcp]"` adds `cryptography` (the
+`pip install "byoai-runtime[coriqo-mcp]"` adds `cryptography` (the
 signed ledger), PyYAML (YAML mandate files) and uvicorn (`--http`).
 
 ```bash
@@ -1667,6 +1757,8 @@ coriqo-mcp --mandate coriqo.mandate.yaml --http --upstream http://127.0.0.1:9000
 | `--http` | off | relay an HTTP MCP server (streamable HTTP or SSE) instead of a stdio child |
 | `--upstream URL` | — | with `--http`: the server's base URL. Requests keep their path and query |
 | `--listen HOST:PORT` | `127.0.0.1:8808` | with `--http`: where `coriqo-mcp` listens |
+| `--server NAME` | none | tool pinning: the key of this server's entry in the mandate's `tool_pins.servers` (letters, digits, `.`, `-`, `_`, up to 64). Without it, `coriqo-mcp` refuses to start under `enforce` when the mandate pins tools; under `shadow` every tool counts as unpinned and is flagged |
+| `--pin-hold-timeout SECONDS` | `10` | tool pinning: how long a `tools/call` waits for `coriqo-mcp` to fetch the server's tool list before the tool counts as unpinned. Above 0, at most 120 |
 | `--grace SECONDS` | the mandate's `stop_grace_s`, else the file's `x-stop_grace_s`, else `5` | how long the server gets to exit after SIGTERM before SIGKILL goes to its process group |
 | `--on-suspend MODULE:FUNCTION` | none | a function to call when the agent is suspended in Coriqo, to stop workers `coriqo-mcp` does not own. Repeatable. The module must be importable; one that is not stops start-up (exit 2) |
 | `--on-suspend-timeout SECONDS` | `30` | how long each `--on-suspend` function gets before it is recorded as timed out |
@@ -1679,6 +1771,113 @@ written to stdout; everything else goes to stderr. Decisions are sent to
 Coriqo's verdict endpoint every 5 seconds when the device is enrolled and the
 agent has a Coriqo id (`agent.id` in the file, or `--coriqo-agent-id`). The
 README's `coriqo-mcp` section lists what is and is not checked.
+
+**Tool pinning.** A mandate can pin, per MCP server, the SHA-256 of each
+approved tool's definition (`name`, `description`, `inputSchema` and
+`outputSchema` when present) and of its annotations (the title and the hints),
+as `tool_pins` in format v1.4 or in the snapshot Coriqo serves. `coriqo-mcp`
+checks the tools it relays against them. `_meta` and `icons` are not hashed.
+Hashes use RFC 8785 canonical JSON.
+
+- The pins come from the mandate in hand: the file's `tool_pins` with
+  `--mandate`, or the snapshot's `tool_pins` and `tool_pin_policy` with
+  `--coriqo-agent-id`. A snapshot with pins lists `required_fields:
+  ["tool_pins", "tool_pin_policy"]`. An agent with no pins changes nothing:
+  `coriqo-mcp` sends no request of its own and its records carry no pin fields.
+- `coriqo-mcp` asks the server for its **whole** tool list itself (every page,
+  at most 100 pages, and at most 5000 entries counting any that are not valid
+  tools), once the host's `initialize` is done (on stdio, when the host sends
+  `notifications/initialized`; over HTTP, once the upstream has accepted that
+  notification, never before it is forwarded), and again after each
+  `notifications/tools/list_changed` and when a `tools/call` names a tool it
+  has not seen. The server answers as it would to the host. Over HTTP the
+  request reuses the host's `Mcp-Session-Id` and headers (credentials
+  included); each inventory is kept per session and per hash of the host's
+  credential headers (`Authorization`, `Cookie`, `X-API-Key`; never stored in
+  clear), so one client's call is never judged on a list fetched with another
+  client's credentials. At most 64 inventories are kept. The legacy
+  two-endpoint SSE transport answers on a separate stream and is not supported
+  for this fetch: when the upstream answers the runtime's request with 202,
+  `coriqo-mcp` stops fetching (for every session of that upstream) and logs
+  that once. Because the runtime cannot read its own answers on that
+  transport, no tool can be checked: **pinned tools are refused under
+  `enforce` and flagged under `shadow`** (they follow `on_drift`), and tools
+  with no pin follow `on_unpinned`.
+  A host that was already initialized before `coriqo-mcp` started sends no new
+  `notifications/initialized`, so its tools cannot be checked until it
+  reconnects, with the same result.
+- Its requests use string ids starting `byoai-pin-` and a random per-process
+  token, and the answers never reach the host. A host request whose id starts
+  `byoai-pin-` is refused with `-32600`, so ids cannot collide. The refetch
+  waits at least 5 seconds before looking for the same missing name again, and
+  paged fetches to one upstream are spaced at least `MIN_FETCH_INTERVAL_S`
+  (1 second, a constant in `byoai.integrations.coriqo_mcp_pins`) apart across
+  all sessions, so a client that churns session ids cannot multiply the load on
+  the server. A failed fetch backs off 2, 4, 8 ... up to 300 seconds (and honours
+  `Retry-After` over HTTP), and there is one request in flight at a time.
+- A `tools/call` is **held** while a fetch is running or needed, up to
+  `--pin-hold-timeout`. If the wait runs out, the fetch failed, or the tool
+  was never seen, it cannot be checked. A tool that **has a pin** then follows
+  `on_drift` (refused under `enforce`, flagged under `shadow`), and the reason
+  says it could not be checked in time; a tool with **no pin** follows
+  `on_unpinned`. Neither is ever passed as a match. After a `list_changed`
+  nothing is checked against the old list.
+- The host and the runtime can be shown different lists. The runtime keeps, per
+  session, the hash of each tool as it appeared in the host's own `tools/list`
+  answers, across all pages of one list. A call to a tool whose host-seen hash differs from the one the
+  runtime fetched (or, when it could not fetch, from the pin) is drift, follows
+  `on_drift`, and the record's
+  `definition_sha256` is the host-seen hash. A name the host's own list shows
+  twice with different definitions, on one page or on different pages of one
+  list, is ambiguous: it counts as drift, and under `enforce` with `refuse`
+  every later entry of it is hidden (an entry on a page already sent cannot be
+  taken back). The state resets when the host lists again from the first page
+  (a `tools/list` without a cursor) and on a `list_changed`. A `list_changed` clears what the
+  host saw until it lists again.
+- Verdicts. Matching hashes (definition and annotations): allowed as before.
+  A different definition or annotations hash: `on_drift`. A tool the mandate
+  allows that has no pin under `--server`: `on_unpinned`. `flag` allows the call
+  and records it `flagged`; `refuse` denies it (`blocked`) and, under `enforce`,
+  removes the tool from every `tools/list` answer. A live tool the mandate does
+  not allow is not offered under `enforce` and refused if called, as before.
+  Under `shadow` (`observe`) and `on_violation: alert_only` nothing is blocked:
+  a `refuse` is recorded as `flagged`. A refusal is not latched, so a server that
+  restores the tool is let back in.
+- Where the policy comes from. A snapshot from Coriqo carries `tool_pin_policy`
+  (`on_drift` and `on_unpinned`, each `flag` or `refuse`, resolved for the
+  agent's mode; `class_actions`; `policy_sha256`). A mandate file has none:
+  `on_drift` is `refuse` under `enforce` and `flag` under `shadow`, and
+  `on_unpinned` is `flag`.
+- **What the runtime cannot tell.** It holds only the pinned hashes, not the
+  launcher or the lock file. It can say that a definition changed, that
+  annotations changed, that an allowed tool is unpinned, that a pinned tool has
+  gone (logged, since a removed tool cannot be called), or that a tool could
+  not be checked. It cannot say whether a change widened parameters, only
+  changed a title, or made a hint riskier, so every hash mismatch follows
+  `on_drift`. `class_actions` is carried and recorded with the snapshot but this
+  runtime does not interpret it.
+- Each recorded verdict gains three fields when the agent has pins:
+  `pin_status` (`match`, `drift` or `unpinned`), `definition_sha256` (the
+  hash seen on the server; absent when the tool was not seen) and `server` (the
+  `--server` name, checked against `[A-Za-z0-9_.-]{1,64}`, else
+  `<invalid name>`; absent when no `--server` was given). Both are in the
+  local ledger record and in the batch sent to Coriqo. The reason is
+  `tool_pin_drift` or `tool_unpinned`. The operator detail names only the
+  server and the tool, after the name is checked against `[A-Za-z0-9_.-]{1,64}`
+  (else `<invalid name>`); a tool's description never appears in a reason, a
+  log line or a record.
+- A pin check happens before the call is forwarded. It cannot see a change that
+  happens after the check and before the server runs the tool, so pins are not
+  a guarantee about what executes; they catch a tool that changed since it was
+  approved, at the moment of each call.
+- Every server line is parsed while the mandate pins tools, not only those that
+  look like `list_changed`: a substring test can be defeated with JSON
+  escapes, and a hidden change notice is how a changed tool would get past the
+  check.
+- Limits. The hash is of what this client sees on the wire; a server that
+  answers different clients differently can only be pinned per client. Pins are
+  not signed in the snapshot. The runtime fetches the list as one more client of
+  the server; it does not check resources, prompts or tool results.
 
 **When the agent is suspended.** With `--coriqo-agent-id`, the snapshot
 `coriqo-mcp` fetches carries the agent's status. When it changes to

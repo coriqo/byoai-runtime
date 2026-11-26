@@ -69,6 +69,10 @@ class PartialEvent:
     span_id: str = ""
     parent_span_id: str | None = None
     continues_from: str | None = None
+    # A caller-chosen id, for a source that must seal the same record to the same event every
+    # time it reads it (the Bedrock invocation log reader, W10). None: the recorder mints a
+    # random one, as for every live capture.
+    event_id: str | None = None
 
 
 def _make_event(

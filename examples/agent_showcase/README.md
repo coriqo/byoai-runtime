@@ -75,7 +75,7 @@ default. This is for running it against an agent in your own AWS account.
 here runs without it.
 
 ```bash
-pip install --pre "byoai-runtime[fastapi,recorder,bedrock-agent]"
+pip install "byoai-runtime[fastapi,recorder,bedrock-agent]"
 ```
 
 `start.sh` adds `bedrock-agent` on its own when `BYOAI_BEDROCK_AGENT_ID` is

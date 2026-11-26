@@ -16,9 +16,11 @@ from __future__ import annotations
 
 import asyncio
 import gzip
+import json
 import logging
 import random
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -35,6 +37,7 @@ from byoai.recorder.ledger import Ledger, LedgerEntry
 from byoai.recorder.schema import EventKind
 
 __all__ = [
+    "runtime_info",
     "AttestationShipResult",
     "CheckpointShipResult",
     "ShipError",
@@ -48,12 +51,33 @@ _INGEST_PATH = "/v1/ingest/batch"
 _CHECKPOINT_INGEST_PATH = "/v1/checkpoints/batch"
 _MAX_BACKOFF_SECONDS = 60.0
 _INITIAL_BACKOFF_SECONDS = 1.0
+# A payload-mode refusal (W8) is logged at most once per this many seconds while it lasts.
+_REFUSAL_LOG_SECONDS = 3600.0
 
 #: CEI envelope emitter block (the envelope's `emitter` field) for every
 #: attestation this runtime ships. Not per-agent — one runtime kind/vendor
 #: for the whole process, matching what `attest_capability_snapshot`'s
 #: `runtime_version` already reports elsewhere.
 _EMITTER = {"kind": "proxy", "vendor": "byoai-runtime", "software_version": __version__}
+
+
+#: Capability signal (C2), a top-level field of both batch bodies. A server
+#: that sees ``heartbeat_chain_v1`` knows this runtime is writing ``heartbeat``
+#: chain entries every ``heartbeat_interval_s`` seconds. It is sent only while
+#: the heartbeat thread is alive (never when heartbeats are off or failed to
+#: start) and omitted otherwise. It is self-asserted: the body signature proves
+#: the device sent it, not that it is true, so a server should treat it as
+#: sticky per device once seen and judge the heartbeat entries themselves.
+#: Servers read the body by key and ignore fields they do not know, so the
+#: released contract (``/v1/ingest/batch``, ``/v1/checkpoints/batch``,
+#: ``rejected`` entries carrying ``seq_end``) is unchanged.
+def runtime_info(heartbeat_interval_s: float) -> dict:
+    interval = float(heartbeat_interval_s)
+    return {
+        "version": __version__,
+        "capabilities": ["heartbeat_chain_v1"],
+        "heartbeat_interval_s": int(interval) if interval.is_integer() else interval,
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,11 +107,26 @@ class ShipError(RuntimeError):
     inside :meth:`Shipper.ship_once` — the caller/run loop owns retry policy)."""
 
     def __init__(self, message: str, *, retry_after: float | None = None,
-                 status_code: int | None = None) -> None:
+                 status_code: int | None = None, body: str | None = None) -> None:
         super().__init__(message)
         self.retry_after = retry_after
         #: HTTP status of a rejected request; None for a network failure.
         self.status_code = status_code
+        #: The rejected response's body text, for a refusal the loop explains (W8
+        #: payload_mode_refused).
+        self.body = body
+
+    def refusal(self) -> dict | None:
+        """Coriqo's payload-mode refusal detail (a 409 with code payload_mode_refused), or None."""
+        if self.status_code != 409 or not self.body:
+            return None
+        try:
+            detail = json.loads(self.body).get("detail")
+        except (ValueError, AttributeError):
+            return None
+        if isinstance(detail, dict) and detail.get("code") == "payload_mode_refused":
+            return detail
+        return None
 
 
 
@@ -126,6 +165,7 @@ def post_signed_batch(client: httpx.Client, base_url: str, key: DeviceKey,
             f"request to {path} rejected: HTTP {response.status_code} {response.text}",
             retry_after=retry_after,
             status_code=response.status_code,
+            body=response.text,
         )
 
     try:
@@ -159,8 +199,18 @@ class Shipper:
         wait: Callable[[float], bool] | None = None,
         attestation_client: AsyncCoriqoAgentsClient | None = None,
         tenant_slug: str | None = None,
+        runtime_info: Callable[[], dict | None] | None = None,
+        payload_mode: str | None = None,
     ) -> None:
+        #: Returns the ``runtime`` capability block to add to each batch, or
+        #: ``None`` to send none. Unset sends none (an older runtime's shape).
+        self._runtime_info = runtime_info
         self._ledger = ledger
+        # The recorder's configured payload mode (W8), sent in each batch's `runtime`
+        # block for Coriqo to show.
+        # Display only: every entry carries the mode it was actually recorded under.
+        self._payload_mode = payload_mode
+        self._last_refusal_log: float | None = None
         self._key = key
         self._base_url = coriqo_base_url.rstrip("/")
         # For the attestation client's identity only — entry/checkpoint
@@ -199,6 +249,25 @@ class Shipper:
         if self._owns_attestation_client and self._attestation_client is not None:
             asyncio.run(self._attestation_client.close())
 
+    def _add_runtime(self, body: dict) -> None:
+        """The top-level ``runtime`` block: the capability signal (C2) while heartbeats run,
+        and who is shipping in which payload mode (W8) when a mode is configured. Signed with
+        the batch; it never labels entries. Left out when there is nothing to say."""
+        block: dict = {}
+        if self._runtime_info is not None:
+            try:
+                info = self._runtime_info()
+            except Exception:  # noqa: BLE001 - a status read never blocks shipping
+                info = None
+            if info:
+                block.update(info)
+        if self._payload_mode is not None:
+            block.update(
+                name="byoai-runtime", version=__version__, payload_mode=self._payload_mode
+            )
+        if block:
+            body["runtime"] = block
+
     # -- single batch attempt ------------------------------------------------
 
     def ship_once(self) -> ShipResult | None:
@@ -228,6 +297,11 @@ class Shipper:
                 "entry_hash": entry.entry_hash,
                 "event": entry.event.to_dict(),
             }
+            # W8: beside the event, outside every digest; absent (never null) for rows
+            # recorded before the
+            # mode was stored, so they ship exactly as before.
+            if entry.payload_mode is not None:
+                wire_entry["payload_mode"] = entry.payload_mode
             entry_bytes = len(canonicalize(wire_entry))
             if batch and total_bytes + entry_bytes > self._max_batch_bytes:
                 break
@@ -235,6 +309,7 @@ class Shipper:
             total_bytes += entry_bytes
 
         body = {"device_id": self._key.device_id, "entries": batch}
+        self._add_runtime(body)
         resp_body = self._post_signed_batch(_INGEST_PATH, body)
 
         accepted = int(resp_body.get("accepted", 0))
@@ -274,6 +349,7 @@ class Shipper:
             return None
 
         body = {"device_id": self._key.device_id, "checkpoints": checkpoints}
+        self._add_runtime(body)
         resp_body = self._post_signed_batch(_CHECKPOINT_INGEST_PATH, body)
 
         accepted = int(resp_body.get("accepted", 0))
@@ -455,6 +531,13 @@ class Shipper:
         """See :func:`post_signed_batch`; bound to this shipper's device."""
         return post_signed_batch(self._client, self._base_url, self._key, path, body)
 
+    def post_signed(self, path: str, body: dict) -> dict:
+        """POST one signed body to a device route other than the ledger batches, with this
+        shipper's device key and client. The Bedrock log reader posts its status this way
+        after every sweep, including one with nothing to ship (W10). Raises :class:`ShipError`
+        like the batches; never retries itself."""
+        return self._post_signed_batch(path, body)
+
     def _advance_watermark(
         self,
         get_current: Callable[[], int],
@@ -504,6 +587,20 @@ class Shipper:
 
     # -- background loop ------------------------------------------------------
 
+    def _log_failure(self, exc: ShipError) -> None:
+        refusal = exc.refusal()
+        if refusal is None:
+            logger.warning("recorder shipper batch failed: %s", exc)
+            return
+        # A refusal repeats on every retry until someone changes a setting; say it
+        # plainly, once an hour.
+        now = time.monotonic()
+        if self._last_refusal_log is None or now - self._last_refusal_log >= _REFUSAL_LOG_SECONDS:
+            self._last_refusal_log = now
+            logger.warning(
+                "Coriqo refused this host's ledger batch: %s", refusal.get("message") or exc
+            )
+
     def run_forever(self, *, stop: threading.Event) -> None:
         """Ship batches until ``stop`` is set.
 
@@ -516,26 +613,31 @@ class Shipper:
         wait_fn = self._wait if self._wait is not None else stop.wait
         backoff = _INITIAL_BACKOFF_SECONDS
         while not stop.is_set():
-            try:
-                self.ship_once()
-                self.ship_checkpoints_once()
-                self.ship_attestations_once()
+            # Each stream ships on its own: a refused entry batch (W8) can hold for as
+            # long as a setting stays as it is, and must not stop checkpoints and
+            # attestations from reaching Coriqo meanwhile.
+            failure: ShipError | None = None
+            for ship in (self.ship_once, self.ship_checkpoints_once, self.ship_attestations_once):
+                try:
+                    ship()
+                except ShipError as exc:
+                    self._log_failure(exc)
+                    failure = failure or exc
+                except Exception:  # pragma: no cover - defensive, must never propagate
+                    logger.exception("recorder shipper hit an unexpected error")
+            if failure is None:
                 backoff = _INITIAL_BACKOFF_SECONDS
-            except ShipError as exc:
-                logger.warning("recorder shipper batch failed: %s", exc)
-                if exc.retry_after is not None:
-                    wait_seconds = exc.retry_after
-                else:
-                    wait_seconds = min(backoff, _MAX_BACKOFF_SECONDS)
-                    wait_seconds = wait_seconds * (0.5 + random.random())
-                    backoff = min(backoff * 2, _MAX_BACKOFF_SECONDS)
-                if wait_fn(wait_seconds):
+                self._last_refusal_log = None
+                if wait_fn(self._max_batch_seconds):
                     return
                 continue
-            except Exception:  # pragma: no cover - defensive, must never propagate
-                logger.exception("recorder shipper hit an unexpected error")
-
-            if wait_fn(self._max_batch_seconds):
+            if failure.retry_after is not None:
+                wait_seconds = failure.retry_after
+            else:
+                wait_seconds = min(backoff, _MAX_BACKOFF_SECONDS)
+                wait_seconds = wait_seconds * (0.5 + random.random())
+                backoff = min(backoff * 2, _MAX_BACKOFF_SECONDS)
+            if wait_fn(wait_seconds):
                 return
 
 

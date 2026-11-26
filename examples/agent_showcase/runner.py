@@ -41,9 +41,10 @@ import logging
 import os
 import time
 import uuid
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any
 
 from byoai.errors import ByoAIError, ConfigurationError, ProviderError
 from byoai.providers.anthropic import AnthropicProvider
@@ -352,7 +353,7 @@ class AgentRunner:
 
                 tool_result_blocks: list[dict[str, Any]] = []
                 for call in tool_calls:
-                    name = call.get("name")
+                    name = call.get("name") or ""
                     args = call.get("input") or {}
                     yield RunEvent(
                         kind=EventKind.TOOL_USE.value,
@@ -513,7 +514,7 @@ class AgentRunner:
 
                 tool_result_blocks: list[dict[str, Any]] = []
                 for call in tool_calls:
-                    name = call.get("name")
+                    name = call.get("name") or ""
                     args = call.get("input") or {}
                     call_id = call.get("id")
                     yield RunEvent(

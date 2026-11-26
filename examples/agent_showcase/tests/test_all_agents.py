@@ -5,12 +5,12 @@ sub-agent span. No network access — every run exercises the fallback path.
 from __future__ import annotations
 
 import pytest
+from examples.agent_showcase.agents.registry import list_agents
+from examples.agent_showcase.app import app
 from fastapi.testclient import TestClient
 
 from byoai.recorder import integration as recorder_integration
 from byoai.recorder.verify import verify_ledger
-from examples.agent_showcase.agents.registry import list_agents
-from examples.agent_showcase.app import app
 
 ALL_AGENT_IDS = [a.id for a in list_agents()]
 SUB_AGENT_PARENTS = {

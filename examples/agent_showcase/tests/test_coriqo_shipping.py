@@ -16,12 +16,12 @@ import json
 
 import httpx
 import pytest
+from examples.agent_showcase.app import app
 from fastapi.testclient import TestClient
 
 from byoai.recorder import integration as recorder_integration
 from byoai.recorder.integration import get_recorder
-from byoai.recorder.shipper import ShipResult, Shipper
-from examples.agent_showcase.app import app
+from byoai.recorder.shipper import Shipper, ShipResult
 
 
 @pytest.fixture

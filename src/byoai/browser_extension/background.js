@@ -194,7 +194,7 @@ let queue = []
 let timer = null
 let restoring = null
 
-const WATCHED_HOST = ['claude.ai', 'chatgpt.com', 'chat.openai.com', 'gemini.google.com', 'copilot.microsoft.com']
+const WATCHED_HOST = ['claude.ai', 'chatgpt.com', 'chat.openai.com', 'gemini.google.com', 'copilot.microsoft.com', 'copilot.com']
 
 /*
  * Badge on the Shield-covered surfaces: while a Shield page (claude.ai,

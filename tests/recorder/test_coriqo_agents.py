@@ -516,6 +516,23 @@ def test_publish_session_drops_final_output_under_hash_only_mode(ledger):
     assert all(t["output"] is None for t in seen["batches"][0])
 
 
+def test_publish_session_drops_final_output_when_hash_only_is_given_as_text(ledger):
+    _seal_run(ledger, "run_1", ["get_transaction", "flag_decision"])
+    seen: dict = {}
+
+    with _client(_batch_handler(seen)) as client:
+        publish_session(
+            client,
+            coriqo_agent_id=_CORIQO_AGENT,
+            ledger=ledger,
+            session_id="run_1",
+            final_output="Approved for user@example.com.",
+            payload_mode="hash-only",
+        )
+
+    assert all(t["output"] is None for t in seen["batches"][0])
+
+
 def test_publish_session_uses_a_custom_redactor_under_redacted_mode(ledger):
     """A caller who needs detection beyond fixed-shape patterns (e.g. names)
     supplies their own TextRedactor instead of the default scanner."""

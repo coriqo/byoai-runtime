@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import json
 import time as _time
+from datetime import datetime, timedelta, timezone
 
 import pytest
-from datetime import datetime, timedelta, timezone
 
 from byoai.integrations.shield import Feed, ShieldConfig
 from byoai.integrations.shield_console import ShieldConsoleAPI

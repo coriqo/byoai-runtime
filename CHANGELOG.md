@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Browser extension 0.10.5: Copilot is now covered on copilot.com.
+  copilot.microsoft.com redirects there, and the manifest listed only the old
+  host, so no extension script ran on the page the user ends up on. The host is
+  added to the manifest (content scripts and the privacy notice resource),
+  `sites.json`, the popup and Shield's host-to-app map. Because the manifest
+  gains a host, Chrome asks for permission again on update. A new test fails
+  when a host in `sites.json` is not matched by a manifest content script. The
+  store description now says what is true: Gemini and Copilot get the input
+  gate only, and personal details are replaced on Claude and ChatGPT. Not yet
+  confirmed on copilot.com in a browser.
+
 ### Added
 - **Held calls send their arguments with the approval request, in payload mode
   `full` only.** Coriqo keeps the amount they state and a SHA-256 fingerprint;
@@ -15,6 +27,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never the arguments, so Coriqo can check the action stayed within the
   approved amount. `BYOAI_APPROVAL_SEND_ARGS=0` opts out under `full`.
 
+- `coriqo-mcp` enforces tool pins. New `--server NAME` (the server's key in
+  `tool_pins.servers`) and `--pin-hold-timeout SECONDS` (default 10). The
+  runtime fetches the server's full tool list itself (every page, at most 100
+  pages and 5000 tools) after the host's `initialize`, on each
+  `notifications/tools/list_changed` and when a call names an unseen tool, using
+  its own `byoai-pin-` request ids and, over HTTP, the host's `Mcp-Session-Id`.
+  A `tools/call` is held while that runs. Each tool's definition and
+  annotations are hashed (RFC 8785) and compared with the pins: a mismatch
+  follows `on_drift`, an allowed tool with no pin follows `on_unpinned`, and a
+  tool not seen and checked in time counts as unpinned. `flag` allows and flags;
+  `refuse` denies and, under `enforce`, hides the tool from `tools/list`;
+  `shadow` never blocks. Recorded verdicts gain optional `pin_status`,
+  `definition_sha256` and `server` (absent for an agent with no pins). `tool_pins` and
+  `tool_pin_policy` are now read from the snapshot; `class_actions` is carried
+  but not interpreted. The runtime's own answers are never relayed to the host
+  (HTTP and event streams too); over HTTP its first fetch waits until the
+  upstream has accepted the host's `notifications/initialized`; paged fetches to
+  one upstream are spaced at least 1 second apart across sessions; inventories
+  are kept per session and credential fingerprint; a tool the host was shown
+  differently from what the runtime fetched counts as drift; and the legacy
+  two-endpoint SSE transport (a 202 to the runtime's request) stops fetching,
+  so pinned tools are refused under `enforce` and flagged under `shadow`. A
+  pinned tool that cannot be checked in time (not seen, failed or timed-out
+  fetch, stale list) follows `on_drift`, not `on_unpinned`; a name listed twice
+  differently to the host, on one page or across the pages of one list, counts as drift. Under `enforce`, `coriqo-mcp` refuses to start without
+  `--server` when the mandate pins tools.
+- The mandate file reader is now at format revision 1.4 (accepts `tool_pins`,
+  asset scope and payment limits) and the golden tool-hash vectors are vendored
+  with a checksum test.
+- The mandate gate reads `required_fields` from the snapshot (fields the runtime
+  must understand, like the JWT `crit` header). A field it cannot read is
+  recorded as `unreadable_keys` and the gate refuses to evaluate: denied under `enforce` with `fail_closed`, allowed and flagged
+  otherwise, with a reason telling you to upgrade byoai-runtime. Other unknown
+  keys are ignored and logged once at INFO. Key names are sanitized.
+
+### Fixed
+- Running from a mandate file now passes every field the reader accepts to the
+  gate. A file that set `max_transaction_usd_per_day`, `max_transaction_usd` or
+  `asset_scope` (format v1.2 and v1.3) loaded cleanly and enforced none of them;
+  they are now enforced. A file with `tool_pins` (v1.4) passes them to the gate
+  as required, so they are never silently ignored. A test fails if the reader gains a field that is not
+  mapped.
+
+## [0.1.0] - 2026-11-17
+
+First release without a pre-release suffix: `pip install byoai-runtime` no longer
+needs `--pre`. PyPI's latest was `0.1.0a4`; `0.1.0a5` to `0.1.0a7` were tagged but
+never published, so this release includes everything listed under them and below.
+
+The package is a beta (`Development Status :: 4 - Beta`). The README lists what is
+a stable contract (the seal format and its verification, the ledger and checkpoint
+ingest wire format, the `coriqo-verify` commands and exit codes, the versioned
+mandate file format) and what is provisional. CI now also runs on pull requests.
+
+### Added
+- **Signed heartbeat as a chain entry (C2).** The running recorder writes a
+  `heartbeat` event (`{last_seq, device_time, interval_s}`) every
+  `BYOAI_RECORDER_HEARTBEAT_SECONDS` (default 900), a normal chain entry covered
+  by the device-signed checkpoints, at most one per start. `0` writes one
+  `interval_s: 0` heartbeat saying they are off. While the thread runs, both
+  upload bodies carry `runtime: {version, capabilities: ["heartbeat_chain_v1"],
+  heartbeat_interval_s}` (self-asserted; the released routes and the
+  `rejected`/`seq_end` shape are unchanged). `coriqo-verify --max-heartbeat-silence
+  SECONDS [--heartbeat-gap A-B] [--allow-no-heartbeats]`, the new `coriqo-verify
+  bundle FILE.json`, and the matching `verify_ledger`/`verify_bundle` arguments
+  fail on spacing, tail, declared-off windows and no heartbeats (off by default);
+  clock inconsistencies are advisory notes unless `--strict-clock`. Windows are
+  accepted by name (`A-B`, `tail:N`, `off:N`). Contract: `docs/seal-format.md` §4.4 and §11.6.
+- **Fix: checkpoints stay verifiable under concurrent writers.** A checkpoint now
+  takes its `seq_end` and the chain hash it signs together from the ledger under
+  its lock, and a late `note()` cannot shrink the window. Before, two threads
+  noting out of order could produce a checkpoint that failed verification.
 - **Agent-signed token actions.** `AsyncCoriqoAgentsClient.request_token_action()`
   posts an agent's token action to Coriqo's
   `POST /api/v1/token-ops/actions/agent-signed`, signed with the device tuple
