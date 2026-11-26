@@ -14,6 +14,8 @@ const APPS = {
   'gemini.google.com': 'Gemini',
   'copilot.microsoft.com': 'Copilot',
   'copilot.com': 'Copilot',
+  'copilot.cloud.microsoft': 'Copilot',
+  'm365.cloud.microsoft': 'Copilot',
 }
 let lastRender = null
 const STALE_AFTER_MS = 7 * 24 * 3600 * 1000

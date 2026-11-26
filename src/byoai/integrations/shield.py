@@ -2227,6 +2227,8 @@ _APP_TAG_FOR_HOST = {
     "gemini.google.com": "gemini",
     "copilot.microsoft.com": "copilot",
     "copilot.com": "copilot",
+    "copilot.cloud.microsoft": "copilot",
+    "m365.cloud.microsoft": "copilot",
 }
 
 

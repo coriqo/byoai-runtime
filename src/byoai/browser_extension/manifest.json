@@ -35,7 +35,10 @@
         "https://chat.openai.com/*",
         "https://gemini.google.com/*",
         "https://copilot.microsoft.com/*",
-        "https://copilot.com/*"
+        "https://copilot.com/*",
+        "https://copilot.cloud.microsoft/*",
+        "https://m365.cloud.microsoft/chat",
+        "https://m365.cloud.microsoft/chat/*"
       ],
       "js": [
         "shield-rules.js",
@@ -55,7 +58,10 @@
         "https://chat.openai.com/*",
         "https://gemini.google.com/*",
         "https://copilot.microsoft.com/*",
-        "https://copilot.com/*"
+        "https://copilot.com/*",
+        "https://copilot.cloud.microsoft/*",
+        "https://m365.cloud.microsoft/chat",
+        "https://m365.cloud.microsoft/chat/*"
       ],
       "js": [
         "shield-iso.js",
@@ -76,7 +82,10 @@
         "https://chat.openai.com/*",
         "https://gemini.google.com/*",
         "https://copilot.microsoft.com/*",
-        "https://copilot.com/*"
+        "https://copilot.com/*",
+        "https://copilot.cloud.microsoft/*",
+        "https://m365.cloud.microsoft/chat",
+        "https://m365.cloud.microsoft/chat/*"
       ]
     }
   ],

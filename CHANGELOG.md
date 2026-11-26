@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   store description now says what is true: Gemini and Copilot get the input
   gate only, and personal details are replaced on Claude and ChatGPT. Not yet
   confirmed on copilot.com in a browser.
+- Browser extension 0.10.5: Microsoft 365 Copilot Chat (work account) is now
+  covered on copilot.cloud.microsoft and on m365.cloud.microsoft/chat only (not
+  the rest of the Microsoft 365 app). Both are named in Microsoft Learn's
+  "Manage Copilot Chat" page. Copilot's selectors in `sites.json` are
+  unchanged and probably do not match this product, so the input gate uses its
+  generic message box and send button there. Not yet confirmed in a browser.
 
 ### Added
 - `coriqo-mcp` enforces tool pins. New `--server NAME` (the server's key in

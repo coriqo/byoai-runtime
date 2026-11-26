@@ -240,7 +240,9 @@
         "app": "copilot",
         "hosts": [
           "copilot.microsoft.com",
-          "copilot.com"
+          "copilot.com",
+          "copilot.cloud.microsoft",
+          "m365.cloud.microsoft"
         ],
         "compose": [
           "textarea#userInput",
