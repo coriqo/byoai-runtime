@@ -4,8 +4,9 @@
  * journey at the top and highlights its step, so the reader lands on it.
  */
 import { useEffect, useState } from 'react'
+import type { ReactNode } from 'react'
 import {
-  NeedFilter, WhenFilter, flagTagClass, inWhen, matchesNeed, plural, ruleLabel, today, useFeed,
+  Banner, HashChip, NeedFilter, WhenFilter, flagTagClass, inWhen, matchesNeed, plural, ruleLabel, tierLabel, tierTagClass, today, useFeed,
 } from './shared'
 import type { Item, Need, When } from './shared'
 
@@ -36,10 +37,10 @@ export function Timeline({ focus, setFocus, onOpen }: {
   return (
     <div className="shield-timeline">
       {focus && !focused && feed.data && (
-        <div className="banner warn">
+        <Banner tone="warn">
           <span>That interaction isn't in the latest 200 anymore.</span>
           <button className="btn sm" onClick={() => setFocus(undefined)}>Dismiss</button>
-        </div>
+        </Banner>
       )}
       {focused && <Journey it={focused} onClose={() => setFocus(undefined)} onOpen={() => onOpen(focused)} />}
 
@@ -49,6 +50,13 @@ export function Timeline({ focus, setFocus, onOpen }: {
         <span className="muted">{visible.length} of {items.length} recorded</span>
       </div>
 
+      {feed.isError && (
+        <p className="empty-row" role="alert">
+          <b>Can't reach Shield on this Mac.</b>
+          Start it with <code className="mono">byoai-shield</code>, then reload this page.
+        </p>
+      )}
+      {feed.isPending && <p className="empty-row" role="status">Loading the timeline…</p>}
       {feed.data && visible.length === 0 && (
         <p className="empty-row">
           {items.length
@@ -65,7 +73,10 @@ export function Timeline({ focus, setFocus, onOpen }: {
                 className={it.id === focus ? 'focused' : undefined}>
                 <button className="tl-step" onClick={() => setFocus(it.id)}>
                   <span className="tl-top">
-                    <b>{it.surface}</b>
+                    <span>
+                      <b>{it.surface}</b>
+                      {it.tier !== 'ok' && <> <span className={`tag ${tierTagClass(it.tier)}`}>{tierLabel(it)}</span></>}
+                    </span>
                     <span className="when">{it.ts}</span>
                   </span>
                   <span className="muted">{it.verb}</span>
@@ -91,7 +102,7 @@ function Journey({ it, onClose, onOpen }: { it: Item; onClose: () => void; onOpe
   const flags = it.flags.map(f => ruleLabel(f.rule))
   const n = it.redactions?.length ?? 0
   const outcome = it.status === 'blocked'
-    ? { dot: 'r', title: 'Stopped on this Mac', body: 'The message never reached the AI app.' }
+    ? { dot: 'r', title: 'Blocked on this Mac', body: 'The message never reached the AI app.' }
     : it.status === 'running'
       ? { dot: 'y', title: 'Still running', body: '' }
       : it.status === 'failed'
@@ -101,7 +112,7 @@ function Journey({ it, onClose, onOpen }: { it: Item; onClose: () => void; onOpe
           title: n ? `Sent with ${n === 1 ? '1 detail' : `${n} details`} replaced` : 'Sent',
           body: it.reply ?? (it.response_stream ? 'Reply streamed back.' : ''),
         }
-  const steps = [
+  const steps: { dot: string; title: string; body: ReactNode }[] = [
     { dot: 'g', title: it.source === 'mcp' ? 'The agent called a tool' : it.source === 'browser' ? 'A message was sent in the browser' : 'A message was sent', body: it.verb },
     {
       dot: it.tier === 'bad' ? 'r' : flags.length ? 'y' : 'g',
@@ -112,7 +123,10 @@ function Journey({ it, onClose, onOpen }: { it: Item; onClose: () => void; onOpe
     ...(it.seal
       ? [{
         dot: 'g', title: 'Sealed',
-        body: `Seal ${it.seal}${it.latency_ms ? ` · ${Math.round(it.latency_ms)} ms` : ''}. The record and its proof stay on this Mac.`,
+        body: <>
+          The record and its proof stay on this Mac{it.latency_ms ? ` (${Math.round(it.latency_ms)} ms)` : ''}.{' '}
+          <HashChip value={it.seal} noun="seal" short={16} />
+        </>,
       }]
       : []),
   ]
@@ -128,7 +142,7 @@ function Journey({ it, onClose, onOpen }: { it: Item; onClose: () => void; onOpe
         {steps.map(s => (
           <li key={s.title} data-dot={s.dot}>
             <b>{s.title}</b>
-            {s.body && <p>{s.body}</p>}
+            {s.body ? <p>{s.body}</p> : null}
           </li>
         ))}
       </ol>

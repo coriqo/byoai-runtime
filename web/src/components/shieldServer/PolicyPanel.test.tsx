@@ -109,18 +109,18 @@ describe('PolicyPanel — a background refetch never wipes unsaved edits', () =>
     render(renderWithClient(<PolicyPanel />, qc))
 
     // The fixture default policy is mode "redact".
-    const redactRadio = await screen.findByRole('radio', { name: 'redact' })
+    const redactRadio = await screen.findByRole('radio', { name: 'Check and act' })
     await waitFor(() => expect(redactRadio).toHaveProperty('checked', true))
 
     // Dirty the form: switch to "block" without saving.
-    fireEvent.click(screen.getByRole('radio', { name: 'block' }))
-    expect(screen.getByRole('radio', { name: 'block' })).toHaveProperty('checked', true)
+    fireEvent.click(screen.getByRole('radio', { name: 'Check and block high-risk sends' }))
+    expect(screen.getByRole('radio', { name: 'Check and block high-risk sends' })).toHaveProperty('checked', true)
 
     // A background refetch with NOTHING changed server-side must not touch
     // the dirty edit at all.
     await qc.invalidateQueries({ queryKey: ['shield-server', 'policy', 'default'] })
     await waitFor(() => expect(qc.isFetching()).toBe(0))
-    expect(screen.getByRole('radio', { name: 'block' })).toHaveProperty('checked', true)
+    expect(screen.getByRole('radio', { name: 'Check and block high-risk sends' })).toHaveProperty('checked', true)
     expect(screen.queryByText(/changed on the server/i)).toBeNull()
 
     // Now the server actually moves (another admin's save) while still dirty
@@ -135,13 +135,13 @@ describe('PolicyPanel — a background refetch never wipes unsaved edits', () =>
     await qc.invalidateQueries({ queryKey: ['shield-server', 'policy', 'default'] })
     await waitFor(() => expect(qc.isFetching()).toBe(0))
 
-    expect(screen.getByRole('radio', { name: 'block' })).toHaveProperty('checked', true)
+    expect(screen.getByRole('radio', { name: 'Check and block high-risk sends' })).toHaveProperty('checked', true)
     expect(await screen.findByText(new RegExp(`changed on the server \\(v ${newVersion}\\)`, 'i')))
       .toBeTruthy()
 
     // Reloading takes the server's version, discarding the local edit.
     fireEvent.click(screen.getByRole('button', { name: /reload/i }))
-    await waitFor(() => expect(screen.getByRole('radio', { name: 'observe' })).toHaveProperty('checked', true))
+    await waitFor(() => expect(screen.getByRole('radio', { name: 'Record only' })).toHaveProperty('checked', true))
     expect(screen.queryByText(/changed on the server/i)).toBeNull()
   })
 })

@@ -7,7 +7,7 @@ import { useState } from 'react'
 import { fetchVerify } from '@/api/shield'
 import { checkReceipt } from '@/lib/receipt'
 import type { ReceiptCheck } from '@/lib/receipt'
-import { FileEvidence, ReceiptButton, SectionHead, downloadBlob, plural, tierLabel, tierTagClass, useFeed } from './shared'
+import { Banner, FileEvidence, HashChip, ReceiptButton, SectionHead, downloadBlob, humanize, plural, tierLabel, tierTagClass, useFeed } from './shared'
 import type { Item } from './shared'
 
 export function Ledger({ onOpen }: { onOpen: (it: Item) => void }) {
@@ -32,13 +32,16 @@ export function Ledger({ onOpen }: { onOpen: (it: Item) => void }) {
         <div className="ledger-head">
           {v
             ? v.tamper_evident
-              ? <span className="tag ok">Intact</span>
-              : <span className="tag bad">Broken at entry {v.broken_at ?? '?'}: {v.reason ?? 'mismatch'}</span>
+              ? <span className="tag ok">Verified</span>
+              : <span className="tag bad" role="alert">Verification fails at entry {v.broken_at ?? 'unknown'}: {humanize(v.reason ?? 'entry does not match its seal')}</span>
             : <span className="tag unknown">Checking…</span>}
           {v?.tamper_evident && (
-            <span className="mono">
-              {plural(v.entries ?? 0, 'entry', 'entries')} · root {(v.merkle_root ?? '').slice(0, 12)}… · device{' '}
-              {v.checkpoint?.device_id ?? 'not signed yet'}
+            <span className="verdict-facts">
+              <span>{plural(v.entries ?? 0, 'sealed entry', 'sealed entries')}</span>
+              {v.merkle_root && <span>Root <HashChip value={v.merkle_root} noun="root hash" /></span>}
+              <span>Device {v.checkpoint?.device_id
+                ? <HashChip value={v.checkpoint.device_id} noun="device id" short={18} />
+                : 'not signed yet'}</span>
             </span>
           )}
           <span className="spacer" />
@@ -48,17 +51,23 @@ export function Ledger({ onOpen }: { onOpen: (it: Item) => void }) {
           {exportChain.isError && <span className="tag bad" role="alert">Export failed: {exportChain.error.message}</span>}
         </div>
         <p className="ledger-note">
-          Each entry was sealed when Shield checked it. A seal covers what
-          happened: the app, the verdict, the rules that matched, the message
-          length and its fingerprint. It doesn't cover the words. Entries are
-          folded into a Merkle tree and signed with this Mac's device key
-          (Ed25519, file mode 0600, never leaves the machine). Change an entry
-          later and its receipt stops checking out.
+          Each entry is sealed when Shield checks it. The seal covers the app,
+          the verdict, the rules matched, the message length and its
+          fingerprint, not the words. Entries are folded into a Merkle tree
+          signed with this Mac's device key. Edit an entry later and its
+          receipt fails verification.
         </p>
+        {feed.isError && (
+          <p className="empty-row" role="alert">
+            <b>Can't reach Shield on this Mac.</b>
+            Start it with <code className="mono">byoai-shield</code>, then reload this page.
+          </p>
+        )}
+        {feed.isPending && <p className="empty-row" role="status">Loading sealed entries…</p>}
         <div className="table-scroll">
           <table className="shield-table">
             <thead>
-              <tr><th>When</th><th>App</th><th>What happened</th><th>Result</th><th>Seal</th><th /></tr>
+              <tr><th>When</th><th>App</th><th>What happened</th><th>Result</th><th>Seal</th><th aria-label="Receipt" /></tr>
             </thead>
             <tbody>
               {sealed.map(it => (
@@ -67,7 +76,7 @@ export function Ledger({ onOpen }: { onOpen: (it: Item) => void }) {
                   <td>{it.surface.split(' ·')[0]}</td>
                   <td className="verb-cell">{it.verb}{it.file && <><br /><FileEvidence item={it} /></>}</td>
                   <td><span className={`tag ${tierTagClass(it.tier)}`}>{tierLabel(it)}</span></td>
-                  <td><span className="hash">{it.seal.slice(0, 16)}</span></td>
+                  <td><span className="hash" title={it.seal}>{it.seal.slice(0, 16)}</span></td>
                   <td onClick={e => e.stopPropagation()}><ReceiptButton seal={it.seal} /></td>
                 </tr>
               ))}
@@ -108,13 +117,31 @@ function ReceiptVerifier() {
         {busy ? 'Checking…' : 'Check receipt'}
       </button>
       {res && (
-        <div className={`banner ${res.ok ? 'info' : 'bad'} receipt-result`} role="status">
+        <Banner tone={res.ok ? 'ok' : 'bad'} role="status" className="receipt-result">
           {res.ok
             ? res.level === 'merkle'
-              ? <span><b>Receipt checks out.</b> The entry matches its seal and its proof leads to root {res.root?.slice(0, 12)}…. The device signature on that root is checked on the Mac that exported it{res.deviceId ? ` (${res.deviceId})` : ''}.</span>
+              ? (
+                <div>
+                  <span><b>Receipt checks out.</b> The entry matches its seal and its proof leads to the root below. The device signature on that root is checked on the Mac that exported it.</span>
+                  <p className="verdict-facts">
+                    {res.root && <span>Root <HashChip value={res.root} noun="root hash" /></span>}
+                    {res.deviceId && <span>Device <HashChip value={res.deviceId} noun="device id" short={18} /></span>}
+                  </p>
+                </div>
+              )
               : <span><b>The entry matches its seal.</b> This receipt has no Merkle proof, so it can't be tied to a root.</span>
-            : <span><b>Receipt does not check out.</b> {res.why}</span>}
-        </div>
+            : (
+              <div>
+                <span><b>Receipt fails verification.</b> {res.why}</span>
+                {res.computed && res.claimed && (
+                  <p className="verdict-facts">
+                    <span>Computed <HashChip value={res.computed} noun="computed hash" /></span>
+                    <span>Receipt says <HashChip value={res.claimed} noun="claimed hash" /></span>
+                  </p>
+                )}
+              </div>
+            )}
+        </Banner>
       )}
     </section>
   )

@@ -3,108 +3,86 @@
 <head>
   <meta charset="utf-8" />
   <title>Coriqo Shield</title>
+  <!-- One token file for every Shield surface: generated from
+       web/src/styles/tokens.css by scripts/gen_extension_tokens.py. No colour,
+       size or shadow below is a literal; each one names a token. -->
+  <link rel="stylesheet" href="shield-tokens.css" />
   <style>
-    /* Same Coriqo brand tokens as web/src/styles/tokens.css (the console and
-       the personal Shield UI): the extension popup is a third surface of the
-       same product and had drifted onto its own warm/teal palette. These are
-       aliases — same variable names the rules below already use — set to the
-       console's exact values, light and dark, so all three surfaces render
-       as one brand rather than three. The three-state trio (validated/
-       pending/off-scope) maps 1:1 onto this file's ok/wait/bad. */
-    :root {
-      color-scheme: light dark;
-      --bg: #f7f8fb; --panel: #eef1f7; --raised: #ffffff; --line: #d8dee9; --text: #0a1834; --muted: #4a5876;
-      --ok: #1f7a3f; --ok-bg: #eaf7f1; --bad: #a3382d; --bad-bg: #fbeeeb; --wait: #9a6a10; --wait-bg: #fdf3e3;
-      --btn: #3d7eff; --btn-text: #ffffff; --link: #3d7eff; --glow: rgba(61,126,255,.16);
-      --shadow: 0 4px 14px rgba(10,24,52,.06);
-    }
-    @media (prefers-color-scheme: dark) {
-      :root {
-        --bg: #0a1834; --panel: #0f1f42; --raised: #16294f; --line: #23386a; --text: #eef3fb; --muted: #aebfdd;
-        --ok: #4ad6a0; --ok-bg: rgba(74,214,160,.12); --bad: #e07066; --bad-bg: rgba(163,56,45,.16);
-        --wait: #e0b15a; --wait-bg: rgba(224,177,90,.12);
-        --btn: #6a9bff; --btn-text: #0a1834; --link: #6a9bff; --glow: rgba(106,155,255,.18);
-        --shadow: 0 4px 14px rgba(0,0,0,.4);
-      }
-    }
+    /* The popup is a fixed-width desktop surface: pointer targets are 32px
+       (the tokens raise them to 44px on touch screens and narrow windows). */
+    :root { --target-min: 32px; }
     * { box-sizing: border-box; }
     [hidden] { display: none !important; }
-    body { width: 344px; margin: 0; padding: 18px 18px 16px; background: var(--bg); color: var(--text);
-      font: 13px/1.5 ui-sans-serif, -apple-system, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
-      -webkit-font-smoothing: antialiased; }
-    .brand { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13px; letter-spacing: -.01em; }
-    .brand svg { flex: none; color: var(--ok); }
-    .brand .ver { margin-left: auto; font: 500 11px ui-monospace, "SF Mono", monospace; color: var(--muted); }
+    body { width: 344px; margin: 0; padding: var(--space-xl); background: var(--paper); color: var(--ink);
+      font: var(--text-sm)/1.5 var(--font-ui); -webkit-font-smoothing: antialiased; }
+    .brand { display: flex; align-items: center; gap: var(--space-sm); font-weight: var(--weight-semibold);
+      font-size: var(--text-sm); letter-spacing: -.02em; }
+    .brand svg { flex: none; width: var(--icon-nav); height: var(--icon-nav); color: var(--seal); }
+    .brand .ver { margin-left: auto; font: var(--weight-medium) var(--text-xs) var(--font-mono); color: var(--ink-soft); }
 
-    .status { position: relative; display: flex; gap: 12px; align-items: center; margin: 16px 0 10px; padding: 16px 14px;
-      border-radius: 14px; background: var(--raised); border: 1px solid var(--line); box-shadow: var(--shadow); overflow: hidden; }
-    .status::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 100%; pointer-events: none;
-      background: radial-gradient(120px 90px at 0 0, var(--glow), transparent 70%); }
-    .status .icon { position: relative; width: 34px; height: 34px; border-radius: 10px; flex: none; display: grid; place-items: center;
-      font-weight: 700; font-size: 16px; }
-    .status.ok .icon { background: var(--ok-bg); color: var(--ok); }
-    .status.bad .icon { background: var(--bad-bg); color: var(--bad); }
-    .status.bad { --glow: rgba(180,35,24,.10); }
-    .status.wait .icon { background: var(--wait-bg); color: var(--wait); }
-    .status.wait { --glow: rgba(138,97,0,.10); }
-    .status > div { position: relative; min-width: 0; }
-    .status h1 { margin: 0 0 1px; font-size: 16px; font-weight: 650; letter-spacing: -.02em; line-height: 1.25; }
-    .status p { margin: 0; color: var(--muted); font-size: 12px; text-wrap: pretty; font-variant-numeric: tabular-nums; }
+    .status { position: relative; display: flex; gap: var(--space-md); align-items: center; margin: var(--space-lg) 0 var(--space-sm);
+      padding: var(--space-lg); border-radius: var(--radius); background: var(--field); border: 1px solid var(--line);
+      box-shadow: var(--shadow-md); }
+    .status .icon { width: 40px; height: 40px; aspect-ratio: 1; border-radius: var(--radius-sm); flex: none; display: grid; place-items: center; }
+    .status .icon svg { width: var(--icon-nav); height: var(--icon-nav); display: block; overflow: visible; }
+    .status.ok .icon { background: var(--validated-bg); color: var(--validated); }
+    .status.bad .icon { background: var(--off-scope-bg); color: var(--off-scope); }
+    .status.wait .icon { background: var(--pending-bg); color: var(--pending); }
+    .status > div { min-width: 0; }
+    .status h1 { margin: 0 0 var(--space-xs); font-size: var(--text-md); font-weight: var(--weight-semibold); letter-spacing: -.015em; line-height: 1.25; }
+    .status p { margin: 0; color: var(--ink-soft); font-size: var(--text-xs); text-wrap: pretty; font-variant-numeric: tabular-nums; }
 
-    .tab { margin: 0 2px 14px; font-size: 12px; color: var(--muted); text-wrap: pretty; }
+    .tab { margin: 0 0 var(--space-md); font-size: var(--text-xs); color: var(--ink-soft); text-wrap: pretty; }
     .tab:empty { display: none; }
-    .tab b { color: var(--text); font-weight: 600; }
+    .tab b { color: var(--ink); font-weight: var(--weight-semibold); }
 
-    .primary { display: block; width: 100%; padding: 10px 12px; border: 0; border-radius: 10px; cursor: pointer;
-      background: var(--btn); color: var(--btn-text); font: inherit; font-weight: 600; text-align: center;
-      transition: transform .12s ease, opacity .15s ease; }
-    .primary:hover { opacity: .9; }
-    .primary:active { transform: scale(.98); }
-    .primary:focus-visible, button:focus-visible, a:focus-visible, summary:focus-visible, input:focus-visible {
-      outline: 2px solid var(--link); outline-offset: 2px; }
-    .help { margin: 8px 2px 0; font-size: 12px; color: var(--muted); text-wrap: pretty; }
-    .help code { font: 11px ui-monospace, "SF Mono", monospace; background: var(--panel); padding: 1px 5px; border-radius: 4px; user-select: all; }
-    a { color: var(--link); text-underline-offset: 2px; }
+    .primary { display: block; width: 100%; min-height: var(--target); padding: var(--space-sm) var(--space-md); border: 0; border-radius: var(--radius-sm); cursor: pointer;
+      background: var(--action); color: var(--on-action); font: inherit; font-weight: var(--weight-semibold); text-align: center;
+      transition: background var(--motion-fast) var(--ease); }
+    .primary:hover { background: var(--action-hover); }
+    :focus-visible { outline: 2px solid var(--azure); outline-offset: 2px; }
+    .help { margin: var(--space-sm) 0 0; font-size: var(--text-xs); color: var(--ink-soft); text-wrap: pretty; }
+    .help code { font: var(--text-xs) var(--font-mono); background: var(--paper-2); padding: 1px var(--space-xs); border-radius: var(--radius-sm); user-select: all; }
+    a { color: var(--azure-soft); text-underline-offset: 2px; }
 
-    .promise { margin: 16px 2px 0; padding-top: 14px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); text-wrap: pretty; }
-    .promise a { display: inline-block; margin-top: 2px; }
+    .promise { margin: var(--space-lg) 0 0; padding-top: var(--space-md); border-top: 1px solid var(--line); font-size: var(--text-xs); color: var(--ink-soft); text-wrap: pretty; }
+    .promise a { display: inline-block; margin-top: var(--space-xs); }
 
-    details { margin-top: 12px; font-size: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
-    summary { cursor: pointer; color: var(--text); font-weight: 550; padding: 9px 12px; list-style: none;
-      display: flex; align-items: center; justify-content: space-between; border-radius: 12px; }
+    details { margin-top: var(--space-md); font-size: var(--text-xs); border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper-2); }
+    summary { cursor: pointer; color: var(--ink); font-weight: var(--weight-medium); min-height: var(--target-min); padding: var(--space-sm) var(--space-md); list-style: none;
+      display: flex; align-items: center; justify-content: space-between; border-radius: var(--radius); }
     summary::-webkit-details-marker { display: none; }
-    summary::after { content: ""; width: 6px; height: 6px; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted);
-      transform: rotate(45deg) translateY(-2px); transition: transform .2s ease; }
+    summary::after { content: ""; width: 6px; height: 6px; border-right: 1.5px solid var(--ink-soft); border-bottom: 1.5px solid var(--ink-soft);
+      transform: rotate(45deg) translateY(-2px); transition: transform var(--motion-base) var(--ease); }
     details[open] summary::after { transform: rotate(-135deg); }
-    details .body { padding: 2px 12px 12px; }
-    details .body > label:first-child { margin-top: 4px; }
-    label { display: block; margin: 14px 0 5px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .01em; }
-    .row { display: flex; gap: 6px; }
-    input[type=text] { flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px;
-      background: var(--raised); color: var(--text); font: 12px ui-monospace, "SF Mono", monospace; }
-    button.small { padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--raised);
-      color: var(--text); font: inherit; font-size: 12px; font-weight: 500; cursor: pointer;
-      transition: background .15s ease, transform .12s ease; }
-    button.small:hover { background: var(--bg); }
-    button.small:active { transform: scale(.97); }
-    #trust, #accept { display: block; width: 100%; margin: 0 0 10px; padding: 8px 10px; text-align: left; }
-    .msg { min-height: 16px; margin: 6px 0 0; font-size: 12px; }
-    .msg.ok { color: var(--ok); } .msg.bad { color: var(--bad); }
-    .addr { flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px;
-      background: var(--raised); font: 12px ui-monospace, "SF Mono", monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .mono { font: 11px/1.45 ui-monospace, "SF Mono", monospace; word-break: break-all; margin: 0 0 6px; padding: 6px 8px;
-      border: 1px solid var(--line); border-radius: 8px; background: var(--raised); user-select: all; }
+    details .body { padding: var(--space-xs) var(--space-md) var(--space-md); }
+    details .body > .field-label:first-child { margin-top: var(--space-xs); }
+    .field-label { display: block; margin: var(--space-lg) 0 var(--space-xs); color: var(--ink-soft); font-size: var(--text-xs); font-weight: var(--weight-medium); }
+    .row { display: flex; gap: var(--space-sm); }
+    input[type=text] { flex: 1; min-width: 0; min-height: var(--target-min); padding: var(--space-xs) var(--space-sm); border: 1px solid var(--control); border-radius: var(--radius-sm);
+      background: var(--field); color: var(--ink); font: var(--text-xs) var(--font-mono); }
+    button.small { min-height: var(--target-min); padding: var(--space-xs) var(--space-md); border: 1px solid var(--control); border-radius: var(--radius-sm); background: var(--field);
+      color: var(--ink); font: inherit; font-size: var(--text-xs); font-weight: var(--weight-medium); cursor: pointer;
+      transition: border-color var(--motion-fast) var(--ease); }
+    button.small:hover { border-color: var(--azure); }
+    #trust, #accept { display: block; width: 100%; margin: 0 0 var(--space-sm); text-align: left; }
+    .msg { min-height: var(--space-lg); margin: var(--space-sm) 0 0; font-size: var(--text-xs); }
+    .msg.ok { color: var(--validated); } .msg.bad { color: var(--off-scope); }
+    .addr { flex: 1; min-width: 0; padding: var(--space-xs) var(--space-sm); border: 1px solid var(--line); border-radius: var(--radius-sm);
+      background: var(--field); font: var(--text-xs) var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; }
+    .mono { font: var(--text-xs)/1.45 var(--font-mono); word-break: break-all; margin: 0 0 var(--space-sm); padding: var(--space-sm);
+      border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--field); user-select: all; }
 </style>
 </head>
 <body>
   <div class="brand">
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.2 8-8 9-4.8-1-8-4.5-8-9V6l8-3z"/><path d="M9 12l2 2 4-4"/></svg>
+    <svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="11" fill="none" stroke="currentColor" stroke-width="3.6"/><circle cx="16" cy="16" r="4.6" fill="currentColor"/></svg>
     Coriqo Shield
     <span class="ver" id="version"></span>
   </div>
 
   <div class="status wait" id="status" role="status">
-    <span class="icon" id="icon" aria-hidden="true">…</span>
+    <span class="icon" id="icon" aria-hidden="true"></span>
     <div>
       <h1 id="state-title">Checking Shield</h1>
       <p id="state-detail"></p>
@@ -121,14 +99,14 @@
   <p class="help" id="help" hidden>Start it with <code>byoai-shield</code>. To have it start every time you log in, run <code>byoai-shield --install-login-item</code>.</p>
 
   <p class="promise">
-    Shield notes that you sent a message, to which app, when, and how long it was. It does not read what you wrote.
+    Shield records that you sent a message: which app, when, and how long. Your words are checked in the page. By default they are not stored or sent.
     <a id="open-privacy" href="#">Read exactly what is recorded</a>
   </p>
 
   <details>
     <summary>Details</summary>
     <div class="body">
-      <label>Shield address on this Mac</label>
+      <p class="field-label">Shield address on this Mac</p>
       <div class="row">
         <code class="addr" id="addr"></code>
         <button class="small" id="copy-addr">Copy</button>
@@ -143,18 +121,18 @@
         <p class="msg" id="msg"></p>
       </div>
 
-      <label>This install's id</label>
+      <p class="field-label">This install's id</p>
       <p class="mono" id="ext-id"></p>
       <button class="small" id="copy-id">Copy id</button>
       <p class="help">To accept records only from this install, start Shield with <code>BYOAI_SHIELD_EXTENSION_IDS=&lt;id&gt;</code>.</p>
 
       <div id="consent-box" hidden>
-        <label>Capture</label>
+        <p class="field-label">Capture</p>
         <button class="small" id="turn-off">Turn capture off</button>
         <p class="help">Stops recording and removes anything still waiting to be sent.</p>
       </div>
 
-      <label>Something wrong?</label>
+      <p class="field-label">Something wrong?</p>
       <button class="small" id="copy-diag">Copy details for a bug report</button>
       <p class="help">Copies the version, the state above and when each app was last noted. It never includes anything you wrote.</p>
       <button class="small" id="copy-page">Copy page check</button>

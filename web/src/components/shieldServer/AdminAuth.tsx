@@ -13,6 +13,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from 'react'
@@ -23,6 +24,7 @@ import {
   isAuthError,
   setStoredAdminToken,
 } from '@/api/shieldServer'
+import { useFocusTrap } from '@/components/shield/shared'
 
 interface AdminAuthValue {
   readonly token: string | null
@@ -92,65 +94,73 @@ export function useAuthWatch(query: UseQueryResult<unknown, Error>): void {
   }, [query.error, reportAuthError])
 }
 
+/** The admin-token prompt. A modal that cannot be dismissed (no token, no
+ * console), so focus is held inside it until a token is submitted. */
+function TokenPrompt({ onSubmit }: { onSubmit: (raw: string) => void }) {
+  const [draft, setDraft] = useState('')
+  const boxRef = useRef<HTMLDivElement>(null)
+  useFocusTrap(boxRef)
+  return (
+    <div className="dialog-backdrop">
+      <div
+        ref={boxRef}
+        className="dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="admin-token-h"
+        aria-describedby="admin-token-body"
+      >
+        <h2 id="admin-token-h">Admin token required</h2>
+        <div id="admin-token-body" className="dialog-body">
+          <p className="muted">
+            Paste the admin token this Shield server printed on first run (also written to{' '}
+            <span className="mono">BYOAI_SHIELD_SERVER_DATA/admin_token</span>). It is kept only
+            for this browser tab.
+          </p>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              onSubmit(draft)
+              setDraft('')
+            }}
+          >
+            <label htmlFor="shield-admin-token-input">
+              <span className="fkey">Admin token</span>
+            </label>
+            <input
+              id="shield-admin-token-input"
+              data-testid="admin-token-input"
+              type="password"
+              autoComplete="off"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+            />
+            <div className="dialog-actions">
+              <button className="btn primary" type="submit" disabled={!draft.trim()}>
+                Continue
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function AdminTokenGate({ children }: { children: ReactNode }) {
   const { token, promptOpen, submitToken, signOut } = useAdminAuth()
-  const [draft, setDraft] = useState('')
-
   return (
     <>
       {token !== null && (
-        <div className="row" style={{ justifyContent: 'flex-end', marginBottom: 'var(--s2)' }}>
-          <span className="muted" style={{ marginRight: 'var(--s2)' }}>Admin session active</span>
+        <div className="session-bar">
+          <span className="muted">Admin session active</span>
           <button className="btn ghost sm" type="button" onClick={signOut}>
             Sign out
           </button>
         </div>
       )}
       {children}
-      {promptOpen && (
-        <div className="dialog-backdrop">
-          <div
-            className="dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="admin-token-h"
-            aria-describedby="admin-token-body"
-          >
-            <h2 id="admin-token-h">Admin token required</h2>
-            <div id="admin-token-body" className="dialog-body">
-              <p className="muted">
-                Paste the admin token this Shield server printed on first run (also written to{' '}
-                <span className="mono">BYOAI_SHIELD_SERVER_DATA/admin_token</span>). It is kept only
-                for this browser tab.
-              </p>
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault()
-                  submitToken(draft)
-                  setDraft('')
-                }}
-              >
-                <label htmlFor="shield-admin-token-input">
-                  <span className="fkey">Admin token</span>
-                </label>
-                <input
-                  id="shield-admin-token-input"
-                  data-testid="admin-token-input"
-                  type="password"
-                  autoComplete="off"
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                />
-                <div className="dialog-actions">
-                  <button className="btn primary" type="submit" disabled={!draft.trim()}>
-                    Continue
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
-        </div>
-      )}
+      {promptOpen && <TokenPrompt onSubmit={submitToken} />}
     </>
   )
 }

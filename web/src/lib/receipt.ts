@@ -17,7 +17,8 @@
 
 export type ReceiptCheck =
   | { ok: true; level: 'merkle' | 'payload'; root?: string; deviceId?: string }
-  | { ok: false; why: string }
+  /** `computed` and `claimed` are the two values that disagree, shown as facts, never in the sentence. */
+  | { ok: false; why: string; computed?: string; claimed?: string }
 
 /** Sorted keys, compact separators: byte-equal to the recorder's canonical
  * form for the strings, numbers, booleans and nulls a seal payload holds. */
@@ -78,13 +79,15 @@ export async function checkReceipt(text: string): Promise<ReceiptCheck> {
     }
   }
   if (r?.kind !== 'byoai.receipt.v2') {
-    return { ok: false, why: 'This is not a Shield receipt (expected kind byoai.receipt.v2).' }
+    return { ok: false, why: 'This is not a Shield receipt (version 2). Paste a receipt exactly as it was downloaded.' }
   }
   const leaf = await sha256(LEAF, new TextEncoder().encode(canonical(r.payload)))
   if (leaf.slice(0, 16) !== r.seal) {
     return {
       ok: false,
-      why: `The entry doesn't match its seal: it hashes to ${leaf.slice(0, 16)}, the receipt says ${r.seal}. The receipt was changed after export.`,
+      why: "The entry doesn't match its seal. The receipt was changed after export.",
+      computed: leaf.slice(0, 16),
+      claimed: r.seal,
     }
   }
   const proof = r.merkle?.proof
@@ -100,7 +103,9 @@ export async function checkReceipt(text: string): Promise<ReceiptCheck> {
   if (node !== proof.root_hex) {
     return {
       ok: false,
-      why: `The proof leads to root ${node.slice(0, 12)}…, but the receipt claims ${proof.root_hex.slice(0, 12)}…. The receipt was changed after export.`,
+      why: 'The proof does not lead to the root the receipt claims. The receipt was changed after export.',
+      computed: node,
+      claimed: proof.root_hex,
     }
   }
   const cp = r.merkle?.checkpoint

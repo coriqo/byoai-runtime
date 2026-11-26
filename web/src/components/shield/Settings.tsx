@@ -10,7 +10,7 @@ import {
   publishSeal, savePolicy, scrubStoredText,
 } from '@/api/shield'
 import type { ShieldAction, ShieldFileAction, ShieldPolicy, ShieldSharing } from '@/api/shield'
-import { APP_NAME, ConfirmDialog, SectionHead, plural } from './shared'
+import { APP_NAME, Banner, ConfirmDialog, Icon, SectionHead, plural } from './shared'
 
 const MODES = [
   ['redact', 'Check and act', 'Each kind of hit gets the action set below. By default a secret stops the send and personal details become placeholders such as [EMAIL_1].', true],
@@ -26,7 +26,7 @@ const TIERS = [
   ['flag', 'Signals', 'Words like "deploy" or "password", executable file names. Recorded only by default.'],
 ] as const
 const ACTION_LABEL: Record<ShieldAction, string> = {
-  block: 'Stop the send', warn: 'Ask first', redact: 'Replace', log: 'Record only',
+  block: 'Block the send', warn: 'Ask first', redact: 'Redact', log: 'Record only',
 }
 const STRICT: ShieldAction[] = ['log', 'redact', 'warn', 'block']
 const FILE_LABEL: Record<ShieldFileAction, string> = {
@@ -74,7 +74,14 @@ export function Settings() {
     save.mutate(next)
   }
   if (policy.isPending) return <p className="empty-row" role="status">Loading settings…</p>
-  if (policy.isError) return <p className="empty-row" role="alert">Can't reach Shield on this Mac.</p>
+  if (policy.isError) {
+    return (
+      <p className="empty-row" role="alert">
+        <b>Can't reach Shield on this Mac.</b>
+        Start it with <code className="mono">byoai-shield</code>, then reload this page.
+      </p>
+    )
+  }
   const p = policy.data
   const inputOnly = new Set(p.input_only_apps ?? [])
   const covered = new Set([...(p.covered_apps ?? Object.keys(p.apps)), ...inputOnly])
@@ -84,22 +91,22 @@ export function Settings() {
     <div className="shield-split">
       <div className="shield-main">
         {(p.managed?.by || locked.size > 0) && (
-          <div className="banner info" role="status">
+          <Banner tone="info" role="status">
             <span>Managed by {p.managed?.by || 'your administrator'}. Locked settings can only be changed there.</span>
-          </div>
+          </Banner>
         )}
         {p.sharing && (
-          <div className={`banner ${p.sharing.level === 'seal' ? 'info' : 'warn'}`} role="status" data-testid="sharing-banner">
+          <Banner tone={p.sharing.level === 'seal' ? 'info' : 'warn'} role="status" testId="sharing-banner">
             <span>
               {p.sharing.words}
               {sharingSince(p.sharing.since)}
             </span>
-          </div>
+          </Banner>
         )}
         {p.managed?.error && (
-          <div className="banner warn" role="status">
+          <Banner tone="warn" role="status">
             <span>Managed policy: {p.managed.error}</span>
-          </div>
+          </Banner>
         )}
 
         <section className="settings-block" aria-labelledby="mode-h">
@@ -135,10 +142,11 @@ export function Settings() {
             )
           })}
           <p className="muted setting-help">
-            In Chrome, the Shield extension (0.8 or later) does this on claude.ai and chatgpt.com before the
-            message leaves the page; "Ask first" shows a bar with Send redacted, Send anyway and Cancel. The desktop
-            proxy can't show that bar, so there "Ask first" replaces. On gemini.google.com and copilot.microsoft.com
-            messages go out unchanged and are only recorded. Uploaded files are set under Files you upload.
+            In Chrome, the Shield extension applies this before a message leaves claude.ai and chatgpt.com;
+            "Ask first" shows a bar with Send redacted, Send anyway and Cancel. On Gemini and Copilot it checks
+            the message box when you press Enter or Send and replaces details there: best effort, not yet
+            confirmed on every page. The desktop proxy can't show the bar, so there "Ask first" replaces.
+            Uploaded files are set under Files you upload.
           </p>
         </section>
 
@@ -376,7 +384,7 @@ function CoriqoLink() {
 
   return (
     <section className="settings-block coriqo" aria-labelledby="coriqo-h">
-      <SectionHead id="coriqo-h" title="Coriqo" help="Optional. Sends this Mac's seal to your Coriqo tenant so it sits with the rest of your AI evidence." />
+      <SectionHead id="coriqo-h" title="Coriqo" help="Optional. Sends this Mac's seal (its root, entry count and signature; no messages, no rule matches) to your Coriqo tenant, so it sits with the rest of your AI evidence." />
 
       {info.isPending && <p className="muted setting-help" role="status">Checking the connection…</p>}
 
@@ -402,9 +410,9 @@ function CoriqoLink() {
       )}
 
       {ci?.last_error && (
-        <div className={`banner ${ci.needs_attention ? 'bad' : 'warn'}`} role={ci.needs_attention ? 'alert' : 'status'}>
+        <Banner tone={ci.needs_attention ? 'bad' : 'warn'} role={ci.needs_attention ? 'alert' : 'status'}>
           <span>{ci.last_error}</span>
-        </div>
+        </Banner>
       )}
 
       {ci?.connected && !showForm && (
@@ -413,8 +421,8 @@ function CoriqoLink() {
             onClick={() => send.mutate()}>
             {send.isPending ? 'Sending…' : 'Send now'}
           </button>
-          <button className="btn ghost" onClick={() => window.open(ci.base_url ?? '', '_blank', 'noopener')}>
-            Open Coriqo →
+          <button className="btn ghost icon" onClick={() => window.open(ci.base_url ?? '', '_blank', 'noopener')}>
+            Open Coriqo<Icon name="external" size={16} />
           </button>
           <button className="btn ghost sm" onClick={() => setReconnect(true)}>Connect again</button>
         </div>
@@ -450,9 +458,6 @@ function CoriqoLink() {
         </>
       )}
 
-      <p className="muted setting-help">
-        What leaves this Mac: the seal's root, its entry count and the signature. No messages and no rule matches.
-      </p>
     </section>
   )
 }

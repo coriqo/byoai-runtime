@@ -4,6 +4,7 @@
  * lock checkboxes, same client-side validation mirroring the server rules
  * (`shield.apply_policy_update`).
  */
+import { APP_NAME, Banner } from '@/components/shield/shared'
 import {
   LOCKABLE_KEYS,
   RETENTION_DAYS,
@@ -22,6 +23,13 @@ const KEY_LABEL: Record<LockableKey, string> = {
 }
 
 const KNOWN_APPS = ['claude', 'chatgpt', 'gemini', 'copilot'] as const
+
+/** What each stored mode is called on screen: the words the Shield window uses. */
+const MODE_LABEL = {
+  observe: 'Record only',
+  redact: 'Check and act',
+  block: 'Check and block high-risk sends',
+} as const
 
 export interface PolicyFormValue {
   readonly policy: ShieldServerPolicyDoc
@@ -78,7 +86,7 @@ export function PolicyForm({
               disabled={disabled.has('mode')}
               onChange={() => set({ mode: m })}
             />
-            {m}
+            {MODE_LABEL[m]}
           </label>
         ))}
         <LockBox k="mode" locks={locks} onToggle={toggleLock} />
@@ -88,7 +96,7 @@ export function PolicyForm({
         <legend>Apps</legend>
         {KNOWN_APPS.map((app) => (
           <label key={app} className="row-app">
-            <span>{app}</span>
+            <span>{APP_NAME[app] ?? app}</span>
             <input
               type="checkbox"
               checked={Boolean(apps[app])}
@@ -148,11 +156,13 @@ export function PolicyForm({
       </fieldset>
 
       {errors.length > 0 && (
-        <ul className="banner warn" role="alert">
-          {errors.map((e) => (
-            <li key={e.field}>{e.message}</li>
-          ))}
-        </ul>
+        <Banner tone="warn" role="alert">
+          <ul className="error-list">
+            {errors.map((e) => (
+              <li key={e.field}>{e.message}</li>
+            ))}
+          </ul>
+        </Banner>
       )}
     </div>
   )
@@ -170,7 +180,7 @@ function LockBox({
   return (
     <label className="muted setting-help lock-row">
       <input type="checkbox" checked={locks.has(k)} onChange={() => onToggle(k)} />
-      {' '}Lock {KEY_LABEL[k]} for devices
+      {' '}Lock {KEY_LABEL[k].toLowerCase()} for devices
     </label>
   )
 }

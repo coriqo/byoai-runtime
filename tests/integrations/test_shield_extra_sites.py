@@ -47,7 +47,7 @@ def test_manifest_list_validator_script_and_generator_agree():
     hosts = curated_hosts()
     assert manifest["optional_host_permissions"] == [f"https://{h}/*" for h in hosts]
     assert "scripting" in manifest["permissions"]
-    assert manifest["version"] == "0.10.8"
+    assert manifest["version"] == "0.10.9"
     # Chrome Web Store limit for the summary the store shows.
     assert len(manifest["description"]) <= 132, len(manifest["description"])
     # Only extension pages open PRIVACY.md, and they need no exposure to a website.

@@ -4,51 +4,51 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Coriqo Shield: before it starts</title>
+  <link rel="stylesheet" href="shield-tokens.css">
   <style>
-    /* Same Coriqo brand tokens as web/src/styles/tokens.css and popup.html —
-       one product, one palette across the console, the popup and this page. */
-    :root {
-      color-scheme: light dark;
-      --bg: #f7f8fb; --panel: #eef1f7; --line: #d8dee9; --text: #0a1834; --muted: #4a5876;
-      --ok: #1f7a3f; --btn: #3d7eff; --btn-text: #ffffff; --link: #3d7eff;
-    }
-    @media (prefers-color-scheme: dark) {
-      :root {
-        --bg: #0a1834; --panel: #0f1f42; --line: #23386a; --text: #eef3fb; --muted: #aebfdd;
-        --ok: #4ad6a0; --btn: #6a9bff; --btn-text: #0a1834; --link: #6a9bff;
-      }
-    }
+    /* Every colour, size, radius and shadow names a token from shield-tokens.css
+       (generated from web/src/styles/tokens.css). */
     * { box-sizing: border-box; }
     [hidden] { display: none !important; }
-    body { margin: 0; padding: 28px 16px 0; background: var(--bg); color: var(--text);
-      font: 15px/1.6 -apple-system, "Segoe UI", system-ui, sans-serif; }
+    body { margin: 0; padding: var(--space-xxl) var(--space-xl) 0; background: var(--paper); color: var(--ink);
+      font: var(--text-base)/1.6 var(--font-ui); -webkit-font-smoothing: antialiased; }
     main { max-width: 620px; margin: 0 auto; }
-    h1 { font-size: 22px; line-height: 1.25; margin: 0 0 6px; }
-    .lead { color: var(--muted); margin: 0 0 18px; }
-    section { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
-      padding: 12px 16px; margin: 0 0 10px; }
-    h2 { font-size: 13px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin: 0 0 6px; }
+    .brand { display: flex; align-items: center; gap: var(--space-sm); margin: 0 0 var(--space-lg);
+      font-weight: var(--weight-semibold); font-size: var(--text-md); letter-spacing: -.02em; }
+    .brand svg { flex: none; width: var(--icon-nav); height: var(--icon-nav); color: var(--seal); }
+    h1 { font-family: var(--font-display); font-weight: 500; font-size: var(--text-title); letter-spacing: -.015em; line-height: 1.25; margin: 0 0 var(--space-sm); }
+    .lead { color: var(--ink-soft); margin: 0 0 var(--space-lg); }
+    section { background: var(--field); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow-sm);
+      padding: var(--space-md) var(--space-xl); margin: 0 0 var(--space-md); }
+    h2 { font-size: var(--text-md); font-weight: var(--weight-semibold); letter-spacing: -.01em; color: var(--ink); margin: 0 0 var(--space-xs); }
     p { margin: 0; }
-    ul { margin: 4px 0 0; padding-left: 20px; }
-    li { margin: 2px 0; }
-    code { font: 13px ui-monospace, "SF Mono", Menlo, monospace; background: var(--bg);
-      border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; }
+    p + p { margin-top: var(--space-sm); }
+    ul { margin: var(--space-xs) 0 0; padding-left: var(--space-xl); }
+    li { margin: var(--space-xs) 0; }
+    code { font: var(--text-sm) var(--font-mono); background: var(--paper-2);
+      border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 1px var(--space-xs); }
     /* The choice stays on screen however tall the text is or short the window. */
-    .actions { position: sticky; bottom: 0; display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
-      margin: 16px -16px 0; padding: 14px 16px; background: var(--bg); border-top: 1px solid var(--line); }
+    .actions { position: sticky; bottom: 0; display: flex; gap: var(--space-md); flex-wrap: wrap; align-items: center;
+      margin: var(--space-lg) calc(var(--space-xl) * -1) 0; padding: var(--space-lg) var(--space-xl); background: var(--paper); border-top: 1px solid var(--line); }
     .fine { margin: 0; }
-    button { font: inherit; font-weight: 600; border-radius: 10px; padding: 11px 18px; cursor: pointer;
-      border: 1px solid var(--line); background: var(--panel); color: var(--text); }
-    button.primary { background: var(--btn); color: var(--btn-text); border-color: var(--btn); }
-    button:focus-visible, a:focus-visible { outline: 3px solid var(--link); outline-offset: 2px; }
-    a { color: var(--link); }
-    .fine { color: var(--muted); font-size: 13px; flex: 1 1 260px; }
-    .done { border-color: var(--ok); }
-    .done h2 { color: var(--ok); }
+    button { font: inherit; font-weight: var(--weight-semibold); border-radius: var(--radius-sm); min-height: var(--target-min); padding: var(--space-sm) var(--space-xl); cursor: pointer;
+      border: 1px solid var(--control); background: var(--field); color: var(--ink); }
+    button:hover { border-color: var(--azure); }
+    button.primary { background: var(--action); color: var(--on-action); border-color: var(--action); }
+    button.primary:hover { background: var(--action-hover); border-color: var(--action-hover); }
+    :focus-visible { outline: 3px solid var(--azure); outline-offset: 2px; }
+    a { color: var(--azure-soft); }
+    .fine { color: var(--ink-soft); font-size: var(--text-sm); flex: 1 1 260px; }
+    .done { border-color: var(--validated); }
+    .done h2 { color: var(--validated); }
   </style>
 </head>
 <body>
 <main>
+  <div class="brand">
+    <svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="11" fill="none" stroke="currentColor" stroke-width="3.6"/><circle cx="16" cy="16" r="4.6" fill="currentColor"/></svg>
+    Coriqo Shield
+  </div>
   <h1>Shield checks your AI messages for secrets and personal details, and notes that you sent one.</h1>
   <p class="lead">Please read this before turning it on. Nothing is recorded until you agree.</p>
 
@@ -67,9 +67,9 @@
         <li>how many characters it was,</li>
         <li>which tools the AI ran for its reply, such as web search, by name, and how many sites a search returned.</li>
       </ul>
-      <p style="margin-top:8px">It also records which of Shield's rules a message matched (for example
+      <p>It also records which of Shield's rules a message matched (for example
         "email address"), by name, never the matching text. That is all. The message text is read in the page
-        and thrown away. It is never stored and never sent to Shield or anywhere else.</p>
+        and thrown away. By default it is not stored and not sent to Shield or anywhere else. If you turn on keeping a redacted preview in Shield's Settings, the first 200 characters stay on this computer.</p>
     </section>
     <section>
       <h2>What it changes</h2>
@@ -78,7 +78,7 @@
         <code>[redacted-email]</code>, so the AI never receives them. If your Shield is set to stop high-risk
         messages, a message carrying a password or an executable file name is not sent at all and the chat
         shows an error.</p>
-      <p style="margin-top:8px">Your Shield's settings decide this: "Record only" leaves messages
+      <p>Your Shield's settings decide this: "Record only" leaves messages
         unchanged. On gemini.google.com and Microsoft Copilot (copilot.microsoft.com, copilot.com, copilot.cloud.microsoft and m365.cloud.microsoft/chat) the extension cannot rewrite what the page sends, so it checks the message box when you press Enter, click send or submit the form, and replaces the details there. This is best effort and not yet confirmed on every page. If it cannot tell which box is the message box, the extension popup says so, and the message is not checked.</p>
     </section>
     <section>

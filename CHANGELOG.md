@@ -28,6 +28,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run id, so a retried open or close is safe.
 
 ### Changed
+- Shield's screens now follow one design standard, and the extension is 0.10.9
+  because its popup and welcome page changed. One tokens file
+  (`web/src/styles/tokens.css`) holds every colour, size, radius, shadow and
+  icon size for the Shield window, the Shield server console and, through a
+  generated copy (`shield-tokens.css`, written by
+  `scripts/gen_extension_tokens.py`), the popup and welcome page. Filled
+  buttons use the seal's navy instead of the azure; the reticle seal and the
+  sans wordmark replace the old square and the old shield-and-tick drawing;
+  labels are sentence case in the system face; controls are 44 px below 960 px
+  and show one focus ring; dark mode follows the system setting on every
+  surface. The toolbar icons are now the seal on the navy tile, drawn from the
+  same seal definition by `scripts/gen_extension_icons.py` (needs Pillow; run
+  it with `--check` to see whether they are current). Hashes and ids no longer sit inside sentences (a short form with a
+  copy button instead), "No exception", "Flagged" and "Blocked" replace "Clean",
+  "Caught" and "Stopped", and the server policy form shows the setting names
+  the Shield window uses. The popup's privacy line now says your words are
+  checked in the page and, by default, not stored or sent (a redacted preview stays on the computer only if Shield's keep-text setting is on), matching the welcome page, and
+  Settings says that Gemini and Copilot messages are checked in the message box
+  (best effort) instead of "unchanged". No behaviour, API field or stored value
+  changed. `web/src/styles/shieldStandards.test.ts` fails on a colour literal,
+  a font size off the scale, uppercase labels, an icon off the 12/16/20/24/32/48
+  scale, a control under the target size, an azure button fill, a second brand
+  mark, a title in title case, and any token pair under WCAG AA in light or dark;
+  `web/tests/ui/liveStandards.mjs` drives every screen at 1440, 768 and 390 px
+  in both themes.
 - Browser extension 0.10.8 (Chrome Web Store readiness): the store summary
   (`manifest.json` description) is now 111 characters, under the store's 132
   limit, and says only what the code does. The popup no longer offers "Sign in
