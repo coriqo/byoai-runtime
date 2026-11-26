@@ -486,3 +486,23 @@ def test_repeats_across_two_streamed_turns_halt_the_run():
         reasons.append(enf.decisions[-1].verdict.reason)
 
     assert reasons == [Reason.OUT_OF_SCOPE, Reason.REPEAT_DENIED, Reason.RUN_HALTED]
+
+
+def test_tool_use_arguments_reach_the_gate_for_approval():
+    """RP-6: the proxy passes the block's input to the gate as the call's
+    arguments, so an approval request can carry them under payload mode full."""
+    seen = []
+
+    class Recording(MandateGate):
+        def decide(self, action):
+            seen.append(action)
+            return super().decide(action)
+
+    async def never_called(_etag):  # pragma: no cover
+        raise AssertionError("the decide path must not refresh")
+
+    gate = Recording(never_called, agent_id=_AGENT)
+    gate.apply_snapshot(snapshot_payload())
+    enforce_response_body(tool_use_body("search"), enforcer(gate))
+
+    assert seen and seen[0].arguments == {"q": "rates"}

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Held calls send their arguments with the approval request, in payload mode
+  `full` only.** Coriqo keeps the amount they state and a SHA-256 fingerprint;
+  the approved call's ledger entry carries `approval_id` and `amount_usd`,
+  never the arguments, so Coriqo can check the action stayed within the
+  approved amount. `BYOAI_APPROVAL_SEND_ARGS=0` opts out under `full`.
+
 - **Agent-signed token actions.** `AsyncCoriqoAgentsClient.request_token_action()`
   posts an agent's token action to Coriqo's
   `POST /api/v1/token-ops/actions/agent-signed`, signed with the device tuple
@@ -90,6 +96,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not latch it.
 
 ### Changed
+- **Default behaviour of approval arguments.** In `redacted` (the default) and
+  `hash-only` payload modes no arguments and no `amount_usd` leave the host, so
+  an approval cannot sign off an above-limit action in Coriqo. Set
+  `BYOAI_RECORDER_PAYLOAD_MODE=full` to enable that.
 - **Behaviour change: in the default `redact` mode a detected secret now stops
   the send (`403`) instead of being replaced.** Shield's policy has a new
   `actions` map (`secret`, `pii`, `flag`, each `block`, `warn`, `redact` or

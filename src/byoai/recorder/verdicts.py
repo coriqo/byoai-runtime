@@ -267,7 +267,10 @@ def _approval_fields(verdict: Verdict, arguments: Any) -> dict[str, Any]:
     never written here: this ledger is append-only and cannot be redacted, so
     they go only on the approval request, where Coriqo keeps just the amount
     and a hash. With ``BYOAI_APPROVAL_SEND_ARGS=0`` no amount is recorded
-    either, so no argument value leaves the process. Keys are added only for
+    either, so no argument value leaves the process. The same holds in every
+    payload mode but ``full`` (``approval_args`` returns nothing there), so
+    ``redacted`` and ``hash-only`` ledgers never hold ``amount_usd``. Keys
+    are added only for
     an approved call, so every other record keeps the payload it had before."""
     out: dict[str, Any] = {
         "approval_id": approval_request_id(

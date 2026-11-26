@@ -386,7 +386,9 @@ that decisions stay local.
   (`--environment` or `BYOAI_MANDATE_ENVIRONMENT`) and the mandate's age. With
   `--coriqo-agent-id`, also approval-required tools, the call-rate limit and
   the agent's suspension.
-- Approval requests send the held call's arguments to Coriqo, which stores
+- Under `BYOAI_RECORDER_PAYLOAD_MODE=full` only (the default `redacted` and
+  `hash-only` send none, so approvals cannot sign off an above-limit action
+  in Coriqo), approval requests send the held call's arguments to Coriqo, which stores
   only the amount they state and their SHA-256 fingerprint. The approved
   call's ledger entry carries `approval_id` and `amount_usd`, never the
   arguments, so Coriqo can check the action stayed within the approved

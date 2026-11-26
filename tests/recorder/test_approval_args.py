@@ -53,6 +53,8 @@ def over_the_wire(obj):
 @pytest.fixture(autouse=True)
 def _default_flag(monkeypatch):
     monkeypatch.delenv("BYOAI_APPROVAL_SEND_ARGS", raising=False)
+    # Raw args leave the host only under `full`; the default is `redacted`.
+    monkeypatch.setenv("BYOAI_RECORDER_PAYLOAD_MODE", "full")
 
 
 @pytest.mark.parametrize("args, expected", [(ARGS, ARGS_SHA256), (ASSET_ARGS, ASSET_ARGS_SHA256)])
@@ -72,7 +74,7 @@ class FakeClient:
         return {}
 
 
-def _held_report(monkeypatch, flag: str | None) -> dict:
+def _held_report(monkeypatch, flag: str | None, arguments=ARGS) -> dict:
     if flag is not None:
         monkeypatch.setenv("BYOAI_APPROVAL_SEND_ARGS", flag)
     client = FakeClient()
@@ -80,7 +82,7 @@ def _held_report(monkeypatch, flag: str | None) -> dict:
     async def run() -> None:
         gate = mandate_gate("agent-rp6", client=client, clock=FakeClock())
         gate.apply_snapshot(snapshot_payload(approval_required_tools=["wire"]))
-        action = ProposedAction(tool="wire", trajectory_id="t1", step_index=3, arguments=ARGS)
+        action = ProposedAction(tool="wire", trajectory_id="t1", step_index=3, arguments=arguments)
         verdict = gate.decide(action)
         assert isinstance(verdict, RequireApproval)
         gate.report_approval_request(verdict)
@@ -157,3 +159,31 @@ def test_other_verdicts_unchanged():
     verdict = Allow(reason=Reason.IN_SCOPE, tool="search")
     payload = ledger_payload(verdict, agent_id="a", arguments=ARGS)
     assert not {"approval_id", "amount_usd", "args"} & payload.keys()
+
+
+@pytest.mark.parametrize("mode", ["redacted", "hash-only", "bogus", ""])
+def test_no_args_on_the_wire_outside_full(monkeypatch, mode):
+    monkeypatch.setenv("BYOAI_RECORDER_PAYLOAD_MODE", mode)
+    assert _held_report(monkeypatch, None)["args"] is None
+
+
+def test_unset_mode_defaults_to_redacted_and_sends_none(monkeypatch):
+    monkeypatch.delenv("BYOAI_RECORDER_PAYLOAD_MODE")
+    assert _held_report(monkeypatch, None)["args"] is None
+
+
+def test_full_mode_sends_args_and_flag_still_opts_out(monkeypatch):
+    assert _held_report(monkeypatch, None)["args"] is not None
+    assert _held_report(monkeypatch, "0")["args"] is None
+
+
+@pytest.mark.parametrize("mode", ["redacted", "hash-only"])
+def test_no_amount_in_ledger_outside_full(monkeypatch, mode):
+    monkeypatch.setenv("BYOAI_RECORDER_PAYLOAD_MODE", mode)
+    payload = _approved_payload(ARGS)
+    assert "amount_usd" not in payload and "args" not in payload
+    assert payload["approval_id"] == approval_request_id("wire", "t1", 3, ARGS)
+
+
+def test_full_mode_records_amount(monkeypatch):
+    assert _approved_payload(ARGS)["amount_usd"] == 1250
