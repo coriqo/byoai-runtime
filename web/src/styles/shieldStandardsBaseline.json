@@ -1,0 +1,9 @@
+{
+  "_comment": "Counts that may go down and never up. Each has the reason it is not zero.",
+  "counts": {
+    "components.css bare spacing": 3
+  },
+  "reasons": {
+    "components.css bare spacing": "Three rem offsets in the console's fleet screens (.payload and its twin indent by the 5.7rem timestamp column, a row pads 4.5rem for its button). They are column widths, not spacing rhythm; they go when those screens are rebuilt on a grid."
+  }
+}

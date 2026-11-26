@@ -28,6 +28,7 @@ import {
 import { Crumbs, type Crumb } from '../components/Crumbs'
 import { HealthDots } from '../components/HealthDots'
 import { ScopeChip } from '../components/ScopeChip'
+import { SealMark } from '../components/shield/shared'
 import {
   PublishShellStatusContext,
   ShellStatusContext,
@@ -226,7 +227,10 @@ function Shell() {
         <ScopeQSProvider value={scopeQS}>
         <div className="app">
           <nav className="rail" aria-label="Sections">
-            <span className="wordmark">Coriqo</span>
+            <span className="brand-lockup">
+              <SealMark size={24} />
+              <span className="wordmark">Coriqo</span>
+            </span>
             {SECTIONS.map((s) => (
               <RailItem
                 scopeQS={scopeQS}

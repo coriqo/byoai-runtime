@@ -13,25 +13,7 @@ import {
   type ShieldServerTokenMinted,
 } from '@/api/shieldServer'
 import { useAuthWatch } from './AdminAuth'
-import { ConfirmDialog, SectionHead } from '@/components/shield/shared'
-
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false)
-  return (
-    <button
-      className="btn ghost sm"
-      type="button"
-      onClick={() => {
-        void navigator.clipboard?.writeText(text).then(() => {
-          setCopied(true)
-          window.setTimeout(() => setCopied(false), 2000)
-        })
-      }}
-    >
-      {copied ? 'Copied' : 'Copy'}
-    </button>
-  )
-}
+import { Banner, ConfirmDialog, CopyButton, SectionHead } from '@/components/shield/shared'
 
 export function EnrolPanel() {
   const qc = useQueryClient()
@@ -115,20 +97,20 @@ export function EnrolPanel() {
       {mint.isError && <p role="alert">Not minted: {mint.error.message}</p>}
 
       {minted && (
-        <div className="banner ok" role="status" data-testid="minted-token">
+        <Banner tone="ok" role="status" testId="minted-token">
           <div>
-            <b>Token minted — shown once, not stored anywhere else.</b>
-            <p className="mono" style={{ wordBreak: 'break-all' }}>{minted.token}</p>
+            <b>Token minted. It is shown once and not stored anywhere else.</b>
+            <p className="mono minted-token">{minted.token}</p>
             <p className="muted setting-help">
               On the Mac, open Shield's settings and paste the server address and this token:
             </p>
             <p className="mono">{publicUrl ?? 'http://127.0.0.1:17840'}</p>
           </div>
-          <div className="row" style={{ gap: 'var(--s2)' }}>
-            <CopyButton text={minted.token} />
-            <CopyButton text={publicUrl ?? 'http://127.0.0.1:17840'} />
+          <div className="button-row">
+            <CopyButton text={minted.token} label="Copy token" />
+            <CopyButton text={publicUrl ?? 'http://127.0.0.1:17840'} label="Copy address" />
           </div>
-        </div>
+        </Banner>
       )}
 
       <section className="settings-block" aria-labelledby="shield-tokens-h">
@@ -139,12 +121,13 @@ export function EnrolPanel() {
         />
         {tokensQuery.isPending && <p className="empty-row" role="status">Loading tokens…</p>}
         {tokensQuery.isError && (
-          <p className="empty-row" role="alert">Couldn't load tokens: {tokensQuery.error.message}</p>
+          <p className="empty-row" role="alert">Couldn't load tokens: {tokensQuery.error.message}. Check that the Shield server is running, then reload.</p>
         )}
         {tokensQuery.data && (
           tokensQuery.data.tokens.length === 0 ? (
-            <p className="muted">No tokens yet.</p>
+            <p className="muted">No tokens yet. Mint one above to enrol a Mac.</p>
           ) : (
+            <div className="table-scroll">
             <table className="table">
               <thead>
                 <tr>
@@ -160,8 +143,8 @@ export function EnrolPanel() {
                   <tr key={t.token_id}>
                     <td>{t.label}</td>
                     <td>{t.created_at.slice(0, 10)}</td>
-                    <td>{t.expires_at ? t.expires_at.slice(0, 10) : 'never'}</td>
-                    <td>{t.revoked ? <span className="tag bad">revoked</span> : <span className="tag ok">active</span>}</td>
+                    <td>{t.expires_at ? t.expires_at.slice(0, 10) : 'Never'}</td>
+                    <td>{t.revoked ? <span className="tag bad">Revoked</span> : <span className="tag ok">Active</span>}</td>
                     <td>
                       {!t.revoked && (
                         <button className="btn ghost sm" type="button" onClick={() => setConfirming(t)}>
@@ -173,6 +156,7 @@ export function EnrolPanel() {
                 ))}
               </tbody>
             </table>
+            </div>
           )
         )}
       </section>

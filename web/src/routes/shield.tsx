@@ -15,7 +15,7 @@ import { Settings } from '@/components/shield/Settings'
 import { Sheet } from '@/components/shield/Sheet'
 import { Timeline } from '@/components/shield/Timeline'
 import { Trust } from '@/components/shield/Trust'
-import { NoticeStrip } from '@/components/shield/shared'
+import { HashChip, NoticeStrip, SealMark } from '@/components/shield/shared'
 import type { Item } from '@/components/shield/shared'
 
 const TABS = ['trust', 'ledger', 'timeline', 'settings'] as const
@@ -58,26 +58,34 @@ function ShieldPage() {
   }, [go])
   const closeSheet = useCallback(() => setSheet(null), [])
 
-  const sealState = verify.data ? (verify.data.tamper_evident ? 'green' : 'red') : 'grey'
   return (
     <main className="shield-page">
       <div className="shield-panel">
         <header className="panel-head shield-head">
           <div>
             <div className="title-row">
-              <span className={`lead-signal ${sealState}`} aria-hidden="true" />
-              <h1>Coriqo Shield</h1>
+              <span className="brand-lockup">
+                <SealMark size={24} />
+                <h1>Coriqo Shield</h1>
+              </span>
               <span className="tag info">this Mac</span>
+              {verify.data
+                ? verify.data.tamper_evident
+                  ? <span className="tag ok">Record verified</span>
+                  : <span className="tag bad">Record failed verification</span>
+                : verify.isError
+                  ? <span className="tag warn">Shield not reachable</span>
+                  : <span className="tag unknown">Checking</span>}
             </div>
             <p className="one-liner">
               Checks what you send to AI apps, replaces personal details before
-              they leave, and keeps a sealed record you can prove later.
+              they leave, and keeps a tamper-evident record you can verify later.
             </p>
           </div>
           {verify.data?.checkpoint?.device_id && (
             <div className="keys">
-              <span className="fkey">device</span>
-              <span className="hash">{verify.data.checkpoint.device_id.slice(0, 18)}…</span>
+              <span className="fkey">Device</span>
+              <HashChip value={verify.data.checkpoint.device_id} noun="device id" short={18} />
             </div>
           )}
         </header>
@@ -96,7 +104,7 @@ function ShieldPage() {
 
         {tab === 'trust' && (
           <Trust verify={verify.data} policy={policy.data} onOpen={setSheet}
-            goSettings={() => go({ tab: 'settings' })} />
+            goSettings={() => go({ tab: 'settings' })} goLedger={() => go({ tab: 'ledger' })} />
         )}
         {tab === 'ledger' && <Ledger onOpen={setSheet} />}
         {tab === 'timeline' && (

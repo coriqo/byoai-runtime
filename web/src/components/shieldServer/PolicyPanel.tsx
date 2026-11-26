@@ -18,7 +18,7 @@ import {
 } from '@/api/shieldServer'
 import { useAuthWatch } from './AdminAuth'
 import { defaultPolicyDoc, PolicyForm, type PolicyFormValue } from './PolicyForm'
-import { ConfirmDialog, SectionHead } from '@/components/shield/shared'
+import { Banner, ConfirmDialog, HashChip, SectionHead } from '@/components/shield/shared'
 
 /** Local edit state tracks `managed_by` alongside the policy/locked
  * `PolicyForm` edits, even though `PolicyForm` itself doesn't expose a field
@@ -94,12 +94,12 @@ function ChangedOnServerBanner({
   version, onReload,
 }: { version: number | null; onReload: () => void }) {
   return (
-    <div className="banner warn" role="status">
-      <span>This policy changed on the server (v {version ?? '—'}). Reload?</span>
+    <Banner tone="warn" role="status">
+      <span>This policy changed on the server (v {version ?? 'unknown'}). Reload?</span>
       <button className="btn ghost sm" type="button" onClick={onReload}>
         Reload
       </button>
-    </div>
+    </Banner>
   )
 }
 
@@ -152,7 +152,7 @@ export function PolicyPanel() {
     <section className="panel" aria-labelledby="shield-policy-h">
       <SectionHead
         id="shield-policy-h"
-        title="Shield policy — tenant default"
+        title="Tenant default policy"
         accent
         help="What every enrolled device does by default. A device follows this unless it has its own override below."
       />
@@ -160,16 +160,16 @@ export function PolicyPanel() {
       <dl className="keeps-list stacked">
         <dt>Version</dt>
         <dd className="mono">{envelope.version ?? 'unmanaged'}</dd>
-        <dt>Signed by</dt>
-        <dd className="mono">{envelope.key_id ?? '—'}</dd>
+        <dt>Signing key</dt>
+        <dd>{envelope.key_id ? <HashChip value={envelope.key_id} noun="signing key id" /> : <span className="muted">not signed yet</span>}</dd>
         <dt>Managed by</dt>
         <dd>{envelope.managed_by ?? <span className="muted">not set</span>}</dd>
       </dl>
 
       {envelope.policy === null && (
-        <div className="banner info" role="status">
+        <Banner tone="info" role="status">
           <span>No default policy is set. Saving one puts every enrolled device under management.</span>
-        </div>
+        </Banner>
       )}
 
       {changedOnServer && <ChangedOnServerBanner version={envelope.version} onReload={reload} />}
@@ -179,7 +179,7 @@ export function PolicyPanel() {
         onChange={(next) => setForm({ ...next, managedBy: form.managedBy })}
       />
 
-      <div className="row" style={{ gap: 'var(--s2)' }}>
+      <div className="button-row">
         <button
           className="btn primary"
           type="button"
@@ -240,7 +240,7 @@ function DeviceOverrides() {
         help="Pick a device to see or set a policy that replaces the tenant default just for it."
       />
       {devices.length === 0 ? (
-        <p className="muted">No devices enrolled yet.</p>
+        <p className="muted">No devices enrolled yet. Enrol a Mac first; its override is set here.</p>
       ) : (
         <>
           <label>
@@ -249,7 +249,7 @@ function DeviceOverrides() {
               <option value="">Choose a device…</option>
               {devices.map((d) => (
                 <option key={d.device_id} value={d.device_id}>
-                  {d.label ?? d.device_id}
+                  {d.label ?? `Unlabelled device ${d.device_id.slice(0, 8)}`}
                 </option>
               ))}
             </select>
@@ -324,7 +324,7 @@ function DeviceOverrideEditor({
         value={{ policy: form.policy, locked: form.locked }}
         onChange={(next) => setForm({ ...next, managedBy: form.managedBy })}
       />
-      <div className="row" style={{ gap: 'var(--s2)' }}>
+      <div className="button-row">
         <button
           className="btn primary"
           type="button"

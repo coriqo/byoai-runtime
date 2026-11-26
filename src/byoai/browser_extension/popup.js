@@ -20,7 +20,42 @@ const APPS = {
 let lastRender = null
 const STALE_AFTER_MS = 7 * 24 * 3600 * 1000
 
+/*
+ * The status icon is a line drawing on the 24px icon size. Record integrity
+ * (verified, failed) uses the reticle seal's own drawing, as everywhere else
+ * in Shield; the other states are a pending seal, an alert triangle and a
+ * paused circle. Built from DOM nodes, never from a string of markup.
+ */
+const SVG_NS = 'http://www.w3.org/2000/svg'
+const ICON_DRAWINGS = {
+  pending: ['seal', 'dot'],
+  verified: ['seal', 'M11.6 16.3l3.1 3.1 5.9-6.4'],
+  failed: ['seal', 'M12.5 12.5l7 7M19.5 12.5l-7 7'],
+  alert: ['line', 'M16 5l12 21H4zM16 13v6M16 23v.1'],
+  off: ['line', 'M16 5a11 11 0 100 22 11 11 0 000-22zM11 16h10'],
+}
+function drawIcon(name) {
+  const [kind, glyph] = ICON_DRAWINGS[name] || ICON_DRAWINGS.pending
+  const svg = document.createElementNS(SVG_NS, 'svg')
+  svg.setAttribute('viewBox', '0 0 32 32')
+  const add = (tag, attrs) => {
+    const node = document.createElementNS(SVG_NS, tag)
+    for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v)
+    svg.append(node)
+  }
+  const stroke = { fill: 'none', stroke: 'currentColor', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }
+  if (kind === 'seal') {
+    add('circle', { cx: 16, cy: 16, r: 11, 'stroke-width': 3.6, ...stroke })
+    if (glyph === 'dot') add('circle', { cx: 16, cy: 16, r: 4.6, fill: 'currentColor' })
+    else add('path', { d: glyph, 'stroke-width': 2.4, ...stroke })
+  } else {
+    add('path', { d: glyph, 'stroke-width': 2.4, ...stroke })
+  }
+  el('icon').replaceChildren(svg)
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
+  drawIcon('pending')
   el('ext-id').textContent = chrome.runtime.id
   wire()
   await refresh()
@@ -201,7 +236,7 @@ function render({ state, endpoint, verify, apps, mode, shorter }, app) {
   el('version').textContent = `v${chrome.runtime.getManifest?.().version ?? ''}`
   const set = (kind, icon, title, detail) => {
     el('status').className = `status ${kind}`
-    el('icon').textContent = icon
+    drawIcon(icon)
     el('state-title').textContent = title
     el('state-detail').textContent = detail
   }
@@ -214,7 +249,7 @@ function render({ state, endpoint, verify, apps, mode, shorter }, app) {
   el('tab').textContent = ''
 
   if (state === 'off') {
-    set('wait', '•', 'Capture is off',
+    set('wait', 'off', 'Capture is off',
       'Shield is not recording anything from your browser. Review what it does, then turn it on.')
     primary.textContent = 'Review and turn on'
     primary.dataset.welcome = '1'
@@ -222,20 +257,20 @@ function render({ state, endpoint, verify, apps, mode, shorter }, app) {
   }
   delete primary.dataset.welcome
   if (state === 'mismatch') {
-    set('bad', '!', "That isn't your Shield",
+    set('bad', 'alert', "That isn't your Shield",
       "Something else on this Mac is answering at Shield's address, so nothing is being sent to it.")
     primary.hidden = true
     el('trust').hidden = false
     return
   }
   if (state === 'unverifiable') {
-    set('bad', '!', "Shield can't prove who it is",
+    set('bad', 'alert', "Shield can't prove who it is",
       'This Shield is too old to pair with the extension. Update it, then reopen this window.')
     primary.hidden = true
     return
   }
   if (state === 'unreachable') {
-    set('bad', '!', "Shield isn't running",
+    set('bad', 'alert', "Shield isn't running",
       'Messages you send now are held here for a short while, up to 50, then dropped.')
     el('help').hidden = false
     primary.textContent = 'Check again'
@@ -246,17 +281,17 @@ function render({ state, endpoint, verify, apps, mode, shorter }, app) {
   const v = verify || {}
   const n = v.entries
   if (shorter) {
-    set('bad', '!', "Shield's record is shorter than it was",
+    set('bad', 'failed', "Shield's record is shorter than it was",
       `It held ${shorter.was} sealed entries and now holds ${shorter.now}. Something deleted or reset it.`)
     el('accept').hidden = false
   } else if (v.incidents && v.incidents.length) {
-    set('bad', '!', 'The record was reset',
+    set('bad', 'failed', 'The record was reset',
       `${v.incidents[0].at}: Shield could not read its record file and started a new one. The old file was kept.`)
   } else if (v.tamper_evident === false) {
-    set('bad', '!', 'The record does not check out',
+    set('bad', 'failed', 'The record failed verification',
       'An entry no longer matches the signed checkpoint. Open Shield to see where.')
   } else {
-    set('ok', '✓', state === 'paired' ? 'Paired with your Shield' : 'Shield is on',
+    set('ok', 'verified', state === 'paired' ? 'Paired with your Shield' : 'Shield is on',
       typeof n === 'number'
         ? `${n} sealed ${n === 1 ? 'entry' : 'entries'}, all verified.`
         : 'The record is intact.')

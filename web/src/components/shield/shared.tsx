@@ -1,9 +1,11 @@
 /**
- * Pieces every Shield tab uses: rule and app labels, the date filter, the
- * shared feed query, the notice strip and the receipt download button.
+ * Pieces every Shield screen uses: the brand seal, icons on the size scale,
+ * banners, the copy button and hash chip, rule and app labels, the date
+ * filter, the shared feed query, the notice strip and the receipt download
+ * button. A screen reaches for these before it writes markup of its own.
  */
 import { useEffect, useRef, useState } from 'react'
-import type { ReactNode } from 'react'
+import type { ReactNode, RefObject } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { fetchFeed, fetchReceipt } from '@/api/shield'
 import type { ShieldPolicy } from '@/api/shield'
@@ -32,15 +34,168 @@ export const APP_NAME: Record<string, string> = {
   openrouter: 'OpenRouter', together: 'Together', gemini_api: 'Gemini API',
 }
 
-export const ruleLabel = (rule: string) => RULE_LABEL[rule] ?? rule
+/** A stored code read as words: "api_tool.run" becomes "Api tool run". */
+export function humanize(code: string) {
+  const words = code.replace(/[._-]+/g, ' ').trim()
+  return words ? words[0]!.toUpperCase() + words.slice(1) : code
+}
+
+export const ruleLabel = (rule: string) => RULE_LABEL[rule] ?? humanize(rule)
+
+/* ------------------------------------------------------- brand and icons */
+
+/** The reticle seal: the Coriqo mark, in seal blue, no tile, never recoloured. */
+export function SealMark({ size = 24 }: { size?: IconSize }) {
+  return (
+    <svg className={`icon icon-${size}`} viewBox="0 0 32 32" aria-hidden="true" data-seal="mark"
+      style={{ color: 'var(--seal)' }}>
+      <circle cx="16" cy="16" r="11" fill="none" stroke="currentColor" strokeWidth="3.6" />
+      <circle cx="16" cy="16" r="4.6" fill="currentColor" />
+    </svg>
+  )
+}
+
+const SEAL_GLYPH = {
+  verified: 'M11.6 16.3l3.1 3.1 5.9-6.4',
+  review: 'M16 11v5.6M16 20.8v.2',
+  failed: 'M12.5 12.5l7 7M19.5 12.5l-7 7',
+  pending: null,
+} as const
+const SEAL_COLOR = {
+  verified: 'var(--validated)', review: 'var(--pending)', failed: 'var(--off-scope)', pending: 'var(--ink-soft)',
+} as const
+
+/** The same drawing in a status colour, for record integrity only: green
+ * verified, amber to review, red failed, grey not yet checked. From 24px up
+ * the core carries a glyph, so the state is a shape as well as a colour. */
+export function StatusSeal({ status, size = 24, label }: {
+  status: keyof typeof SEAL_GLYPH
+  size?: IconSize
+  label?: string
+}) {
+  const glyph = SEAL_GLYPH[status]
+  return (
+    <svg className={`icon icon-${size}`} viewBox="0 0 32 32" data-seal={status}
+      role={label ? 'img' : undefined} aria-label={label} aria-hidden={label ? undefined : true}
+      style={{ color: SEAL_COLOR[status], overflow: 'visible' }}>
+      <circle cx="16" cy="16" r="11" fill="none" stroke="currentColor" strokeWidth="3.6" />
+      {glyph && size >= 24
+        ? <path d={glyph} fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+        : <circle cx="16" cy="16" r="4.6" fill="currentColor" />}
+    </svg>
+  )
+}
+
+/** The only icon sizes there are: 12 inline status, 16 rows and buttons, 20
+ * panels and alerts, 24 nav and banners, 32 stat tiles, 48 empty states. */
+export type IconSize = 12 | 16 | 20 | 24 | 32 | 48
+
+const ICON_PATH = {
+  close: 'M6 6l12 12M18 6L6 18',
+  download: 'M12 4v11M7 11l5 5 5-5M5 20h14',
+  copy: 'M9 9h10v11H9zM5 15V4h10',
+  'chevron-left': 'M15 6l-6 6 6 6',
+  'chevron-right': 'M9 6l6 6-6 6',
+  external: 'M14 4h6v6M20 4l-9 9M18 14v5H5V6h5',
+  'check-circle': 'M12 21a9 9 0 100-18 9 9 0 000 18zM8 12.5l3 3 5-6',
+  'alert-circle': 'M12 21a9 9 0 100-18 9 9 0 000 18zM12 7.5v5.5M12 16.5v.1',
+  'alert-triangle': 'M12 4l9 16H3zM12 10v4.5M12 17.5v.1',
+  info: 'M12 21a9 9 0 100-18 9 9 0 000 18zM12 11v5.5M12 7.5v.1',
+} as const
+export type IconName = keyof typeof ICON_PATH
+
+/** A line icon from the set above, on the size scale, hidden from assistive tech. */
+export function Icon({ name, size = 16 }: { name: IconName; size?: IconSize }) {
+  return (
+    <svg className={`icon icon-${size}`} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" data-icon={name}>
+      <path d={ICON_PATH[name]} />
+    </svg>
+  )
+}
+
+type Tone = 'info' | 'ok' | 'warn' | 'bad'
+const TONE_ICON: Record<Tone, IconName> = {
+  info: 'info', ok: 'check-circle', warn: 'alert-triangle', bad: 'alert-circle',
+}
+
+/** A message that must not be missed. The tone is a shape (icon) and a tint,
+ * and the text says what it means; colour is never the only carrier. */
+export function Banner({ tone, role, className, testId, children }: {
+  tone: Tone
+  role?: 'status' | 'alert'
+  className?: string
+  testId?: string
+  children: ReactNode
+}) {
+  return (
+    <div className={`banner ${tone}${className ? ` ${className}` : ''}`} role={role} data-testid={testId}>
+      <Icon name={TONE_ICON[tone]} size={20} />
+      {children}
+    </div>
+  )
+}
+
+/** Copies `text` and says so. The clipboard can be blocked; the value stays on screen then. */
+export function CopyButton({ text, label = 'Copy', ariaLabel }: { text: string; label?: string; ariaLabel?: string }) {
+  const [copied, setCopied] = useState(false)
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch { /* clipboard blocked: the value is still on screen */ }
+  }
+  return (
+    <button type="button" className="btn ghost sm icon" aria-label={ariaLabel}
+      onClick={e => { e.stopPropagation(); void copy() }}>
+      <Icon name="copy" size={16} />{copied ? 'Copied' : label}
+    </button>
+  )
+}
+
+/** An identifier as a person meets it: the start of it, a copy button, the
+ * whole value in the tooltip. Never inside a sentence. */
+export function HashChip({ value, noun, short = 12 }: { value: string; noun: string; short?: number }) {
+  return (
+    <span className="hash-chip">
+      <span className="hash" title={value}>{value.length > short ? `${value.slice(0, short)}…` : value}</span>
+      <CopyButton text={value} ariaLabel={`Copy the full ${noun}`} />
+    </span>
+  )
+}
+
+/** Keeps Tab inside a dialog, starts on `initial` (or the first control) and
+ * hands focus back to what had it when the dialog closes. */
+export function useFocusTrap(ref: RefObject<HTMLElement>, initial?: RefObject<HTMLElement>) {
+  useEffect(() => {
+    const before = document.activeElement as HTMLElement | null
+    const box = ref.current
+    const focusables = () => Array.from(box?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, a[href], [tabindex]:not([tabindex="-1"])',
+    ) ?? [])
+    ;(initial?.current ?? focusables()[0])?.focus()
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab') return
+      const items = focusables()
+      const first = items[0]
+      const last = items[items.length - 1]
+      if (!first || !last) return
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
+    }
+    box?.addEventListener('keydown', onKey)
+    return () => { box?.removeEventListener('keydown', onKey); before?.focus?.() }
+  }, [ref, initial])
+}
 
 export function flagTagClass(tier: string) {
   return tier === 'agent' ? 'info' : tier === 'high' ? 'bad' : 'warn'
 }
 
 export function tierLabel(it: Item) {
-  if (it.status === 'blocked') return 'Stopped'
-  return it.tier === 'bad' ? 'High risk' : it.tier === 'warn' ? 'Caught' : 'Clean'
+  if (it.status === 'blocked') return 'Blocked'
+  return it.tier === 'bad' ? 'High risk' : it.tier === 'warn' ? 'Flagged' : 'No exception'
 }
 
 export function tierTagClass(tier: Tier) {
@@ -90,7 +245,7 @@ export function useFeed() {
  * Shield does without opening anything. Not dismissible by design. */
 export function NoticeStrip({ policy }: { policy: ShieldPolicy }) {
   return (
-    <div className="banner info shield-notice" role="status">
+    <Banner tone="info" role="status" className="shield-notice">
       <span>
         Shield checks what you send to AI apps from this Mac.{' '}
         {policy.mode === 'observe'
@@ -100,13 +255,13 @@ export function NoticeStrip({ policy }: { policy: ShieldPolicy }) {
           ? 'It keeps a short preview of each message with those details removed.'
           : 'It keeps the rule matches and message length, not your words.'}
       </span>
-    </div>
+    </Banner>
   )
 }
 
 /* --------------------------------------------------------------- receipt */
 
-export function ReceiptButton({ seal, label = 'Receipt ⤓' }: { seal: string; label?: string }) {
+export function ReceiptButton({ seal, label = 'Receipt' }: { seal: string; label?: string }) {
   const dl = useMutation({
     mutationFn: () => fetchReceipt(seal),
     onSuccess: receipt => {
@@ -116,8 +271,8 @@ export function ReceiptButton({ seal, label = 'Receipt ⤓' }: { seal: string; l
   })
   return (
     <>
-      <button onClick={() => dl.mutate()} disabled={dl.isPending || !seal} className="btn ghost sm">
-        {dl.isPending ? 'Preparing…' : label}
+      <button onClick={() => dl.mutate()} disabled={dl.isPending || !seal} className="btn ghost sm icon">
+        <Icon name="download" size={16} />{dl.isPending ? 'Preparing…' : label}
       </button>
       {dl.isError && <span className="tag bad" role="alert">No receipt: {dl.error.message}</span>}
     </>
@@ -135,7 +290,7 @@ export function downloadBlob(blob: Blob, name: string) {
 export function WhenFilter({ value, onChange }: { value: When; onChange: (w: When) => void }) {
   return (
     <div className="group" role="group" aria-label="Date range">
-      <span className="fkey">when</span>
+      <span className="fkey">When</span>
       {WHEN_OPTIONS.map(([key, label]) => (
         <button key={key} className={`filter ${value === key ? 'on' : ''}`}
           aria-pressed={value === key} onClick={() => onChange(key)}>
@@ -154,11 +309,11 @@ const TOOL_LABEL: Record<string, string> = {
   image_gen: 'Image generation', 'dalle.text2im': 'Image generation',
 }
 export const toolLabel = (name: string) =>
-  TOOL_LABEL[name] ?? (name.startsWith('api_tool') || name.includes('connector') ? `Connector (${name})` : name)
+  TOOL_LABEL[name] ?? (name.startsWith('api_tool') || name.includes('connector') ? `Connector: ${humanize(name)}` : humanize(name))
 
 export type Need = 'all' | 'warn' | 'bad' | 'mcp' | 'browser'
 export const NEED_OPTIONS: readonly (readonly [Need, string])[] = [
-  ['all', 'All'], ['warn', 'Caught'], ['bad', 'Stopped or high risk'],
+  ['all', 'All'], ['warn', 'Flagged'], ['bad', 'Blocked or high risk'],
   ['mcp', 'Tool calls'], ['browser', 'In browser'],
 ]
 
@@ -173,7 +328,7 @@ export function matchesNeed(it: Item, need: Need) {
 export function NeedFilter({ value, onChange }: { value: Need; onChange: (n: Need) => void }) {
   return (
     <div className="group" role="group" aria-label="Show">
-      <span className="fkey">show</span>
+      <span className="fkey">Show</span>
       {NEED_OPTIONS.map(([key, label]) => (
         <button key={key} className={`filter ${value === key ? 'on' : ''}`}
           aria-pressed={value === key} onClick={() => onChange(key)}>
@@ -223,15 +378,16 @@ export function ConfirmDialog({ title, children, confirmLabel, onConfirm, onCanc
   busy?: boolean
 }) {
   const cancelRef = useRef<HTMLButtonElement>(null)
+  const boxRef = useRef<HTMLDivElement>(null)
+  useFocusTrap(boxRef, cancelRef)
   useEffect(() => {
-    cancelRef.current?.focus()
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onCancel() }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onCancel])
   return (
     <div className="dialog-backdrop" onClick={e => { if (e.target === e.currentTarget) onCancel() }}>
-      <div className="dialog" role="alertdialog" aria-modal="true"
+      <div ref={boxRef} className="dialog" role="alertdialog" aria-modal="true"
         aria-labelledby="dialog-h" aria-describedby="dialog-body">
         <h2 id="dialog-h">{title}</h2>
         <div id="dialog-body" className="dialog-body">{children}</div>
@@ -249,23 +405,13 @@ const fileSize = (n: number) => n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${(n / 
 /** Evidence for one uploaded file: type, size, the start of its SHA-256 with a
  * button for the whole hash, the rules that matched and whether it was read. */
 export function FileEvidence({ item }: { item: Item }) {
-  const [copied, setCopied] = useState(false)
   const f = item.file
   if (!f) return null
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(f.sha256)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1500)
-    } catch { /* clipboard blocked: the hash is still on screen */ }
-  }
   return (
     <span className="file-evidence" data-testid="file-evidence">
       <span className="tag info">{f.mime || 'unknown type'}</span>
       {f.bytes != null && <span className="muted">{fileSize(f.bytes)}</span>}
-      <span className="hash mono" title="SHA-256 of the file">{f.sha256.slice(0, 16)}</span>
-      <button type="button" className="btn ghost sm" onClick={e => { e.stopPropagation(); void copy() }}
-        aria-label="Copy the full SHA-256">{copied ? 'Copied' : 'Copy'}</button>
+      <HashChip value={f.sha256} noun="SHA-256" short={16} />
       {f.scanned === false && <span className="tag unknown">Not scanned</span>}
       {item.flags.map(fl => (
         <span key={fl.rule} className={`tag ${flagTagClass(fl.tier)}`}>{ruleLabel(fl.rule)}</span>

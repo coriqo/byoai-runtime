@@ -4,7 +4,7 @@
  * Activity, the Ledger or the Timeline.
  */
 import { useEffect, useRef } from 'react'
-import { FileEvidence, ReceiptButton, flagTagClass, ruleLabel, tierLabel, tierTagClass, toolLabel } from './shared'
+import { Banner, FileEvidence, HashChip, Icon, ReceiptButton, flagTagClass, ruleLabel, tierLabel, tierTagClass, toolLabel, useFocusTrap } from './shared'
 import type { Item } from './shared'
 
 const VERDICT: Record<Item['tier'], string> = {
@@ -14,7 +14,7 @@ const VERDICT: Record<Item['tier'], string> = {
 }
 
 function what(it: Item) {
-  if (it.status === 'blocked') return 'Stopped on this Mac. The message never reached the AI app.'
+  if (it.status === 'blocked') return 'Blocked on this Mac. The message never reached the AI app.'
   if ((it.redactions?.length ?? 0) > 0) {
     return `Sent with ${it.redactions!.length === 1 ? '1 detail' : `${it.redactions!.length} details`} replaced.`
   }
@@ -29,8 +29,9 @@ export function Sheet({ item, onClose, onOpenTimeline }: {
   onOpenTimeline?: (id: string) => void
 }) {
   const closeRef = useRef<HTMLButtonElement>(null)
+  const sheetRef = useRef<HTMLElement>(null)
+  useFocusTrap(sheetRef, closeRef)
   useEffect(() => {
-    closeRef.current?.focus()
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -39,20 +40,20 @@ export function Sheet({ item, onClose, onOpenTimeline }: {
   const { verb, ...record } = item
   return (
     <div className="sheet-backdrop" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
-      <aside className="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-h">
+      <aside ref={sheetRef} className="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-h">
         <header className="sheet-head">
           <span className={`tag ${tierTagClass(item.tier)}`}>{tierLabel(item)}</span>
           <h2 id="sheet-h">{item.surface}</h2>
-          <button ref={closeRef} className="btn ghost sm" onClick={onClose} aria-label="Close">✕</button>
+          <button ref={closeRef} className="btn ghost sm icon" onClick={onClose} aria-label="Close"><Icon name="close" size={16} /></button>
         </header>
         <p className="muted sheet-meta">
           {item.date} {item.ts} · {item.source === 'mcp' ? 'MCP tool call' : item.source === 'browser' ? 'Browser message' : 'Chat message'}
           {item.chars != null && ` · ${item.chars.toLocaleString()} characters`}
         </p>
         <p className="sheet-line">{verb}</p>
-        <div className={`banner ${item.tier === 'ok' ? 'info' : item.tier === 'bad' ? 'bad' : 'warn'}`}>
+        <Banner tone={item.tier === 'ok' ? 'info' : item.tier === 'bad' ? 'bad' : 'warn'}>
           <span><b>{what(item)}</b> {VERDICT[item.tier]}</span>
-        </div>
+        </Banner>
 
         {item.file && (<>
           <h3 className="label">File</h3>
@@ -90,7 +91,9 @@ export function Sheet({ item, onClose, onOpenTimeline }: {
         </>)}
 
         <h3 className="label">Seal</h3>
-        <p className="mono">{item.seal || 'Not sealed yet: the call is still running.'}</p>
+        {item.seal
+          ? <p><HashChip value={item.seal} noun="seal" short={16} /></p>
+          : <p className="muted">Not sealed yet: the call is still running.</p>}
 
         <div className="sheet-actions">
           {onOpenTimeline && (

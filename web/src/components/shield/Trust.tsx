@@ -7,17 +7,20 @@ import { useState } from 'react'
 import { fetchPrivacy, savePolicy, scrubStoredText } from '@/api/shield'
 import type { ShieldPolicy, ShieldPrivacy, ShieldVerify } from '@/api/shield'
 import {
-  NeedFilter, SectionHead, WhenFilter, flagTagClass, inWhen, matchesNeed, plural, ruleLabel, toolLabel, useFeed,
+  Banner, HashChip, Icon, NeedFilter, SectionHead, StatusSeal, WhenFilter, flagTagClass, humanize, inWhen, matchesNeed,
+  plural, ruleLabel, toolLabel, useFeed,
 } from './shared'
 import type { Item, Need, When } from './shared'
 
 const PER_PAGE = 20
 
-export function Trust({ verify, policy, onOpen, goSettings }: {
+export function Trust({ verify, policy, onOpen, goSettings, goLedger }: {
   verify: ShieldVerify | undefined
   policy: ShieldPolicy | undefined
   onOpen: (it: Item) => void
   goSettings: () => void
+  /** Where a failed verification sends the reader: the sealed entries. */
+  goLedger?: () => void
 }) {
   const [need, setNeed] = useState<Need>('all')
   const [when, setWhen] = useState<When>('today')
@@ -49,25 +52,32 @@ export function Trust({ verify, policy, onOpen, goSettings }: {
       <div className="shield-main">
         <section className={`verdict ${!verify ? 'unknown' : intact ? 'ok' : 'bad'}`} aria-live="polite">
           <div className="state">
-            {!verify ? 'Checking…' : intact ? 'Shield is on' : 'Seal check failed'}
+            <StatusSeal size={32} status={!verify ? 'pending' : intact ? 'verified' : 'failed'} />
+            {!verify ? 'Checking…' : intact ? 'Shield is on' : 'Record failed verification'}
           </div>
           <p className="reading">
-            {counts.bad ? `${plural(counts.bad, 'message')} stopped or flagged high risk today.`
-              : counts.caught ? `Personal details caught in ${plural(counts.caught, 'message')} today.`
-                : 'Nothing flagged today.'}
+            {counts.bad ? `${plural(counts.bad, 'message')} blocked or flagged high risk today.`
+              : counts.caught ? `Personal details flagged in ${plural(counts.caught, 'message')} today.`
+                : 'No exceptions today.'}
           </p>
-          <p className="hash">
+          <p className="verdict-facts">
             {verify
               ? intact
-                ? `Seal intact · ${plural(verify.entries ?? 0, 'entry', 'entries')} · root ${(verify.merkle_root ?? '').slice(0, 10)}…`
-                : `Broken at entry ${verify.broken_at ?? '?'}: ${verify.reason ?? 'mismatch'}`
-              : 'Checking the seal…'}
+                ? <>
+                  <span>{plural(verify.entries ?? 0, 'sealed entry', 'sealed entries')}, tamper-evident and verified</span>
+                  {verify.merkle_root && <span>Root <HashChip value={verify.merkle_root} noun="root hash" /></span>}
+                </>
+                : <>
+                  <span>Verification fails at entry {verify.broken_at ?? 'unknown'}: {humanize(verify.reason ?? 'entry does not match its seal')}.</span>
+                  {goLedger && <button className="btn sm" onClick={goLedger}>Open the sealed entries</button>}
+                </>
+              : <span>Checking the seal chain…</span>}
           </p>
         </section>
 
-        <div className="shield-stats" role="group" aria-label="Today, click to filter">
+        <div className="shield-stats" role="group" aria-label="Today. Select a figure to filter the activity.">
           <StatButton lead label="checked today" value={counts.checked} on={need === 'all'} onClick={() => pick('all')} />
-          <StatButton label="caught" value={counts.caught} tone="warn" on={need === 'warn'} onClick={() => pick('warn')} />
+          <StatButton label="flagged" value={counts.caught} tone="warn" on={need === 'warn'} onClick={() => pick('warn')} />
           <StatButton label="high risk" value={counts.bad} tone="bad" on={need === 'bad'} onClick={() => pick('bad')} />
           <StatButton label="tool calls" value={counts.mcp} on={need === 'mcp'} onClick={() => pick('mcp')} />
           <StatButton label="in browser" value={counts.browser} on={need === 'browser'} onClick={() => pick('browser')} />
@@ -106,9 +116,9 @@ export function Trust({ verify, policy, onOpen, goSettings }: {
           </div>
           {visible.length > PER_PAGE && (
             <div className="pager">
-              <button className="btn sm" disabled={cur === 0} onClick={() => setPage(cur - 1)}>‹ Newer</button>
+              <button className="btn sm icon" disabled={cur === 0} onClick={() => setPage(cur - 1)}><Icon name="chevron-left" size={16} />Newer</button>
               <span className="page-stat">Page {cur + 1} of {pages} · {visible.length} matching</span>
-              <button className="btn sm" disabled={cur >= pages - 1} onClick={() => setPage(cur + 1)}>Older ›</button>
+              <button className="btn sm icon" disabled={cur >= pages - 1} onClick={() => setPage(cur + 1)}>Older<Icon name="chevron-right" size={16} /></button>
             </div>
           )}
         </section>
@@ -143,7 +153,7 @@ export function Row({ item, onOpen }: { item: Item; onOpen: () => void }) {
         <span className="row-meta">
           {item.source === 'mcp' && <span className="tag info">Tool call</span>}
           {item.source === 'browser' && <span className="tag info">In browser</span>}
-          {item.status === 'blocked' && <span className="tag bad">Stopped on this Mac</span>}
+          {item.status === 'blocked' && <span className="tag bad">Blocked on this Mac</span>}
           {n > 0 && <span className="tag ok">{n === 1 ? '1 detail replaced' : `${n} details replaced`}</span>}
           {[...new Set((item.tools ?? []).map(toolLabel))].map(t => <span key={t} className="tag info">{t}</span>)}
           {item.flags.map(f => (
@@ -185,7 +195,7 @@ function KeepsPanel({ policy, goSettings }: {
     },
   })
   if (privacy.isError) {
-    return <section className="panel"><p className="muted" role="alert">Can't read what Shield keeps: Shield isn't running.</p></section>
+    return <section className="panel"><p className="muted" role="alert">Can't read what Shield keeps: Shield isn't running. Start it with <code className="mono">byoai-shield</code>.</p></section>
   }
   if (!policy || !privacy.data) {
     return <section className="panel"><p className="muted" role="status">Reading what Shield keeps…</p></section>
@@ -197,14 +207,14 @@ function KeepsPanel({ policy, goSettings }: {
       <SectionHead id="keeps-h" title="What Shield keeps"
         action={<button className="btn ghost sm" onClick={goSettings}>Change</button>} />
       {weaker && (
-        <div className="banner warn keeps-alert" role="status">
+        <Banner tone="warn" role="status" className="keeps-alert">
           <span><b>Less private than the default.</b>{' '}
             {[policy.mode === 'observe' && 'Messages go out unchanged.',
               policy.keep_text && 'Previews of messages are kept.'].filter(Boolean).join(' ')}</span>
           <button className="btn sm" disabled={restore.isPending} onClick={() => restore.mutate()}>
             {restore.isPending ? 'Restoring…' : 'Restore defaults'}
           </button>
-        </div>
+        </Banner>
       )}
       <dl className="keeps-list stacked">
         <dt>Message text</dt>
@@ -238,7 +248,7 @@ function CleanupAlert({ privacy }: { privacy: ShieldPrivacy }) {
     onSuccess: data => qc.setQueryData(['shield-privacy'], data),
   })
   return (
-    <div className="banner warn keeps-alert">
+    <Banner tone="warn" className="keeps-alert">
       <span>
         {plural(privacy.rows_with_text, 'older record')} still{' '}
         {privacy.rows_with_text === 1 ? 'holds' : 'hold'} message text from before these settings.
@@ -246,7 +256,7 @@ function CleanupAlert({ privacy }: { privacy: ShieldPrivacy }) {
       <button className="btn sm" disabled={scrub.isPending} onClick={() => scrub.mutate()}>
         {scrub.isPending ? 'Removing…' : 'Remove stored text'}
       </button>
-      {scrub.isError && <span>Cleanup failed: {scrub.error.message}</span>}
-    </div>
+      {scrub.isError && <span role="alert">Cleanup failed: {scrub.error.message}</span>}
+    </Banner>
   )
 }

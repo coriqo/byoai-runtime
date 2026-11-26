@@ -5,7 +5,7 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchDevices, revokeDevice, type ShieldServerDevice } from '@/api/shieldServer'
 import { useAuthWatch } from './AdminAuth'
-import { ConfirmDialog, SectionHead } from '@/components/shield/shared'
+import { ConfirmDialog, HashChip, SectionHead } from '@/components/shield/shared'
 
 const POLL_MS = 30_000
 
@@ -46,7 +46,7 @@ export function DevicesPanel() {
   if (query.isError) {
     return (
       <p className="empty-row" role="alert">
-        Couldn't load devices: {query.error.message}
+        Couldn't load devices: {query.error.message}. Check that the Shield server is running, then reload.
       </p>
     )
   }
@@ -92,16 +92,20 @@ export function DevicesPanel() {
         </div>
       )}
       {devices.length === 0 ? (
-        <p className="empty-row">No devices enrolled yet. Mint a token from Enrol a Mac.</p>
+        <p className="empty-row">
+          <b>No devices enrolled yet.</b>
+          Mint a token under Enrol a Mac and paste it into Shield's settings on that Mac.
+        </p>
       ) : (
+        <div className="table-scroll">
         <table className="table" aria-describedby="shield-devices-h">
           <thead>
             <tr>
               <th>Label</th>
-              <th>Device ID</th>
+              <th>Device id</th>
               <th>Last seen</th>
               <th>Status</th>
-              <th>Policy</th>
+              <th>Policy version (running / assigned)</th>
               <th>Drift</th>
               <th>Revoked</th>
               <th aria-label="Actions" />
@@ -110,27 +114,28 @@ export function DevicesPanel() {
           <tbody>
             {devices.map((d) => (
               <tr key={d.device_id}>
-                <td>{d.label ?? <span className="muted">unlabeled</span>}</td>
-                <td className="mono" title={d.device_id}>{shortId(d.device_id)}</td>
+                <td>{d.label ?? <span className="muted">Unlabelled</span>}</td>
+                <td><HashChip value={d.device_id} noun="device id" /></td>
                 <td>{ago(d.last_seen)}</td>
                 <td>
                   {d.protecting === null ? (
-                    <span className="tag unknown">not heard from yet</span>
+                    <span className="tag unknown">Not heard from yet</span>
                   ) : d.protecting ? (
-                    <span className="tag ok">protecting</span>
+                    <span className="tag ok">Protecting</span>
                   ) : (
-                    <span className="tag warn" title={d.reasons.join('; ')}>
-                      quiet{d.reasons.length > 0 ? ` — ${d.reasons.join('; ')}` : ''}
-                    </span>
+                    <>
+                      <span className="tag warn">Quiet</span>
+                      {d.reasons.length > 0 && <span className="muted setting-help">{d.reasons.join('; ')}</span>}
+                    </>
                   )}
                 </td>
                 <td className="mono">
                   {d.policy_version ?? '—'} / {d.assigned_version ?? '—'}
                 </td>
                 <td>
-                  {d.drift ? <span className="tag bad">drift</span> : <span className="tag ok">in sync</span>}
+                  {d.drift ? <span className="tag bad">Out of sync</span> : <span className="tag ok">In sync</span>}
                 </td>
-                <td>{d.revoked ? <span className="tag bad">revoked</span> : <span className="muted">no</span>}</td>
+                <td>{d.revoked ? <span className="tag bad">Revoked</span> : <span className="muted">No</span>}</td>
                 <td>
                   {!d.revoked && (
                     <button
@@ -146,6 +151,7 @@ export function DevicesPanel() {
             ))}
           </tbody>
         </table>
+        </div>
       )}
 
       {confirming && (
