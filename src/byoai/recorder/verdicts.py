@@ -294,7 +294,10 @@ def _approval_fields(verdict: Verdict, arguments: Any) -> dict[str, Any]:
     never written here: this ledger is append-only and cannot be redacted, so
     they go only on the approval request, where Coriqo keeps just the amount
     and a hash. With ``BYOAI_APPROVAL_SEND_ARGS=0`` no amount is recorded
-    either, so no argument value leaves the process. Keys are added only for
+    either, so no argument value leaves the process. The same holds in every
+    payload mode but ``full`` (``approval_args`` returns nothing there), so
+    ``redacted`` and ``hash-only`` ledgers never hold ``amount_usd``. Keys
+    are added only for
     an approved call, so every other record keeps the payload it had before."""
     out: dict[str, Any] = {
         "approval_id": approval_request_id(
@@ -305,6 +308,17 @@ def _approval_fields(verdict: Verdict, arguments: Any) -> dict[str, Any]:
     if amount is not None:
         out["amount_usd"] = amount
     return out
+
+
+def tool_use_payload(tool: str, arguments_sha256: str) -> dict[str, str]:
+    """The only content of a gate-recorded ``tool_use`` event."""
+    return {"tool": tool, "arguments_sha256": arguments_sha256}
+
+
+def tool_use_payload_hash(tool: str, arguments_sha256: str) -> str:
+    """The ledger ``payload_hash`` of that event (also what Shield's
+    ``tool.call`` row carries, so Coriqo can match the two)."""
+    return sha256_hex(canonicalize(tool_use_payload(tool, arguments_sha256)))
 
 
 # -- the outbox --------------------------------------------------------------
@@ -588,6 +602,29 @@ class VerdictRecorder:
             return entry
         except Exception:  # noqa: BLE001 - policy: recording never breaks a call
             log.exception("coriqo: failed to record a mandate verdict")
+            return None
+
+    def record_tool_use(
+        self, tool: str, arguments_sha256: str, *, session_id: str,
+    ) -> LedgerEntry | None:
+        """Seal one ``tool_use`` event for an allowed call that carries only
+        the tool name and the arguments' digest, never the arguments, in every
+        payload mode. Its ``payload_hash`` is :func:`tool_use_payload_hash`,
+        which is the ``args_hash`` Coriqo's step for this call carries. Never
+        raises."""
+        try:
+            entry = self._append_event(
+                EventKind.TOOL_USE,
+                tool_use_payload(tool, arguments_sha256),
+                ts_device=now_ts_device(),
+                tool_name=tool,
+                session_id=session_id,
+            )
+            if entry is not None and self._checkpointer is not None:
+                self._checkpointer.note(entry.seq)
+            return entry
+        except Exception:  # noqa: BLE001 - recording never breaks a call
+            log.exception("coriqo: failed to record a tool_use event")
             return None
 
     def record_worker_ack(self, notice: Any, ack: Any) -> LedgerEntry | None:

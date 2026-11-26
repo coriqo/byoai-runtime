@@ -372,6 +372,33 @@ def test_arguments_are_carried_onto_the_proposed_action():
     assert seen[0].arguments == {"query": "rates", "limit": 3}
 
 
+def test_captured_arguments_gate_the_approval_request_on_payload_mode(monkeypatch):
+    """RP-6: the arguments `governed_tool` captures are sent to Coriqo with an
+    approval request only under payload mode full."""
+    from byoai.recorder.mandate import approval_args
+
+    seen = []
+
+    class Recording(MandateGate):
+        def decide(self, action):
+            seen.append(action)
+            return super().decide(action)
+
+    gate = Recording(None, agent_id=_AGENT)
+
+    @governed_tool(capture_arguments=True)
+    def wire(amount_usd):
+        return "ok"
+
+    with use_gate(gate):
+        wire(amount_usd=5)
+
+    monkeypatch.setenv("BYOAI_RECORDER_PAYLOAD_MODE", "full")
+    assert approval_args(seen[0].arguments) == {"amount_usd": 5}
+    monkeypatch.setenv("BYOAI_RECORDER_PAYLOAD_MODE", "redacted")
+    assert approval_args(seen[0].arguments) is None
+
+
 def test_arguments_are_not_captured_by_default():
     """Capture is opt-in: a governed tool's arguments routinely hold account
     numbers and credentials, and nothing redacts them yet."""

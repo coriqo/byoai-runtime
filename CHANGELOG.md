@@ -41,6 +41,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   generic message box and send button there. Not yet confirmed in a browser.
 
 ### Added
+- **`coriqo-mcp --shield-dir DIR` sends device receipts.** Off by default. Each
+  gated `tools/call` gets a sealed Shield `tool.call` row carrying `payload_hash`
+  (the digest of the call, equal to the step's `args_hash`) and
+  `mandate_verdict` (`allowed`, `flagged`, `blocked`, `pending_approval`),
+  signed with the recorder's device key. An allowed call also gets a `tool_use`
+  ledger event holding the tool name and that digest, never the arguments, in
+  every payload mode. Each MCP connection is its own run; at shutdown, when
+  decisions are being sent to Coriqo and the API credentials are set, each run
+  goes up through `publish_session(..., seal_chain=...)`. Denied and pending calls
+  have a sealed row but no step.
+- **Held calls send their arguments with the approval request, in payload mode
+  `full` only.** Coriqo keeps the amount they state and a SHA-256 fingerprint;
+  the approved call's ledger entry carries `approval_id` and `amount_usd`,
+  never the arguments, so Coriqo can check the action stayed within the
+  approved amount. `BYOAI_APPROVAL_SEND_ARGS=0` opts out under `full`.
+
 - `coriqo-mcp` enforces tool pins. New `--server NAME` (the server's key in
   `tool_pins.servers`) and `--pin-hold-timeout SECONDS` (default 10). The
   runtime fetches the server's full tool list itself (every page, at most 100
@@ -194,6 +210,10 @@ mandate file format) and what is provisional. CI now also runs on pull requests.
   not latch it.
 
 ### Changed
+- **Default behaviour of approval arguments.** In `redacted` (the default) and
+  `hash-only` payload modes no arguments and no `amount_usd` leave the host, so
+  an approval cannot sign off an above-limit action in Coriqo. Set
+  `BYOAI_RECORDER_PAYLOAD_MODE=full` to enable that.
 - **Behaviour change: in the default `redact` mode a detected secret now stops
   the send (`403`) instead of being replaced.** Shield's policy has a new
   `actions` map (`secret`, `pii`, `flag`, each `block`, `warn`, `redact` or

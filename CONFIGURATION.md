@@ -1497,7 +1497,13 @@ entry's amount to be at most the approved amount. Only a finite number counts
 as an amount; a string, a bool, NaN or infinity records none, with a warning
 that names the field but not its value.
 
-Nothing redacts the arguments sent on the request. With `@governed_tool` they
+Raw arguments are sent only under `BYOAI_RECORDER_PAYLOAD_MODE=full`. In
+`redacted` (the default) and `hash-only` the request goes without `args` and
+the ledger entry records `approval_id` only, with no `amount_usd`. **In those
+modes an approval cannot sign off an above-limit action in Coriqo**: there is
+no approved amount to compare against. `BYOAI_APPROVAL_SEND_ARGS=0` is an
+extra opt-out under `full`. The `approval_id` hashes the raw arguments on the
+host and never sends them. Nothing redacts the arguments sent under `full`. With `@governed_tool` they
 exist only for a tool decorated with `capture_arguments=True`; the MCP and
 proxy gates pass the tool call's arguments. To keep them on the host, set
 `BYOAI_APPROVAL_SEND_ARGS=0`: the request goes without `args`, and the ledger
@@ -1556,7 +1562,7 @@ credential that could widen the agent's own mandate is not.
 | `BYOAI_MANDATE_POSTURE` | `fail_open` | `fail_open` or `fail_closed`, used only until the first snapshot names the tenant's own posture |
 | `BYOAI_MANDATE_MAX_STALENESS_S` | `300` | staleness budget used until a snapshot names its own `max_staleness_s` |
 | `BYOAI_MANDATE_ENVIRONMENT` | *(unset)* | where this runtime runs, e.g. `production`. When set, a snapshot whose `environment` names somewhere else is treated as no mandate and the posture decides (reason `environment_mismatch`). Unset: not compared. `MandateGate(environment=...)` overrides it |
-| `BYOAI_APPROVAL_SEND_ARGS` | `1` | send a held call's arguments with its approval request, and record the amount they state on the approved action's ledger entry (never the arguments themselves). `0`, `false`, `no` or `off` sends no arguments and records no amount; approvals then cannot sign off an above-limit action in Coriqo |
+| `BYOAI_APPROVAL_SEND_ARGS` | `1` | only under `BYOAI_RECORDER_PAYLOAD_MODE=full` (never in `redacted` or `hash-only`): send a held call's arguments with its approval request, and record the amount they state on the approved action's ledger entry (never the arguments themselves). `0`, `false`, `no` or `off` sends no arguments and records no amount; approvals then cannot sign off an above-limit action in Coriqo |
 
 The first two are bootstrap values for the window before the first snapshot
 lands; after that Coriqo's values win.
@@ -1750,6 +1756,7 @@ coriqo-mcp --mandate coriqo.mandate.yaml --http --upstream http://127.0.0.1:9000
 | `--environment ENV` | `$BYOAI_MANDATE_ENVIRONMENT` | where this runs; see `BYOAI_MANDATE_ENVIRONMENT` |
 | `--recorder-dir DIR` | `$BYOAI_RECORDER_DIR` or `~/.byoai/recorder` | ledger, device key and the outbox of decisions waiting to go to Coriqo (`coriqo_mcp_verdicts.db`) |
 | `--no-record` | off | decide calls but write nothing (no `cryptography` needed) |
+| `--shield-dir DIR` | off | device receipts. Seal a Shield `tool.call` row for every gated call under `DIR`, signed with the recorder's own device key. The row holds the call's digest (`payload_hash`) and the decision (`mandate_verdict`: `allowed`, `flagged`, `blocked` or `pending_approval`), never the arguments, in every payload mode. An allowed call also gets a `tool_use` ledger event with the tool name and the same digest. Each MCP connection is its own run. When the run ends and decisions are being sent to Coriqo (enrolled device, agent id, `BYOAI_CORIQO_*` API credentials in the environment), each run is published once with its receipts. Ignored with `--no-record`; unset, nothing changes |
 | `--http` | off | relay an HTTP MCP server (streamable HTTP or SSE) instead of a stdio child |
 | `--upstream URL` | — | with `--http`: the server's base URL. Requests keep their path and query |
 | `--listen HOST:PORT` | `127.0.0.1:8808` | with `--http`: where `coriqo-mcp` listens |

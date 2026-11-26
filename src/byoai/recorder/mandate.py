@@ -111,13 +111,16 @@ import time
 from collections import OrderedDict, deque
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from byoai.errors import ByoAIError
 
 from .identity import CoriqoIdentity, resolve_identity
 from .suspend import DEFAULT_HOOK_TIMEOUT_S, SuspendHook, SuspendHooks, SuspendNotice
 from .suspend import utc_now as suspend_utc_now
+
+if TYPE_CHECKING:
+    from .redact import PayloadMode
 
 __all__ = [
     "BLOCKING_STATUSES",
@@ -138,6 +141,7 @@ __all__ = [
     "approval_amount_usd",
     "approval_args",
     "approval_args_enabled",
+    "approval_payload_mode",
     "approval_request_id",
     "coriqo_mandate_source",
     "mandate_gate",
@@ -992,10 +996,39 @@ def _json_args(arguments: Mapping[str, Any] | None) -> dict[str, Any] | None:
         return None
 
 
-def approval_args(arguments: Mapping[str, Any] | None) -> dict[str, Any] | None:
+def approval_payload_mode() -> PayloadMode:
+    """The recorder payload mode in force: ``BYOAI_RECORDER_PAYLOAD_MODE``,
+    ``redacted`` when unset or unrecognised (the same fallback the recorder
+    uses)."""
+    from .redact import PayloadMode
+
+    raw = os.environ.get("BYOAI_RECORDER_PAYLOAD_MODE", "").strip().lower()
+    try:
+        return PayloadMode(raw) if raw else PayloadMode.REDACTED
+    except ValueError:
+        return PayloadMode.REDACTED
+
+
+def approval_args(
+    arguments: Mapping[str, Any] | None, payload_mode: PayloadMode | None = None,
+) -> dict[str, Any] | None:
     """The arguments to send with an approval request and record on the
-    approved action, or ``None`` when sending is off or they are not JSON."""
-    return _json_args(arguments) if approval_args_enabled() else None
+    approved action, or ``None``.
+
+    Raw arguments leave the host only under payload mode ``full``: in
+    ``redacted`` and ``hash-only`` nothing is sent, so Coriqo has no amount to
+    compare and cannot sign off an above-limit action. ``None`` is also
+    returned when ``BYOAI_APPROVAL_SEND_ARGS`` is off or the arguments are not
+    JSON. ``payload_mode`` defaults to :func:`approval_payload_mode`.
+
+    ``approval_request_id`` hashes the raw arguments locally to tell calls
+    apart; it never sends them."""
+    from .redact import PayloadMode
+
+    mode = payload_mode if payload_mode is not None else approval_payload_mode()
+    if mode is not PayloadMode.FULL or not approval_args_enabled():
+        return None
+    return _json_args(arguments)
 
 
 def approval_amount_usd(args: Mapping[str, Any] | None) -> int | float | None:
