@@ -111,3 +111,58 @@ async def test_close_publishes_once_with_the_seal_chain_only_when_shipping(tmp_p
     rec.receipts, rec.agent_id = sink, "agt_1"
     await rec.close()
     assert seen == []
+
+
+class _CloseRec:
+    payload_mode = "redacted"
+    key = None
+    ledger = object()
+
+    def close(self, **_kw):
+        pass
+
+
+class _CloseShipper:
+    async def ship_once(self):
+        return None
+
+
+def _closing_record(coriqo_mcp):
+    sink = type("S", (), {"sessions": {"s1": None}, "feed": type("F", (), {"seals": "CHAIN"})()})()
+    rec = coriqo_mcp._Record(_CloseRec(), None, _CloseShipper())
+    rec.receipts, rec.agent_id = sink, "agt_1"
+    return rec
+
+
+@pytest.mark.asyncio
+async def test_close_publishes_with_the_device_signature_when_no_api_key_is_set(monkeypatch):
+    from byoai.integrations import coriqo_mcp
+    from byoai.recorder import coriqo_agents
+    from byoai.recorder.identity import CoriqoIdentity
+
+    monkeypatch.setattr(coriqo_agents.CoriqoCredentials, "from_env", classmethod(lambda cls: None))
+    signer = type("K", (), {"device_id": "d1", "public_key_b64": "", "sign": lambda self, b: ""})()
+    ident = CoriqoIdentity.from_device(base_url="http://x", device_id="d1", signer=signer, tenant_slug="t")
+    monkeypatch.setattr("byoai.recorder.identity.resolve_identity", lambda key_dir=None: ident)
+    seen = []
+    monkeypatch.setattr(coriqo_agents, "publish_session", lambda client, **kw: seen.append((client, kw)))
+    await _closing_record(coriqo_mcp).close()
+    assert len(seen) == 1 and seen[0][0].device_publish is True
+    assert seen[0][1]["seal_chain"] == "CHAIN"
+
+
+@pytest.mark.asyncio
+async def test_close_says_what_is_missing_when_there_is_neither_key_nor_enrolment(monkeypatch, caplog):
+    import logging
+
+    from byoai.integrations import coriqo_mcp
+    from byoai.recorder import coriqo_agents
+
+    monkeypatch.setattr(coriqo_agents.CoriqoCredentials, "from_env", classmethod(lambda cls: None))
+    monkeypatch.setattr("byoai.recorder.identity.resolve_identity", lambda key_dir=None: None)
+    seen = []
+    monkeypatch.setattr(coriqo_agents, "publish_session", lambda client, **kw: seen.append(kw))
+    with caplog.at_level(logging.WARNING):
+        await _closing_record(coriqo_mcp).close()
+    assert seen == []
+    assert any("byoai-recorder-enroll" in r.getMessage() for r in caplog.records)

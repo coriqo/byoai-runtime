@@ -1747,20 +1747,20 @@ class _Record:
     def _publish_receipts(self) -> None:
         """Send each connection's run, with its sealed rows, to Coriqo. Runs
         once, at close, and only when decisions are being shipped. Never raises."""
-        from ..recorder.coriqo_agents import (
-            CoriqoAgentsClient,
-            CoriqoCredentials,
-            publish_session,
-        )
+        from ..recorder.coriqo_agents import make_publish_client, publish_session
 
-        creds = CoriqoCredentials.from_env()
-        if creds is None:
+        try:
+            key_dir = self.recorder.ledger.path.parent
+        except AttributeError:
+            key_dir = None
+        client = make_publish_client(self.recorder.key, key_dir=key_dir)
+        if client is None:
             log.warning(
-                "coriqo-mcp: --shield-dir is on but the Coriqo API credentials are not "
-                "in the environment, so the sealed rows stay on this device"
+                "coriqo-mcp: --shield-dir is on but this device is not enrolled with a tenant "
+                "and the Coriqo API credentials are not in the environment, so the sealed rows "
+                "stay on this device. Enroll it with byoai-recorder-enroll."
             )
             return
-        client = CoriqoAgentsClient(creds, device_signer=self.recorder.key)
         try:
             for session_id in list(self.receipts.sessions):
                 try:

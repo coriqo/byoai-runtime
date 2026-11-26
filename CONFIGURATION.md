@@ -1158,6 +1158,33 @@ Registering always lands an agent at `in_review` â€” Coriqo never pre-approves â
 so self-registration files a governance to-do rather than granting the agent any
 standing.
 
+#### Publishing with the device's own key (no API key)
+
+An enrolled device that records its tenant (`enrollment.json`) can publish a run
+with its own Ed25519 signature, so no service-account key has to sit on the
+machine. With `BYOAI_CORIQO_URL`, `_API_KEY` and `_TENANT_SLUG` set, nothing
+changes: the key publishes. Without them, `make_publish_client(device_key,
+key_dir=...)` returns a client built by `CoriqoAgentsClient.for_device(identity)`,
+and `publish_session` sends the run to Coriqo's device routes
+(`PUT .../agent-runtime/agents/{agent}/runs/{run}`, then steps, outside controls,
+device receipts and the close). `coriqo-mcp --shield-dir` does this at close
+without any setup beyond enrolling the device.
+
+Three things must be true on the Coriqo side, and the log says which one is not:
+
+- An organization admin has turned on **Hosts may publish runs with their own
+  device signature** in Settings > Agent evaluations > Record completeness. It is
+  off by default. While it is off the device logs one warning per process, naming
+  that page, and the run stays in the local ledger.
+- The agent is bound to this device. A device binds to an agent the first time it
+  fetches that agent's mandate; publishing never claims an unbound agent.
+- The device is not revoked, and the request is under the workspace's size and
+  rate limits (default 1024 KiB, 120 requests a minute for the device).
+
+A retry is safe: the device picks the run id, so opening a run twice returns the
+same run, and a repeated close is treated as done. A device-signed client cannot
+register or list agents; those still need a service account.
+
 `ensure_registered` is safe to call on every startup and from several processes
 at once. Idempotency is Coriqo's, not ours: each agent is registered under an
 `external_id` (your mapping key, optionally prefixed via
