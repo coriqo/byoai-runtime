@@ -99,6 +99,14 @@ export const ShieldFeed = z.object({
   capacity: z.number().int().positive().nullish(),
   focus_item: LenientItem.nullish(),
   newest_id: z.string().nullish(),
+  /** Exact counts over every row held since `summary_since` (asked for by the Trust tab). */
+  summary: z.object({
+    checked: z.number().int().nonnegative(),
+    flagged: z.number().int().nonnegative(),
+    high_risk: z.number().int().nonnegative(),
+    mcp: z.number().int().nonnegative(),
+    browser: z.number().int().nonnegative(),
+  }).optional(),
 })
 
 export const ShieldCheckpoint = z.object({
@@ -223,22 +231,10 @@ export const ShieldScrub = ShieldPrivacy.extend({
 
 /* ------------------------------------------------------------------ calls */
 
-export interface ShieldPage {
-  /** Treated as an opaque page number (`0`, `1`, …) — the shield server
-   * clamps at 200 rows/page and reports back what it actually served. */
-  page: number
-  perPage: number
-}
-
 async function get<T>(path: string, schema: z.ZodType<T, z.ZodTypeDef, unknown>): Promise<T> {
   const res = await fetch(`/shield-api${path}`, { cache: 'no-store' })
   if (!res.ok) throw new Error(`${res.status} from shield (${path})`)
   return schema.parse(await res.json())
-}
-
-export function fetchFeed(page: ShieldPage) {
-  const qs = `/feed?limit=${Math.min(page.perPage, 200)}&offset=${page.page * page.perPage}`
-  return get(qs, ShieldFeed)
 }
 
 export interface FeedQuery {
@@ -251,6 +247,12 @@ export interface FeedQuery {
   anchor?: string
   /** Also return this row as `focus_item`, wherever it sits. */
   focus?: string
+  /** Only rows that carry a seal (the Ledger's list); filters before paging. */
+  sealed?: boolean
+  /** Text search over a row's words, app and rule names; filters before paging. */
+  q?: string
+  /** Ask for exact counts over every row since this local date ("" = all time). */
+  summarySince?: string
 }
 
 export function fetchFeedPage(q: FeedQuery) {
@@ -259,6 +261,9 @@ export function fetchFeedPage(q: FeedQuery) {
     const v = q[k]
     if (v && !(k === 'need' && v === 'all')) p.set(k, v)
   }
+  if (q.sealed) p.set('sealed', '1')
+  if (q.q?.trim()) p.set('q', q.q.trim())
+  if (q.summarySince !== undefined) p.set('summary_since', q.summarySince)
   return get(`/feed?${p}`, ShieldFeed)
 }
 

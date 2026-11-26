@@ -27,11 +27,14 @@ const TAB_LABEL: Record<Tab, string> = {
 export interface ShieldSearch {
   tab?: Tab
   focus?: string
-  /** Timeline paging and filters; absent means the default (page 1, 25 rows, All, All time). */
+  /** Paging and filters of the Trust, Ledger and Timeline lists; absent means the
+   * default: page 1, 25 rows, all kinds, and today for Trust or all time for the others. */
   page?: number
   size?: number
   when?: When
   need?: Need
+  /** Trust's text search. */
+  q?: string
 }
 
 export const Route = createFileRoute('/shield')({
@@ -40,8 +43,10 @@ export const Route = createFileRoute('/shield')({
     focus: typeof s.focus === 'string' && s.focus ? s.focus : undefined,
     page: Number.isInteger(Number(s.page)) && Number(s.page) > 1 ? Number(s.page) : undefined,
     size: (PAGE_SIZES as readonly number[]).includes(Number(s.size)) && Number(s.size) !== PAGE_SIZES[0] ? Number(s.size) : undefined,
-    when: WHEN_OPTIONS.some(([k]) => k === s.when) && s.when !== 'all' ? (s.when as When) : undefined,
+    // Trust opens on today, so only there is "today" the default and "all" explicit.
+    when: WHEN_OPTIONS.some(([k]) => k === s.when) && s.when !== (s.tab === 'trust' || !s.tab ? 'today' : 'all') ? (s.when as When) : undefined,
     need: NEED_OPTIONS.some(([k]) => k === s.need) && s.need !== 'all' ? (s.need as Need) : undefined,
+    q: typeof s.q === 'string' && s.q.trim() ? s.q.slice(0, 200) : undefined,
   }),
   component: ShieldPage,
 })
@@ -62,9 +67,9 @@ function ShieldPage() {
   const go = useCallback((next: ShieldSearch) => {
     void navigate({ search: next })
   }, [navigate])
-  /** Change part of the Timeline's URL state; each change is a history step, so Back undoes it. */
+  /** Change part of the open list's URL state (page, size, filters); each change is a history step, so Back undoes it. */
   const patch = useCallback((p: Partial<ShieldSearch>, replace = false) => {
-    void navigate({ search: prev => ({ ...prev, tab: 'timeline', ...p }), replace })
+    void navigate({ search: prev => ({ ...prev, ...p }), replace })
   }, [navigate])
   const openTimeline = useCallback((id: string) => {
     setSheet(null)
@@ -117,10 +122,10 @@ function ShieldPage() {
         </nav>
 
         {tab === 'trust' && (
-          <Trust verify={verify.data} policy={policy.data} onOpen={setSheet}
+          <Trust verify={verify.data} policy={policy.data} onOpen={setSheet} search={search} patch={patch}
             goSettings={() => go({ tab: 'settings' })} goLedger={() => go({ tab: 'ledger' })} />
         )}
-        {tab === 'ledger' && <Ledger onOpen={setSheet} />}
+        {tab === 'ledger' && <Ledger search={search} patch={patch} onOpen={setSheet} />}
         {tab === 'timeline' && (
           <Timeline search={search} patch={patch} onOpen={setSheet} />
         )}

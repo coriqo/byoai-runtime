@@ -42,6 +42,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   falls back to its default (the reply echoes the value used) instead of failing.
   Shield keeps its latest 400 events in memory; the Timeline says so when the
   list is full and older ones are only in the ledger file.
+- The Shield window's Ledger and Trust tabs page on the server like the
+  Timeline. The Ledger used to list the sealed rows of only the newest 200
+  events, with no pager and no honest total; it now shows "Showing 26 to 50 of
+  299 sealed records" with Previous, Next, a page count and a rows-per-page
+  choice, filters by date and result, and keeps its page, size and filters in
+  the address (`?tab=ledger&page=2&size=50&when=7&need=warn`). Trust pages its
+  activity list the same way (`?page=2&size=50&need=warn&when=7&q=card`, text
+  search included) and its figures (checked, flagged, high risk, tool calls, in
+  browser) are exact counts over everything Shield holds today, not the page on
+  screen. Both tabs offer "N new records since you opened this page", say why a
+  list is empty (nothing sealed yet, or filters hide everything) and tell an
+  unreachable Shield from an error answer. Shield still lists its latest 400
+  events; both tabs say so when the list is full. The ledger file and the seal
+  chain are unchanged.
+- `GET /api/feed` also takes `sealed=1` (only rows with a seal), `q` (text
+  search over a row's words, app and rule names) and `summary_since` (a date, or
+  empty for all time), which adds `summary` with exact `checked`, `flagged`,
+  `high_risk`, `mcp` and `browser` counts since that date. All three apply
+  before paging, so `matched` and `has_more` describe the filtered list. `newer`
+  now counts only the arrivals that match the filters. With no parameters the
+  reply is what it was.
 - An enrolled device can publish a run to Coriqo with its own signature, with no
   service-account API key in the environment. `CoriqoAgentsClient.for_device()`
   and `make_publish_client()` build the client; `publish_session` then uses

@@ -163,3 +163,93 @@ def test_response_matches_the_window_fixture(tmp_path):
         recorded = json.load(fh)
     assert {f["tier"] for it in recorded["items"] for f in it["flags"]} <= CONTRACT
     assert [i["tier"] for i in out["items"]] == [i["tier"] for i in recorded["items"]]
+
+
+# ---- the Ledger and Trust lists: sealed, search and exact summary ----
+
+def add_unsealed(feed, n=4):
+    """Rows with no seal yet (a tool call still running), newest first."""
+    for it in list(feed.items)[:n]:
+        it["seal"] = ""
+
+
+def test_sealed_keeps_only_rows_with_a_seal_before_paging(tmp_path):
+    feed = make_feed(tmp_path, 60)
+    add_unsealed(feed)
+    sealed = [it for it in feed.items if it.get("seal")]
+    assert len(sealed) == 56
+    out = feed_page(feed, q(sealed=1, limit=10, offset=50))
+    assert out["matched"] == 56 and len(out["items"]) == 6 and out["has_more"] is False
+    assert all(it["seal"] for it in out["items"])
+    assert out["total"] == 60                       # what Shield holds is still honest
+    assert feed_page(feed, {})["matched"] == 60      # no parameter: as before
+    assert feed_page(feed, q(sealed=0))["matched"] == 60
+
+
+def test_sealed_combines_with_filters_and_counts_the_filtered_list(tmp_path):
+    feed = make_feed(tmp_path, 60)
+    add_unsealed(feed, 10)
+    want = [it for it in feed.items if it.get("seal") and it["tier"] == "warn"]
+    out = feed_page(feed, q(sealed=1, need="warn", limit=2, offset=2))
+    assert out["matched"] == len(want) and out["items"][0]["id"] == want[2]["id"]
+    assert out["has_more"] is (len(want) > 4)
+
+
+def test_sealed_page_holds_still_under_an_anchor(tmp_path):
+    feed = make_feed(tmp_path, 40)
+    anchor = list(feed.items)[0]["id"]
+    before = [i["id"] for i in feed_page(feed, q(sealed=1, limit=10, offset=10, anchor=anchor))["items"]]
+    with feed.cfg.ledger.open("a") as fh:
+        for i in range(3):
+            fh.write(json.dumps({"wall_clock": "2026-10-01 00:00:00", "kind": "desktop.chat.request",
+                                 "target": "claude.ai", "prompt": f"late {i}"}) + "\n")
+    feed.poll()
+    out = feed_page(feed, q(sealed=1, limit=10, offset=10, anchor=anchor))
+    assert [i["id"] for i in out["items"]] == before
+    assert out["newer"] == 3 and out["matched"] == 40
+
+
+def test_search_filters_before_paging_on_text_app_and_rule_words(tmp_path):
+    feed = make_feed(tmp_path, 50)
+    hits = [it for it in feed.items if any(f["rule"] == "emails" for f in it["flags"])]
+    assert hits
+    for word in ("email address", "EMAILS", "emails"):
+        assert feed_page(feed, q(q=word, limit=2))["matched"] == len(hits)
+    assert feed_page(feed, q(q="no such words anywhere"))["matched"] == 0
+    assert feed_page(feed, q(q="  "))["matched"] == 50          # blank means no search
+
+
+def test_summary_is_exact_over_every_row_not_the_page(tmp_path):
+    feed = make_feed(tmp_path, 60)
+    day = list(feed.items)[0]["date"]
+    out = feed_page(feed, q(limit=5, offset=20, need="bad", summary_since=day))
+    rows = [it for it in feed.items if it["date"] >= day]
+    s = out["summary"]
+    assert s["checked"] == len(rows)
+    assert s["flagged"] == sum(it["tier"] == "warn" for it in rows) > 0
+    assert s["high_risk"] == sum(it["tier"] == "bad" for it in rows)
+    assert s["browser"] + s["mcp"] <= s["checked"]
+    assert feed_page(feed, q(summary_since=""))["summary"]["checked"] == 60   # all time
+    assert "summary" not in feed_page(feed, {})                                # opt in
+
+
+def test_legacy_rows_still_page_and_count(tmp_path):
+    feed = make_legacy_feed(tmp_path)
+    out = feed_page(feed, q(sealed=1, limit=1, summary_since=""))
+    # the running tool call has no seal yet, so the sealed list holds two of three
+    assert out["matched"] == 2 and out["total"] == 3 and len(out["items"]) == 1 and out["has_more"] is True
+    assert out["summary"]["high_risk"] == 2
+    assert {f["tier"] for it in out["items"] for f in it["flags"]} <= CONTRACT
+    assert feed_page(feed, q(q="credential"))["matched"] >= 1
+
+
+def test_newer_counts_only_arrivals_this_view_would_show(tmp_path):
+    feed = make_feed(tmp_path, 20)
+    anchor = list(feed.items)[0]["id"]
+    with feed.cfg.ledger.open("a") as fh:
+        for text in ["plain a", "mail x.y@gmail.com now", "plain b"]:
+            fh.write(json.dumps({"wall_clock": "2026-10-01 00:00:00", "kind": "desktop.chat.request",
+                                 "target": "claude.ai", "prompt": text}) + "\n")
+    feed.poll()
+    assert feed_page(feed, q(anchor=anchor))["newer"] == 3
+    assert feed_page(feed, q(anchor=anchor, need="warn"))["newer"] == 1
