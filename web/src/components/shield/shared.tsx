@@ -6,11 +6,11 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode, RefObject } from 'react'
-import { useMutation, useQuery } from '@tanstack/react-query'
-import { fetchFeed, fetchReceipt } from '@/api/shield'
+import { useMutation } from '@tanstack/react-query'
+import { fetchFeedPage, fetchReceipt } from '@/api/shield'
 import type { ShieldPolicy } from '@/api/shield'
 
-export type Item = Awaited<ReturnType<typeof fetchFeed>>['items'][number]
+export type Item = Awaited<ReturnType<typeof fetchFeedPage>>['items'][number]
 export type Tier = Item['tier']
 
 export const RULE_LABEL: Record<string, string> = {
@@ -217,16 +217,6 @@ function localDay(ms: number) {
 
 export const today = () => localDay(Date.now())
 
-/** Whether an item's local date falls inside the chosen window. */
-export function inWhen(date: string | undefined, when: When, now = Date.now()): boolean {
-  if (when === 'all') return true
-  const d = (date ?? '').slice(0, 10)
-  const end = localDay(now)
-  if (when === 'today') return d === end
-  const start = localDay(now - (Number(when) - 1) * 86_400_000)
-  return Boolean(d) && d >= start && d <= end
-}
-
 /** First local day of a window ("" for all time), for the server's `since`. */
 export function whenStart(when: When, now = Date.now()): string {
   if (when === 'all') return ''
@@ -234,17 +224,6 @@ export function whenStart(when: When, now = Date.now()): string {
 }
 
 /* ------------------------------------------------------------------- feed */
-
-/** The newest 200 interactions, shared by every tab (one fetch, one answer).
- * Filtering and paging happen on this list, so a filter never hides rows that
- * sit on a page the server didn't send. */
-export function useFeed() {
-  return useQuery({
-    queryKey: ['shield-feed'],
-    queryFn: () => fetchFeed({ page: 0, perPage: 200 }),
-    refetchInterval: 3_000,
-  })
-}
 
 /* ---------------------------------------------------------------- notice */
 
@@ -323,14 +302,6 @@ export const NEED_OPTIONS: readonly (readonly [Need, string])[] = [
   ['all', 'All'], ['warn', 'Flagged'], ['bad', 'Blocked or high risk'],
   ['mcp', 'Tool calls'], ['browser', 'In browser'],
 ]
-
-export function matchesNeed(it: Item, need: Need) {
-  if (need === 'warn') return it.tier === 'warn'
-  if (need === 'bad') return it.tier === 'bad'
-  if (need === 'mcp') return it.source === 'mcp'
-  if (need === 'browser') return it.source === 'browser'
-  return true
-}
 
 export function NeedFilter({ value, onChange }: { value: Need; onChange: (n: Need) => void }) {
   return (

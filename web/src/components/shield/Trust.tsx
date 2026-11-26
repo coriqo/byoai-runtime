@@ -1,51 +1,58 @@
 /**
  * Trust: is Shield working, what did it catch, and what does it keep. The
  * activity list is the work; "What Shield keeps" sits in the rail beside it.
+ * The list pages on the server and its state lives in the URL
+ * (`?page=2&size=50&need=warn&when=7&q=card`); the figures above it are exact
+ * counts over every row Shield holds today, not the page on screen.
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { fetchPrivacy, savePolicy, scrubStoredText } from '@/api/shield'
 import type { ShieldPolicy, ShieldPrivacy, ShieldVerify } from '@/api/shield'
+import type { ShieldSearch } from '@/routes/shield'
+import { FeedError, NewRows, usePagedFeed } from './paging'
+import type { PatchSearch } from './paging'
 import {
-  Banner, HashChip, NeedFilter, Pager, SectionHead, StatusSeal, WhenFilter, flagTagClass, humanize, inWhen, matchesNeed,
-  plural, ruleLabel, toolLabel, useFeed,
+  Banner, DEFAULT_PAGE_SIZE, HashChip, NeedFilter, Pager, SectionHead, StatusSeal, WhenFilter, flagTagClass, humanize,
+  plural, ruleLabel, toolLabel, whenStart,
 } from './shared'
 import type { Item, Need, When } from './shared'
 
-const PER_PAGE = 20
-
-export function Trust({ verify, policy, onOpen, goSettings, goLedger }: {
+export function Trust({ verify, policy, search: url, patch, onOpen, goSettings, goLedger }: {
   verify: ShieldVerify | undefined
   policy: ShieldPolicy | undefined
+  search: ShieldSearch
+  patch: PatchSearch
   onOpen: (it: Item) => void
   goSettings: () => void
   /** Where a failed verification sends the reader: the sealed entries. */
   goLedger?: () => void
 }) {
-  const [need, setNeed] = useState<Need>('all')
-  const [when, setWhen] = useState<When>('today')
-  const [search, setSearch] = useState('')
-  const [page, setPage] = useState(0)
-  const feed = useFeed()
+  const need: Need = url.need ?? 'all'
+  const when: When = url.when ?? 'today'
+  const size = url.size ?? DEFAULT_PAGE_SIZE
+  const page = url.page ?? 1
+  const q = url.q ?? ''
+  // The search box types freely; the URL (and the server) follow once typing pauses.
+  const [typed, setTyped] = useState(q)
+  useEffect(() => { setTyped(q) }, [q])
+  useEffect(() => {
+    if (typed.trim() === q) return
+    const id = setTimeout(() => patch({ q: typed.trim() || undefined, page: undefined }, true), 350)
+    return () => clearTimeout(id)
+  }, [typed, q, patch])
 
-  const all = feed.data?.items ?? []
-  const todays = all.filter(it => inWhen(it.date, 'today'))
-  const counts = {
-    checked: todays.length,
-    caught: todays.filter(it => it.tier === 'warn' && !it.unreadable).length,
-    bad: todays.filter(it => it.tier === 'bad').length,
-    mcp: todays.filter(it => it.source === 'mcp').length,
-    browser: todays.filter(it => it.source === 'browser').length,
-  }
-  const q = search.trim().toLowerCase()
-  const visible = all.filter(it => matchesNeed(it, need) && inWhen(it.date, when) && (!q
-    || `${it.verb} ${it.surface} ${it.reply ?? ''} ${it.flags.map(f => `${f.rule} ${ruleLabel(f.rule)}`).join(' ')}`
-      .toLowerCase().includes(q)))
-  const pages = Math.max(1, Math.ceil(visible.length / PER_PAGE))
-  const cur = Math.min(page, pages - 1)
-  const shown = visible.slice(cur * PER_PAGE, (cur + 1) * PER_PAGE)
-
-  const pick = (n: Need) => { setNeed(n); setWhen('today'); setPage(0) }
+  const { feed, data, items: shown, matched, shown: range, headRef, goPage, showNew, setSize, capped, error } = usePagedFeed({
+    scope: 'trust', page, size, patch,
+    query: { need, since: whenStart(when), q, summarySince: whenStart('today') },
+  })
+  // Exact over every row held today, from the server; none until the first answer.
+  const counts = data?.summary
+  const filtered = need !== 'all' || when !== 'today' || q !== ''
+  // Only a narrower view than the whole list is "matching"; All time is wider than today.
+  const narrowed = need !== 'all' || q !== '' || when === '7' || when === '30'
+  const reset = () => { setTyped(''); patch({ need: undefined, when: undefined, q: undefined, page: undefined }) }
+  const pick = (n: Need) => patch({ need: n === 'all' ? undefined : n, when: undefined, page: undefined })
   const intact = verify?.tamper_evident && verify.checkpoint?.sig_valid !== false
   return (
     <div className="shield-split">
@@ -56,9 +63,10 @@ export function Trust({ verify, policy, onOpen, goSettings, goLedger }: {
             {!verify ? 'Checking…' : intact ? 'Shield is on' : 'Record failed verification'}
           </div>
           <p className="reading">
-            {counts.bad ? `${plural(counts.bad, 'message')} blocked or flagged high risk today.`
-              : counts.caught ? `Personal details flagged in ${plural(counts.caught, 'message')} today.`
-                : 'No exceptions today.'}
+            {!counts ? 'Counting today\'s messages…'
+              : counts.high_risk ? `${plural(counts.high_risk, 'message')} blocked or flagged high risk today.`
+                : counts.flagged ? `Personal details flagged in ${plural(counts.flagged, 'message')} today.`
+                  : 'No exceptions today.'}
           </p>
           <p className="verdict-facts">
             {verify
@@ -76,47 +84,52 @@ export function Trust({ verify, policy, onOpen, goSettings, goLedger }: {
         </section>
 
         <div className="shield-stats" role="group" aria-label="Today. Select a figure to filter the activity.">
-          <StatButton lead label="checked today" value={counts.checked} on={need === 'all'} onClick={() => pick('all')} />
-          <StatButton label="flagged" value={counts.caught} tone="warn" on={need === 'warn'} onClick={() => pick('warn')} />
-          <StatButton label="high risk" value={counts.bad} tone="bad" on={need === 'bad'} onClick={() => pick('bad')} />
-          <StatButton label="tool calls" value={counts.mcp} on={need === 'mcp'} onClick={() => pick('mcp')} />
-          <StatButton label="in browser" value={counts.browser} on={need === 'browser'} onClick={() => pick('browser')} />
+          <StatButton lead label="checked today" value={counts?.checked} on={need === 'all'} onClick={() => pick('all')} />
+          <StatButton label="flagged" value={counts?.flagged} tone="warn" on={need === 'warn'} onClick={() => pick('warn')} />
+          <StatButton label="high risk" value={counts?.high_risk} tone="bad" on={need === 'bad'} onClick={() => pick('bad')} />
+          <StatButton label="tool calls" value={counts?.mcp} on={need === 'mcp'} onClick={() => pick('mcp')} />
+          <StatButton label="in browser" value={counts?.browser} on={need === 'browser'} onClick={() => pick('browser')} />
         </div>
 
         <section aria-labelledby="activity-h">
           <SectionHead id="activity-h" title="Activity" accent />
           <div className="filterbar">
-            <NeedFilter value={need} onChange={n => { setNeed(n); setPage(0) }} />
-            <WhenFilter value={when} onChange={w => { setWhen(w); setPage(0) }} />
+            <NeedFilter value={need} onChange={n => patch({ need: n === 'all' ? undefined : n, page: undefined })} />
+            <WhenFilter value={when} onChange={w => patch({ when: w === 'today' ? undefined : w, page: undefined })} />
             <input
               type="search" aria-label="Search activity"
               placeholder="Search app, rule or summary"
-              value={search}
-              onChange={e => { setSearch(e.target.value); setPage(0) }}
+              value={typed}
+              onChange={e => setTyped(e.target.value)}
             />
           </div>
-          <div className="rows">
+          <NewRows n={data?.newer ?? 0} noun="new event" onShow={showNew} />
+          <h2 className="sr-only" tabIndex={-1} ref={headRef}>
+            Activity, page {range.page} of {range.pages}
+          </h2>
+          <div className={`rows${feed.isPlaceholderData ? ' tl-busy' : ''}`} aria-busy={feed.isFetching}>
             {feed.isPending && <div className="empty-row" role="status">Loading activity…</div>}
-            {feed.isError && (
-              <div className="empty-row" role="alert">
-                Can't reach Shield on this Mac. Start it with <code className="mono">byoai-shield</code>.
-              </div>
-            )}
-            {feed.data && all.length === 0 && (
+            {error && <FeedError error={error.kind} status={'status' in error ? error.status : undefined} onRetry={() => void feed.refetch()} />}
+            {data && matched === 0 && (
               <div className="empty-row">
-                Nothing recorded yet. Chat in Claude or ChatGPT with the capture proxy on, or call the MCP tools.
-              </div>
-            )}
-            {feed.data && all.length > 0 && visible.length === 0 && (
-              <div className="empty-row">
-                Nothing matches these filters. Try All and All time; filters only change this view.
+                {data.total
+                  ? <>
+                    {filtered
+                      ? <><b>No events match these filters.</b> Shield holds {plural(data.total, 'event')} in all; filters only change this view.</>
+                      : <><b>Nothing recorded today.</b> Shield holds {plural(data.total, 'event')} from earlier days.</>}
+                    {filtered
+                      ? <button className="btn sm" onClick={reset}>Clear filters</button>
+                      : <button className="btn sm" onClick={() => patch({ when: 'all', page: undefined })}>Show all time</button>}
+                  </>
+                  : 'Nothing recorded yet. Chat in Claude or ChatGPT with the capture proxy on, or call the MCP tools.'}
               </div>
             )}
             {shown.map(it => <Row key={it.id} item={it} onOpen={() => onOpen(it)} />)}
           </div>
-          {visible.length > PER_PAGE && (
-            <Pager page={cur + 1} pages={pages} from={cur * PER_PAGE + 1} to={cur * PER_PAGE + shown.length}
-              total={visible.length} pageSize={PER_PAGE} noun="matching events" onPage={n => setPage(n - 1)} />
+          {data && matched > 0 && (
+            <Pager page={range.page} pages={range.pages} from={range.from} to={range.to} total={matched} pageSize={range.size}
+              noun={narrowed ? 'matching events' : 'events'} onPage={goPage} onPageSize={setSize}
+              note={capped ? `Shield lists its latest ${data.capacity?.toLocaleString()} events. Older ones stay in the ledger file and its seal chain.` : undefined} />
           )}
         </section>
       </div>
@@ -129,12 +142,12 @@ export function Trust({ verify, policy, onOpen, goSettings, goLedger }: {
 }
 
 function StatButton({ label, value, tone, lead, on, onClick }: {
-  label: string; value: number; tone?: 'warn' | 'bad'; lead?: boolean; on: boolean; onClick: () => void
+  label: string; value: number | undefined; tone?: 'warn' | 'bad'; lead?: boolean; on: boolean; onClick: () => void
 }) {
   return (
     <button className={`stat-btn ${tone ?? ''} ${lead ? 'lead' : ''} ${on ? 'on' : ''}`}
       aria-pressed={on} onClick={onClick}>
-      <span className="value">{value.toLocaleString()}</span>
+      <span className="value">{value === undefined ? '–' : value.toLocaleString()}</span>
       <span className="unit">{label}</span>
     </button>
   )

@@ -6,11 +6,11 @@
  * the same page. Arriving with `focus` (from a row's "Open in Timeline") shows
  * that interaction's journey at the top and highlights its step.
  */
-import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect } from 'react'
 import type { ReactNode } from 'react'
-import { fetchFeedPage } from '@/api/shield'
 import type { ShieldSearch } from '@/routes/shield'
+import { FeedError, NewRows, usePagedFeed } from './paging'
+import type { PatchSearch } from './paging'
 import {
   Banner, DEFAULT_PAGE_SIZE, HashChip, NeedFilter, Pager, WhenFilter, flagTagClass, plural, ruleLabel, tierLabel, tierTagClass, today, whenStart,
 } from './shared'
@@ -18,7 +18,7 @@ import type { Item, Need, When } from './shared'
 
 export function Timeline({ search, patch, onOpen }: {
   search: ShieldSearch
-  patch: (p: Partial<ShieldSearch>, replace?: boolean) => void
+  patch: PatchSearch
   onOpen: (it: Item) => void
 }) {
   const { focus } = search
@@ -26,47 +26,18 @@ export function Timeline({ search, patch, onOpen }: {
   const when: When = search.when ?? 'all'
   const size = search.size ?? DEFAULT_PAGE_SIZE
   const page = search.page ?? 1
-  // Pinned to the newest row on first load: rows that arrive later do not push
-  // this page's rows down, they are offered as "N new events".
-  const [anchor, setAnchor] = useState<string | undefined>()
   const since = whenStart(when)
-
-  const feed = useQuery({
-    queryKey: ['shield-timeline', { page, size, need, since, anchor, focus }],
-    queryFn: () => fetchFeedPage({ limit: size, offset: (page - 1) * size, need, since, anchor, focus }),
-    placeholderData: keepPreviousData,
-    gcTime: 0, // a cached answer is a stale newest row, which would re-pin the anchor
-    refetchInterval: 3_000,
+  const { feed, data, items, matched, pages, shown, headRef, goPage, showNew, setSize, capped, error } = usePagedFeed({
+    scope: 'timeline', page, size, patch, query: { need, since, focus },
   })
-  const data = feed.data
-  const items = data?.items ?? []
-  const matched = data?.matched ?? items.length
-  const pages = Math.max(1, Math.ceil(matched / size))
   const focused = data?.focus_item ?? undefined
-
-  useEffect(() => {
-    // Not from placeholder data: after "Show them" that is still the old newest row.
-    if (!anchor && !feed.isPlaceholderData && data?.newest_id) setAnchor(data.newest_id)
-  }, [anchor, feed.isPlaceholderData, data?.newest_id])
-
-  // A page past the end (an old link, or a filter that shrank the list) lands on the last page.
-  useEffect(() => {
-    if (data && !feed.isPlaceholderData && matched > 0 && items.length === 0 && page > pages) patch({ page: pages > 1 ? pages : undefined }, true)
-  }, [data, feed.isPlaceholderData, matched, items.length, page, pages, patch])
 
   useEffect(() => {
     if (!focused) return
     document.getElementById(`tl-${focused.id}`)?.scrollIntoView({ block: 'center' })
   }, [focused?.id])
 
-  const headRef = useRef<HTMLHeadingElement>(null)
-  const goPage = (n: number) => {
-    patch({ page: n > 1 ? n : undefined })
-    // Keep the reader's place: the new page starts at its top, focus on the list.
-    requestAnimationFrame(() => { headRef.current?.focus(); headRef.current?.scrollIntoView({ block: 'start' }) })
-  }
   const filtered = need !== 'all' || when !== 'all'
-  const showNew = () => { setAnchor(undefined); patch({ page: undefined }) }
 
   const days = new Map<string, Item[]>()
   for (const it of items) {
@@ -74,18 +45,6 @@ export function Timeline({ search, patch, onOpen }: {
     days.set(d, [...(days.get(d) ?? []), it])
   }
   const t = today()
-  // The range, page and size shown come from the answer on screen, so while the
-  // next answer loads they still agree with the rows (not with the URL).
-  const shownSize = data?.limit ?? size
-  const shownPage = data ? Math.floor(data.offset / shownSize) + 1 : page
-  const shownPages = Math.max(1, Math.ceil(matched / shownSize))
-  const from = matched ? (data?.offset ?? 0) + 1 : 0
-  const to = Math.min(matched, (data?.offset ?? 0) + items.length)
-  const err = feed.isError ? feed.error.message : ''
-  const unreachable = feed.error instanceof TypeError
-  const serverError = /^\d{3} from shield/.test(err)
-  const capped = data?.capacity != null && data.total >= data.capacity
-
   return (
     <div className="shield-timeline">
       {focus && data && !focused && (
@@ -101,34 +60,9 @@ export function Timeline({ search, patch, onOpen }: {
         <NeedFilter value={need} onChange={n => patch({ need: n === 'all' ? undefined : n, page: undefined })} />
       </div>
 
-      {!!data?.newer && (
-        <Banner tone="info" className="tl-new" role="status">
-          <span>{plural(data.newer, 'new event')} since you opened this page.</span>
-          <button className="btn sm" onClick={showNew}>Show them</button>
-        </Banner>
-      )}
+      <NewRows n={data?.newer ?? 0} noun="new event" onShow={showNew} />
 
-      {feed.isError && (
-        <p className="empty-row" role="alert">
-          {unreachable ? (
-            <>
-              <b>Can't reach Shield on this Mac.</b>
-              Start it with <code className="mono">byoai-shield</code>, then try again.
-            </>
-          ) : serverError ? (
-            <>
-              <b>Shield answered with an error ({err.slice(0, 3)}).</b>
-              Try again. If it keeps failing, restart <code className="mono">byoai-shield</code>.
-            </>
-          ) : (
-            <>
-              <b>Shield sent an answer this page can't read.</b>
-              Restart <code className="mono">byoai-shield</code> and reload. If it continues, update the app and Shield to the same version.
-            </>
-          )}
-          <button className="btn sm" onClick={() => void feed.refetch()}>Try again</button>
-        </p>
-      )}
+      {error && <FeedError error={error.kind} status={'status' in error ? error.status : undefined} onRetry={() => void feed.refetch()} />}
       {feed.isPending && <p className="empty-row" role="status">Loading the timeline…</p>}
       {data && matched === 0 && (
         <p className="empty-row">
@@ -178,8 +112,8 @@ export function Timeline({ search, patch, onOpen }: {
       </div>
 
       {data && matched > 0 && (
-        <Pager page={shownPage} pages={shownPages} from={from} to={to} total={matched} pageSize={shownSize} noun={filtered ? 'matching events' : 'events'}
-          onPage={goPage} onPageSize={s => patch({ size: s === DEFAULT_PAGE_SIZE ? undefined : s, page: undefined })}
+        <Pager page={shown.page} pages={shown.pages} from={shown.from} to={shown.to} total={matched} pageSize={shown.size} noun={filtered ? 'matching events' : 'events'}
+          onPage={goPage} onPageSize={setSize}
           note={capped ? `Shield lists its latest ${data.capacity?.toLocaleString()} events. Older ones stay in the ledger file and its seal chain.` : undefined} />
       )}
     </div>

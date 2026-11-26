@@ -1894,6 +1894,27 @@ def _need_ok(it: dict, need: str) -> bool:
     return True
 
 
+def _search_ok(it: dict, q: str) -> bool:
+    """Case-insensitive match on what a row shows: what happened, the app, the
+    reply preview and each rule's name and its plain-words label."""
+    hay = " ".join([str(it.get("verb") or ""), str(it.get("surface") or ""),
+                    str(it.get("reply") or ""),
+                    *(f"{f['rule']} {RULE_LABEL.get(f['rule'], f['rule'].replace('_', ' '))}"
+                      for f in it["flags"])]).lower()
+    return q in hay
+
+
+def _summary(items, since: str) -> dict:
+    """Exact figures for the rows dated ``since`` or later, over every row Shield
+    holds (never one page): what the Trust screen's stat strip shows."""
+    rows = [it for it in items if not since or (it.get("date") or "")[:10] >= since]
+    return {"checked": len(rows),
+            "flagged": sum(it["tier"] == "warn" for it in rows),
+            "high_risk": sum(it["tier"] == "bad" for it in rows),
+            "mcp": sum(it.get("source") == "mcp" for it in rows),
+            "browser": sum(it.get("source") == "browser" for it in rows)}
+
+
 def _public_item(it: dict) -> dict:
     """An item as the API serves it: private keys dropped, flag tiers in the
     contract vocabulary. Stored items and their seals keep the raw tiers."""
@@ -1910,8 +1931,14 @@ def feed_page(feed: Feed, qs: dict) -> dict:
     ``since`` (local date, YYYY-MM-DD, inclusive) filter before paging, so
     ``matched`` and ``has_more`` describe the filtered list; ``anchor`` (an
     interaction id) hides everything newer than that row, so page 3 keeps its
-    rows while new interactions arrive (``newer`` counts the hidden ones);
-    ``focus`` (an id) also returns that one row as ``focus_item``.
+    rows while new interactions arrive (``newer`` counts the hidden ones that
+    match the filters);
+    ``focus`` (an id) also returns that one row as ``focus_item``. ``sealed``
+    (1) keeps only rows that carry a seal (the Ledger's list) and ``q`` keeps
+    rows whose text, app or rule names contain it; both filter before paging.
+    ``summary_since`` (a local date, or empty for all time) adds ``summary``:
+    exact counts over every row held since that date, whatever the page,
+    filters or anchor.
     ``newest_id`` is the newest row overall (the anchor a client pins).
     ``total`` is every interaction Shield holds, and ``capacity`` the most it
     holds: older rows stay in the ledger file and the seal chain but are not
@@ -1923,23 +1950,34 @@ def feed_page(feed: Feed, qs: dict) -> dict:
     since = qs.get("since", [""])[0][:10]
     anchor = qs.get("anchor", [""])[0]
     focus = qs.get("focus", [""])[0]
+    sealed = qs.get("sealed", [""])[0].lower() in ("1", "true", "yes")
+    text = qs.get("q", [""])[0].strip().lower()[:200]
+    def keep(it: dict) -> bool:
+        return bool(_need_ok(it, need)
+                    and (not sealed or it.get("seal"))
+                    and (not text or _search_ok(it, text))
+                    and (not since or (it.get("date") or "")[:10] >= since))
+
     items = list(feed.items)
     newer = 0
     if anchor:
         idx = next((i for i, it in enumerate(items) if it.get("id") == anchor), None)
         if idx is not None:
-            newer, items = idx, items[idx:]
-    pool = [it for it in items if _need_ok(it, need)
-            and (not since or (it.get("date") or "")[:10] >= since)]
+            # ``newer`` counts the hidden rows this view would have shown.
+            newer, items = sum(1 for it in items[:idx] if keep(it)), items[idx:]
+    pool = [it for it in items if keep(it)]
     page = [_public_item(it) for it in pool[offset:offset + limit]]
     focus_item = next((_public_item(it)
                        for it in feed.items if focus and it.get("id") == focus), None)
-    return {"counts": feed.counts(),
-            "total": len(feed.items), "offset": offset, "limit": limit,
-            "has_more": offset + limit < len(pool), "items": page,
-            "matched": len(pool), "newer": newer,
-            "capacity": feed.items.maxlen, "focus_item": focus_item,
-            "newest_id": feed.items[0].get("id") if feed.items else None}
+    out = {"counts": feed.counts(),
+           "total": len(feed.items), "offset": offset, "limit": limit,
+           "has_more": offset + limit < len(pool), "items": page,
+           "matched": len(pool), "newer": newer,
+           "capacity": feed.items.maxlen, "focus_item": focus_item,
+           "newest_id": feed.items[0].get("id") if feed.items else None}
+    if "summary_since" in qs:
+        out["summary"] = _summary(feed.items, qs["summary_since"][0][:10])
+    return out
 
 
 class Feed:

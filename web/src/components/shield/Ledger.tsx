@@ -1,19 +1,37 @@
 /**
- * Ledger: every sealed entry with its receipt, the chain export, and (in the
- * rail) the offline check anyone can run on a receipt without trusting us.
+ * Ledger: the sealed entries Shield holds, one page at a time, with each
+ * receipt, the chain export, and (in the rail) the offline check anyone can
+ * run on a receipt without trusting us. Paging, the two filters and "sealed
+ * only" run on the server and live in the URL
+ * (`?tab=ledger&page=2&size=50&when=7&need=warn`).
  */
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { fetchVerify } from '@/api/shield'
 import { checkReceipt } from '@/lib/receipt'
 import type { ReceiptCheck } from '@/lib/receipt'
-import { Banner, FileEvidence, HashChip, ReceiptButton, SectionHead, downloadBlob, humanize, plural, tierLabel, tierTagClass, useFeed } from './shared'
-import type { Item } from './shared'
+import type { ShieldSearch } from '@/routes/shield'
+import { FeedError, NewRows, usePagedFeed } from './paging'
+import type { PatchSearch } from './paging'
+import {
+  Banner, DEFAULT_PAGE_SIZE, FileEvidence, HashChip, NeedFilter, Pager, ReceiptButton, SectionHead, WhenFilter, downloadBlob, humanize, plural, tierLabel, tierTagClass, whenStart,
+} from './shared'
+import type { Item, Need, When } from './shared'
 
-export function Ledger({ onOpen }: { onOpen: (it: Item) => void }) {
+export function Ledger({ search, patch, onOpen }: {
+  search: ShieldSearch
+  patch: PatchSearch
+  onOpen: (it: Item) => void
+}) {
   const verify = useQuery({ queryKey: ['shield-verify'], queryFn: fetchVerify, refetchInterval: 10_000 })
-  const feed = useFeed()
-  const sealed = (feed.data?.items ?? []).filter(it => it.seal)
+  const need: Need = search.need ?? 'all'
+  const when: When = search.when ?? 'all'
+  const size = search.size ?? DEFAULT_PAGE_SIZE
+  const page = search.page ?? 1
+  const { feed, data, items: sealed, matched, shown, headRef, goPage, showNew, setSize, capped, error } = usePagedFeed({
+    scope: 'ledger', page, size, patch, query: { sealed: true, need, since: whenStart(when) },
+  })
+  const filtered = need !== 'all' || when !== 'all'
   const v = verify.data
 
   // Fetched at click time: the export must match the chain now, not the
@@ -57,14 +75,17 @@ export function Ledger({ onOpen }: { onOpen: (it: Item) => void }) {
           signed with this Mac's device key. Edit an entry later and its
           receipt fails verification.
         </p>
-        {feed.isError && (
-          <p className="empty-row" role="alert">
-            <b>Can't reach Shield on this Mac.</b>
-            Start it with <code className="mono">byoai-shield</code>, then reload this page.
-          </p>
-        )}
+        <div className="filterbar">
+          <WhenFilter value={when} onChange={w => patch({ when: w === 'all' ? undefined : w, page: undefined })} />
+          <NeedFilter value={need} onChange={n => patch({ need: n === 'all' ? undefined : n, page: undefined })} />
+        </div>
+        <NewRows n={data?.newer ?? 0} noun="new sealed record" onShow={showNew} />
+        {error && <FeedError error={error.kind} status={'status' in error ? error.status : undefined} onRetry={() => void feed.refetch()} />}
         {feed.isPending && <p className="empty-row" role="status">Loading sealed entries…</p>}
-        <div className="table-scroll">
+        <h2 className="sr-only" tabIndex={-1} ref={headRef}>
+          Sealed entries, page {shown.page} of {shown.pages}
+        </h2>
+        <div className={`table-scroll${feed.isPlaceholderData ? ' tl-busy' : ''}`} aria-busy={feed.isFetching}>
           <table className="shield-table">
             <thead>
               <tr><th>When</th><th>App</th><th>What happened</th><th>Result</th><th>Seal</th><th aria-label="Receipt" /></tr>
@@ -83,10 +104,21 @@ export function Ledger({ onOpen }: { onOpen: (it: Item) => void }) {
             </tbody>
           </table>
         </div>
-        {feed.data && sealed.length === 0 && (
+        {data && matched === 0 && (
           <p className="empty-row">
-            Nothing sealed yet. Everything Shield checks appears here with its seal and a receipt.
+            {filtered
+              ? <>
+                <b>No sealed records match these filters.</b>
+                Filters only change this view.
+                <button className="btn sm" onClick={() => patch({ need: undefined, when: undefined, page: undefined })}>Clear filters</button>
+              </>
+              : 'Nothing sealed yet. Everything Shield checks appears here with its seal and a receipt.'}
           </p>
+        )}
+        {data && matched > 0 && (
+          <Pager page={shown.page} pages={shown.pages} from={shown.from} to={shown.to} total={matched} pageSize={shown.size}
+            noun={filtered ? 'matching sealed records' : 'sealed records'} onPage={goPage} onPageSize={setSize}
+            note={capped ? `Shield lists the sealed records of its latest ${data.capacity?.toLocaleString()} events. Older ones stay in the ledger file and its seal chain.` : undefined} />
         )}
       </div>
       <aside className="shield-rail">
