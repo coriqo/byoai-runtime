@@ -183,6 +183,36 @@ With the guard on, every body-carrying request is checked, not only chat paths: 
 
 A blocked request gets `403` with `type: coriqo_shield_blocked`, `rules` and `labels` (Anthropic: `{"type":"error","error":{...}}`; OpenAI: `{"error":{"message","type","code":"shield_blocked",...}}`). The secret tier blocks by default, so a policy with `mode: observe` never stops anything. Recorder rows are kind `shield_guard`: `guard_mode`, `provider`, `path`, `action`, `forwarded`, `redacted`, `rules`, `chars`, `text_hmac`, `rules_version`. The Python middleware is `byoai.shield_guard.fastapi.ShieldGuardMiddleware(app, *, paths=, policy=, mode=, on_warn=, max_body=, key_path=, app_name=)`; a body over `max_body` (8 MB) is refused.
 
+### Shield enrolment by device-management tool (`byoai-shield enrol`)
+
+`byoai-shield enrol` enrols this computer without opening the Shield window, so
+Jamf, Intune, Kandji or a startup script can do it. Run it as the user whose
+Shield it sets up (the device key lives in that user's `~/.byoai/shield`).
+Exit 0 = enrolled or already enrolled, 1 = the server refused, 2 = missing or
+untrusted input (the message says what to set). The token is never printed or
+logged. A token is single-use: each computer needs its own.
+
+Token and server address come from, in order: `--token` / `--server`
+(visible in the process list; testing only), `--token-file PATH`, then a managed
+location the admin's tool writes:
+
+| Platform | Location | Keys |
+|---|---|---|
+| Windows | registry `HKLM\SOFTWARE\Policies\Coriqo\Shield` | `EnrolToken`, `ServerUrl` (REG_SZ) |
+| macOS | managed preference `/Library/Managed Preferences/com.coriqo.shield.plist` | `EnrolToken`, `ServerUrl` |
+| macOS | file `/Library/Application Support/Coriqo/Shield/enrol.json` | `token`, `server_url` |
+| Linux | file `/etc/coriqo/shield/enrol.json` | `token`, `server_url` |
+| Windows | file `%ProgramData%\Coriqo\Shield\enrol.json` | `token`, `server_url` |
+
+A managed file or preference must not be writable by group or other and must be
+owned by root or the running user, otherwise the command refuses and says why
+(a server address anyone could edit would let them collect the token). The
+server address must be `https://` (plain `http://` only to this computer).
+Other flags: `--force` (enrol again), `--no-managed`, `--jitter-seconds N`
+(wait a random 0..N seconds, at most 900, so a push to many computers does not
+arrive together). A busy server (HTTP 429/502/503/504) is retried up to three
+times with backoff. Step-by-step for Jamf and Intune: `docs/msp-zero-touch.md`.
+
 ### Shield managed mode
 
 Once enrolled with Coriqo, Shield can be put into managed mode: a Coriqo
