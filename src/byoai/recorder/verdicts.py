@@ -843,19 +843,35 @@ class VerdictShipper:
         try:
             body = await self._client.record_verdict_batch(
                 batch.agent_id,
-                verdicts=list(batch.verdicts),
+                verdicts=[_for_the_wire(v) for v in batch.verdicts],
                 batch_key=batch.batch_key,
             )
         except Exception as exc:  # noqa: BLE001 - status inspected below
             if _is_unprocessable(exc):
-                log.error(
-                    "coriqo: Coriqo refused verdict batch %s for agent %s and it "
-                    "will not be resent (it stays in the local ledger and outbox): %s",
+                status = getattr(exc, "status_code", None)
+                fields = _refused_fields(exc)
+                # Status, field names and a count only: a refusal body can echo
+                # the rejected values back, and none of those belong in a log.
+                summary = (
+                    f"status {status if status is not None else 'n/a'}, "
+                    f"field {fields}, {len(batch)} verdict(s)"
+                )
+                log.warning(
+                    "coriqo: Coriqo refused verdict batch %s for agent %s (%s); "
+                    "it will not be resent and stays in the local ledger and "
+                    "outbox (state 'rejected')",
                     batch.batch_key,
                     batch.agent_id,
-                    exc,
+                    summary,
                 )
-                self._outbox.mark_rejected(batch.ids, str(exc))
+                # A plain-text reason from the server stays in the local note (so an
+                # operator can read why); a structured list may echo values, so
+                # only the summary is kept for it.
+                reason = getattr(exc, "detail", None)
+                note = f"refused: {summary}"
+                if isinstance(reason, str) and reason:
+                    note = f"{note}: {reason}"
+                self._outbox.mark_rejected(batch.ids, note)
                 return VerdictShipResult(
                     agent_id=batch.agent_id,
                     batch_key=batch.batch_key,
@@ -948,10 +964,57 @@ def _int(value: Any) -> int:
         return 0
 
 
+#: 4xx statuses that can clear on their own (credentials refreshed, a role
+#: granted, a lock released, a rate limit lapsing), so the batch stays claimed
+#: and is resent. Every other 4xx says the batch itself is wrong.
+_RETRYABLE_4XX = frozenset({401, 403, 408, 409, 423, 425, 429})
+
+#: Coriqo caps ``mandate_version_id`` at this many characters (a UUID).
+_MAX_WIRE_MANDATE_VERSION_ID = 36
+
+
+def _for_the_wire(verdict: dict[str, Any]) -> dict[str, Any]:
+    """One outbox row as Coriqo's batch endpoint receives it.
+
+    A mandate read from a file is identified by ``sha256:<64 hex>``, which is
+    not a Coriqo mandate version and is longer than the endpoint accepts (a 422
+    that dropped the whole batch). It goes out as ``None``, which Coriqo counts
+    as unversioned. Wire only: the outbox row and the ledger keep the full
+    hash, so the device record still names the exact file.
+    """
+    version = verdict.get("mandate_version_id")
+    if isinstance(version, str) and (
+        version.startswith("sha256:") or len(version) > _MAX_WIRE_MANDATE_VERSION_ID
+    ):
+        return {**verdict, "mandate_version_id": None}
+    return verdict
+
+
+def _refused_fields(exc: Exception) -> str:
+    """Field names a refusal points at, never their values."""
+    detail = getattr(exc, "detail", None)
+    names: set[str] = set()
+    if isinstance(detail, list):
+        for item in detail:
+            loc = item.get("loc") if isinstance(item, dict) else None
+            if isinstance(loc, (list, tuple)):
+                strs = [p for p in loc if isinstance(p, str) and p != "body"]
+                if strs:
+                    names.add(strs[-1])
+    return ",".join(sorted(names)) if names else "unknown"
+
+
 def _is_unprocessable(exc: Exception) -> bool:
     """Whether ``exc`` says the batch is malformed rather than that Coriqo is
-    busy — a 422 from the server, or the client refusing to build the request
-    at all. Both are permanent for these rows, and both must park rather than
-    propagate: a batch that keeps failing stays claimed, and everything queued
-    behind it never ships."""
-    return isinstance(exc, ValueError) or getattr(exc, "status_code", None) == 422
+    busy — a permanent 4xx from the server (422 above all), or the client
+    refusing to build the request at all. Both are permanent for these rows,
+    and both must park rather than propagate: a batch that keeps failing stays
+    claimed, and everything queued behind it never ships."""
+    if isinstance(exc, ValueError):
+        return True
+    status = getattr(exc, "status_code", None)
+    return (
+        isinstance(status, int)
+        and 400 <= status < 500
+        and status not in _RETRYABLE_4XX
+    )
