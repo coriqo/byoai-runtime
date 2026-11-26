@@ -199,9 +199,9 @@ def parse_record(message: str, *, ingestion_ms: int | None = None) -> Invocation
     timestamp = _parse_timestamp(data.get("timestamp"))
     if not isinstance(request_id, str) or not request_id or timestamp is None:
         raise RecordRejected("malformed")
-    side_in = data.get("input") if isinstance(data.get("input"), dict) else {}
-    side_out = data.get("output") if isinstance(data.get("output"), dict) else {}
-    identity = data.get("identity") if isinstance(data.get("identity"), dict) else {}
+    side_in: dict[str, Any] = data["input"] if isinstance(data.get("input"), dict) else {}
+    side_out: dict[str, Any] = data["output"] if isinstance(data.get("output"), dict) else {}
+    identity: dict[str, Any] = data["identity"] if isinstance(data.get("identity"), dict) else {}
     return InvocationRecord(
         raw_message=message,
         request_id=request_id,
@@ -560,7 +560,7 @@ def _cited_tool_use_ids(request: dict) -> list[str]:
     ]
 
 
-def _tool_config(inp: Any, shape: str) -> tuple[Any, list[str], str | None, int]:
+def _tool_config(inp: Any, shape: str | None) -> tuple[Any, list[str], str | None, int]:
     """(config to digest, tool names offered, tool choice, names dropped for the pattern)."""
     if not isinstance(inp, dict):
         return None, [], None, 0
@@ -858,10 +858,13 @@ def _response_partials(
 
 def _index_call(partial: PartialEvent, sealer: _Sealer, index: LinkIndex) -> None:
     """Remember a sealed tool call, so the record carrying its result can join this run."""
+    tool_use_id = partial.tool_use_id
+    if not tool_use_id:
+        return
     record = sealer.record
     index.put(
         IndexedCall(
-            tool_use_id=partial.tool_use_id,
+            tool_use_id=tool_use_id,
             account=record.account_id,
             region=record.region,
             principal=record.principal,

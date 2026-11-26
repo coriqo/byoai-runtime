@@ -60,7 +60,7 @@ def make_redis_client(
             )
         from redis.asyncio.sentinel import Sentinel
 
-        sentinel = Sentinel([tuple(s) for s in sentinels], **client_kwargs)
+        sentinel = Sentinel([(str(s[0]), int(s[1])) for s in sentinels], **client_kwargs)
         return sentinel.master_for(service_name)
     raise ConfigurationError(
         f"unknown redis mode {mode!r} (expected standalone, cluster, or sentinel)"

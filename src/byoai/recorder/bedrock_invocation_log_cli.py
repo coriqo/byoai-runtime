@@ -53,7 +53,7 @@ DRAIN_SECONDS = 60.0
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="byoai-bedrock-log-reader",
-        description=__doc__.split("\n\n")[0],
+        description=(__doc__ or "").split("\n\n")[0],
         epilog="Exit codes: 0 done (or paused), 1 the sweep or the check failed, "
         "2 a setting is missing or not valid, 3 another reader holds this recorder directory.",
     )
@@ -192,7 +192,7 @@ def _check(source: AwsLogSource) -> int:
         return 1
     print(f"ok    log group {described['arn']}")
     config = source.logging_configuration()
-    if config == "unknown":
+    if isinstance(config, str):
         print("info  logging configuration: not readable with this role (optional permission)")
     elif not config.get("enabled"):
         print("FAIL  model invocation logging is off in this account and region")
