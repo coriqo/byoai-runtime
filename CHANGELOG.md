@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- The device-signed single-trace call (`record_signed_trace`) now takes an
+  optional `payload_mode` and sends `X-Coriqo-Payload-Mode` like
+  `record_trace` and `record_traces`. It sent no header before, so Coriqo could
+  not tell a `redacted` or `hash-only` trace from a `full` one. Against a
+  Coriqo that does not read the header yet it is ignored.
 - One older ledger row no longer blanks the Shield window. Rows from older
   versions (tool calls with `input_preview`, old-format prompts) carried the
   flag tiers `secret` and `flag`, which the window's API contract does not

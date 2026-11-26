@@ -38,6 +38,7 @@ from byoai.recorder.coriqo_async import (
 )
 from byoai.recorder.identity import CoriqoIdentity
 from byoai.recorder.keys import load_or_create_device_key
+from byoai.recorder.redact import PAYLOAD_MODE_HEADER, PayloadMode, payload_mode_headers
 
 _AGENT = "coriqo-agent-1"
 _BASE = "https://coriqo.test"
@@ -924,3 +925,37 @@ def test_wire_helper_does_not_touch_the_local_value():
     version = _FILE_MANDATE_ID
     assert wire_mandate_version_id(version) is None
     assert version == "sha256:" + "ab" * 32  # the caller's (ledger's) copy is unchanged
+
+
+# -- device-signed single trace declares its payload mode -------------------
+
+
+@pytest.mark.parametrize("mode", [PayloadMode.REDACTED, PayloadMode.HASH_ONLY, "full"])
+async def test_signed_trace_declares_the_payload_mode(tmp_path, mode):
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return _json({"trace_id": "t1"})
+
+    client = _device_client(handler, tmp_path, enrolled_tenant="acme_bank")
+    await client.record_signed_trace(_AGENT, output=None, payload_mode=mode)
+    headers = seen[0].headers
+    assert dict(payload_mode_headers(mode)) == {
+        PAYLOAD_MODE_HEADER: headers[PAYLOAD_MODE_HEADER]
+    }
+    assert headers[PAYLOAD_MODE_HEADER] == PayloadMode(mode).value
+    # The method ships the caller's body as given; shaping is the caller's job.
+    assert json.loads(seen[0].content)["output"] is None
+
+
+async def test_signed_trace_without_a_mode_sends_no_header(tmp_path):
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return _json({"trace_id": "t1"})
+
+    client = _device_client(handler, tmp_path, enrolled_tenant="acme_bank")
+    await client.record_signed_trace(_AGENT, output="x")
+    assert PAYLOAD_MODE_HEADER not in seen[0].headers
