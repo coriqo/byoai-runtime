@@ -36,6 +36,7 @@ from datetime import datetime, timezone
 
 from .canonical import canonicalize, sha256_hex
 from .ledger import Ledger, LedgerEntry
+from .redact import RUNTIME_AUTHORED
 from .schema import (
     EVENT_SCHEMA_VERSION,
     AgentEvent,
@@ -198,7 +199,8 @@ def write_disabled_marker(
             and last.event.payload.get("interval_s") == 0:
         return None
     return ledger.append_stamped(
-        lambda last_seq: build_heartbeat_event(device_id, last_seq, 0, wall_clock())
+        lambda last_seq: build_heartbeat_event(device_id, last_seq, 0, wall_clock()),
+        payload_mode=RUNTIME_AUTHORED,
     )
 
 
@@ -282,7 +284,7 @@ class HeartbeatEmitter:
                 int(self._mono() * 1e9),
             )
 
-        entry = self._ledger.append_stamped(build)
+        entry = self._ledger.append_stamped(build, payload_mode=RUNTIME_AUTHORED)
         if entry is not None and self._on_entry is not None:
             try:
                 self._on_entry(entry)

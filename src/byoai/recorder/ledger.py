@@ -34,12 +34,13 @@ import logging
 import os
 import sqlite3
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from byoai.recorder.canonical import canonicalize, sha256_hex
+from byoai.recorder.redact import RUNTIME_AUTHORED
 from byoai.recorder.schema import (
     EVENT_SCHEMA_VERSION,
     AgentEvent,
@@ -91,6 +92,14 @@ CREATE TABLE IF NOT EXISTS agent_events (
 CREATE INDEX IF NOT EXISTS idx_agent_events_session ON agent_events(session_id);
 CREATE INDEX IF NOT EXISTS idx_agent_events_tool_use ON agent_events(tool_use_id);
 
+-- W8: the payload mode each row was recorded in. Kept beside agent_events, not in it, so the
+-- event table, and every verifier that rebuilds an event from its columns, is unchanged.
+-- One row per seq; no row for an entry written before the mode was stored.
+CREATE TABLE IF NOT EXISTS agent_event_payload_modes (
+    seq           INTEGER PRIMARY KEY,
+    payload_mode  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS checkpoints (
     seq_end     INTEGER PRIMARY KEY,
     device_id   TEXT NOT NULL,
@@ -112,6 +121,23 @@ CREATE TABLE IF NOT EXISTS sync_state (
     updated_at                   TEXT NOT NULL
 );
 """
+
+
+#: agent_events' columns in the order _row_to_entry reads them. Named, not ``*``, so a column a
+#: ledger file has beyond these cannot shift what is read.
+_EVENT_COLUMNS = (
+    "seq", "event_id", "schema_version", "device_id", "session_id", "kind", "ts_device",
+    "ts_monotonic_ns", "tool_use_id", "tool_name", "payload", "payload_hash", "model", "provider",
+    "event_digest", "prev_hash", "entry_hash", "trace_id", "span_id", "parent_span_id",
+    "continues_from",
+)
+
+#: Every read of entries: the event row and, beside it, the payload mode it was recorded in (W8).
+#: A subquery rather than a join, so the WHERE clauses callers append stay unambiguous.
+_SELECT_ENTRIES = (
+    "SELECT " + ", ".join(_EVENT_COLUMNS) + ", (SELECT m.payload_mode FROM "
+    "agent_event_payload_modes m WHERE m.seq = agent_events.seq) FROM agent_events"
+)
 
 
 class LedgerHeadError(RuntimeError):
@@ -137,6 +163,11 @@ class LedgerEntry:
     entry_hash: str
     event_digest: str
     event: AgentEvent
+    #: The payload mode applied when this row was recorded (W8): "hash-only", "redacted", "full", or
+    #: "runtime" for a payload the runtime authored. None for rows written before the mode
+    #: was stored.
+    #: Shipped beside the event, outside event_digest and entry_hash.
+    payload_mode: str | None = None
 
 
 def compute_entry_hash(prev_hash: str, seq: int, digest: str) -> str:
@@ -215,8 +246,38 @@ class Ledger:
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_agent_events_trace ON agent_events(trace_id)"
         )
+        self._move_payload_mode_column()
 
         self._head, self._next_seq = self._resume()
+
+    def _move_payload_mode_column(self) -> None:
+        """A ledger written by the first W8 build kept the payload mode in an agent_events
+        column, which a verifier released before W8 takes into the event it re-hashes. Copy the
+        modes into agent_event_payload_modes and drop the column, so the file verifies again."""
+        columns = {row[1] for row in self._conn.execute("PRAGMA table_info(agent_events)")}
+        if "payload_mode" not in columns:
+            return
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO agent_event_payload_modes (seq, payload_mode) "
+                "SELECT seq, payload_mode FROM agent_events WHERE payload_mode IS NOT NULL"
+            )
+            self._conn.execute("ALTER TABLE agent_events DROP COLUMN payload_mode")
+        except sqlite3.OperationalError as exc:
+            self._conn.execute("ROLLBACK")
+            # SQLite before 3.35 cannot drop a column. Reads name their columns, so the ledger
+            # still works here; only a verifier released before W8 would reject this file.
+            log.warning(
+                "ledger %s keeps the payload_mode column in agent_events (%s); "
+                "a verifier released before W8 will not verify it",
+                self.path, exc,
+            )
+            return
+        except BaseException:
+            self._conn.execute("ROLLBACK")
+            raise
+        self._conn.execute("COMMIT")
 
     # ---------------------------------------------------------------- state
 
@@ -345,7 +406,7 @@ class Ledger:
         prev, expected = known_hash, known_seq + 1
         bad = None
         for r in self._conn.execute(
-            "SELECT * FROM agent_events WHERE seq > ? ORDER BY seq", (known_seq,)
+            _SELECT_ENTRIES + " WHERE seq > ? ORDER BY seq", (known_seq,)
         ).fetchall():
             next_hash = None
             try:
@@ -429,13 +490,14 @@ class Ledger:
 
     # --------------------------------------------------------------- append
 
-    def append(self, event: AgentEvent) -> LedgerEntry | None:
-        return self._append(event, None)
+    def append(self, event: AgentEvent, *, payload_mode: str | None = None) -> LedgerEntry | None:
+        return self._append(event, None, payload_mode)
 
     def _append(
         self,
         event: AgentEvent | None,
         builder: Callable[[int], AgentEvent] | None,
+        payload_mode: str | None = None,
     ) -> LedgerEntry | None:
         """Assign a seq, link it into the chain, and commit it in one transaction.
 
@@ -482,27 +544,27 @@ class Ledger:
             if self._pending_failures:
                 self._drain_failures()
             try:
-                return self._append_locked(event, builder)
+                return self._append_locked(event, builder, payload_mode=payload_mode)
             except Exception as exc:  # noqa: BLE001 - policy decision below
                 self._on_write_failure(_for_log(), exc)
                 return None
 
     def append_stamped(
-        self, build: Callable[[int], AgentEvent]
+        self, build: Callable[[int], AgentEvent], *, payload_mode: str | None = None
     ) -> LedgerEntry | None:
         """Append the event ``build(last_seq)`` returns. ``last_seq`` is the
         seq just before the one this entry is written at (0 when empty). It is
         computed inside the write, after any queued ``record_failure`` marker
         has been written and after a stale-head resync, so it is exactly
         ``seq - 1`` of the stored entry. Same failure policy as :meth:`append`."""
-        return self._append(None, build)
+        return self._append(None, build, payload_mode)
 
     def last_entry_of_kind(self, kind: Any) -> LedgerEntry | None:
         """The newest entry whose ``kind`` matches, or ``None``."""
         with self._lock:
             self._require_open()
             row = self._conn.execute(
-                "SELECT * FROM agent_events WHERE kind = ? ORDER BY seq DESC LIMIT 1",
+                _SELECT_ENTRIES + " WHERE kind = ? ORDER BY seq DESC LIMIT 1",
                 (_kind_value(kind),),
             ).fetchone()
         return _row_to_entry(row) if row is not None else None
@@ -511,6 +573,8 @@ class Ledger:
         self,
         event: AgentEvent | None,
         builder: Callable[[int], AgentEvent] | None = None,
+        *,
+        payload_mode: str | None = None,
     ) -> LedgerEntry:
         # Up to two attempts: the in-memory (_head, _next_seq) pair can go
         # stale if something else advanced the on-disk chain out from under
@@ -571,6 +635,14 @@ class Ledger:
                         stamped.continues_from,
                     ),
                 )
+                # Same transaction as the row: a crash leaves both or neither. A mode left at
+                # this seq by anything else is cleared, so it cannot attach to this event.
+                self._conn.execute("DELETE FROM agent_event_payload_modes WHERE seq = ?", (seq,))
+                if payload_mode is not None:
+                    self._conn.execute(
+                        "INSERT INTO agent_event_payload_modes (seq, payload_mode) VALUES (?, ?)",
+                        (seq, payload_mode),
+                    )
             except sqlite3.IntegrityError:
                 try:
                     self._conn.execute("ROLLBACK")
@@ -616,6 +688,7 @@ class Ledger:
                     entry_hash=entry_hash,
                     event_digest=digest,
                     event=stamped,
+                    payload_mode=payload_mode,
                 )
         raise AssertionError("unreachable: loop always returns or raises")
 
@@ -697,7 +770,7 @@ class Ledger:
             continues_from=None,
         )
         try:
-            self._append_locked(marker)
+            self._append_locked(marker, payload_mode=RUNTIME_AUTHORED)
         except Exception as exc:  # noqa: BLE001 - never raise from the marker path
             log.error("could not write record_failure marker: %s", exc)
             return
@@ -710,10 +783,32 @@ class Ledger:
         with self._lock:
             self._require_open()
             rows = self._conn.execute(
-                "SELECT * FROM agent_events WHERE seq >= ? AND seq <= ? ORDER BY seq",
+                _SELECT_ENTRIES + " WHERE seq >= ? AND seq <= ? ORDER BY seq",
                 (start, end),
             ).fetchall()
         return [_row_to_entry(r) for r in rows]
+
+    def existing_event_ids(self, event_ids: Iterable[str]) -> set[str]:
+        """Which of ``event_ids`` are already in the ledger.
+
+        For a source that derives ids from what it reads (the Bedrock invocation log reader, W10):
+        checking before appending keeps a re-read record from ever reaching the UNIQUE
+        constraint, so a re-sweep writes no ``record_failure`` marker and never trips strict
+        mode. One query per 500 ids, under the ledger lock.
+        """
+        wanted = list(dict.fromkeys(event_ids))
+        found: set[str] = set()
+        with self._lock:
+            self._require_open()
+            for start in range(0, len(wanted), 500):
+                chunk = wanted[start:start + 500]
+                placeholders = ",".join("?" for _ in chunk)
+                rows = self._conn.execute(
+                    f"SELECT event_id FROM agent_events WHERE event_id IN ({placeholders})",  # noqa: S608 - placeholders only
+                    chunk,
+                ).fetchall()
+                found.update(r[0] for r in rows)
+        return found
 
     def read_session(self, session_id: str) -> list[LedgerEntry]:
         """Every entry belonging to one session, in seq order.
@@ -727,7 +822,7 @@ class Ledger:
         with self._lock:
             self._require_open()
             rows = self._conn.execute(
-                "SELECT * FROM agent_events WHERE session_id = ? ORDER BY seq",
+                _SELECT_ENTRIES + " WHERE session_id = ? ORDER BY seq",
                 (session_id,),
             ).fetchall()
         return [_row_to_entry(r) for r in rows]
@@ -742,7 +837,7 @@ class Ledger:
         """
         with self._lock:
             self._require_open()
-            cur = self._conn.execute("SELECT * FROM agent_events ORDER BY seq")
+            cur = self._conn.execute(_SELECT_ENTRIES + " ORDER BY seq")
         try:
             while True:
                 with self._lock:
@@ -795,7 +890,7 @@ class Ledger:
         """
         with self._lock:
             self._require_open()
-            sql = "SELECT * FROM agent_events WHERE seq > ? ORDER BY seq"
+            sql = _SELECT_ENTRIES + " WHERE seq > ? ORDER BY seq"
             params: tuple[Any, ...] = (self._get_synced_up_to_locked(),)
             if limit is not None:
                 sql += " LIMIT ?"
@@ -1093,6 +1188,10 @@ def _with_seq(event: AgentEvent, seq: int) -> AgentEvent:
 
 
 def _row_to_entry(row: tuple) -> LedgerEntry:
+    # A row read with _SELECT_ENTRIES: the _EVENT_COLUMNS, then the payload mode from
+    # agent_event_payload_modes (NULL when the entry has none).
+    payload_mode = row[21]
+    row = tuple(row[:21])
     (
         seq,
         event_id,
@@ -1148,4 +1247,5 @@ def _row_to_entry(row: tuple) -> LedgerEntry:
         entry_hash=entry_hash,
         event_digest=digest,
         event=event,
+        payload_mode=payload_mode,
     )

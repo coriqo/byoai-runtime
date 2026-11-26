@@ -74,7 +74,7 @@ from byoai.errors import ByoAIError
 
 from .ledger import Ledger
 from .receipts import ReceiptStore, canonical_hash
-from .redact import PayloadMode, TextRedactor, redact_free_text
+from .redact import PayloadMode, TextRedactor, payload_mode_headers, redact_free_text
 from .schema import EventKind
 
 __all__ = [
@@ -668,6 +668,7 @@ class CoriqoAgentsClient:
         cost_usd: float | None = None,
         token_count: int | None = None,
         occurred_at: str | None = None,
+        payload_mode: PayloadMode | str | None = None,
     ) -> dict[str, Any]:
         """Records one decision. See :meth:`record_traces` for the batch form.
 
@@ -688,6 +689,7 @@ class CoriqoAgentsClient:
         return self._request(
             "POST",
             f"/api/v1/agents/{coriqo_agent_id}/traces",
+            headers=payload_mode_headers(payload_mode),
             json=trace_body(
                 inputs=inputs,
                 output=output,
@@ -718,7 +720,8 @@ class CoriqoAgentsClient:
         return body
 
     def record_traces(
-        self, coriqo_agent_id: str, traces: Sequence[Mapping[str, Any]]
+        self, coriqo_agent_id: str, traces: Sequence[Mapping[str, Any]], *,
+        payload_mode: PayloadMode | str | None = None,
     ) -> dict[str, Any]:
         """Records up to :data:`MAX_TRACE_BATCH` decisions in one request.
 
@@ -734,6 +737,7 @@ class CoriqoAgentsClient:
         return self._request(
             "POST",
             f"/api/v1/agents/{coriqo_agent_id}/traces/batch",
+            headers=payload_mode_headers(payload_mode),
             json={"traces": [dict(t) for t in traces]},
         )
 
@@ -1035,6 +1039,9 @@ def publish_session(
     if not steps:
         return None
 
+    # A caller may pass the mode as its string value; normalise it so the text is
+    # prepared in the same mode the request header will declare.
+    payload_mode = PayloadMode(payload_mode)
     if final_output is not None:
         if payload_mode is PayloadMode.HASH_ONLY:
             final_output = None
@@ -1112,7 +1119,7 @@ def publish_session(
         for start in range(0, len(bodies), MAX_TRACE_BATCH):
             batch = bodies[start : start + MAX_TRACE_BATCH]
             try:
-                response = client.record_traces(coriqo_agent_id, batch)
+                response = client.record_traces(coriqo_agent_id, batch, payload_mode=payload_mode)
             except Exception as exc:
                 # Batch refused outright: this and every unsent later batch
                 # are 'rejected', not 'swallowed'.

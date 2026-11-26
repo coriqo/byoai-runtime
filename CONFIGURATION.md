@@ -926,6 +926,49 @@ the proxy, which cannot be switched off from inside the agent, that flag
 belongs to the caller — and an empty ledger for an untraced agent looks
 identical to an agent that never ran.
 
+##### Direct Bedrock model calls: the invocation log reader (W10)
+
+`iter_cloudwatch_invocations` above groups records by a session id, and a
+plain model-invocation record has none, so it seals nothing for a direct
+`Converse` or `InvokeModel` call. `byoai-bedrock-log-reader` does: it reads
+the model-invocation log on a schedule, joins a tool call to its result by
+`toolUseId` (same account, region and caller, within the link limit), and
+seals `session_start`, `tool_use`, `tool_result`, `message`,
+`guardrail_intervention` and `api_error` events with
+`provider = "bedrock_invocation_log"`. Prompts and system text are not
+sealed. Ids are derived from the record, so re-reading a window seals
+nothing new.
+
+| Variable / flag | Default | Meaning |
+|---|---|---|
+| AWS credentials | standard chain | the reader's role (see OPERATIONS.md) |
+| `BYOAI_BEDROCK_LOG_GROUP` / `--log-group` | required | log group name, or its ARN for a monitoring-account read |
+| `AWS_REGION` / `--region` | required | region of the log group |
+| `BYOAI_BEDROCK_LOG_ROLE_ARN` / `--role-arn` | unset | role to assume for a log group in another account |
+| `BYOAI_BEDROCK_LOG_EXTERNAL_ID` / `--external-id` | unset | external id that role requires |
+| `BYOAI_RECORDER_DIR` / `--dir` | `~/.byoai/recorder` | must be the reader's own directory, enrolled as its own device |
+| `BYOAI_RECORDER_PAYLOAD_MODE` | `redacted` | as for every recorder |
+| `BYOAI_BEDROCK_LOG_S3_MAX_BYTES` | 10 MiB | largest body read from the large-data S3 location |
+| `--once` / `--loop` / `--check` | (one required) | one sweep then ship and exit; sweep at Coriqo's interval until stopped; check access and the logging configuration |
+
+The policy knobs (pause, scope, interval, overlap, settle, link limit,
+first backfill, catch-up limit) are Coriqo's tenant setting
+`bedrock_log_capture`, fetched from `GET /api/v1/agent-runtime/capture-config`
+at the start of each sweep; unreachable Coriqo means the last cached copy,
+then Coriqo's defaults. After every sweep the reader posts a signed status
+block to `POST /api/v1/agent-runtime/source-state`. No setting is overridden
+on the host.
+
+Exit codes: `0` done (or paused in Coriqo), `1` the sweep or the check failed,
+`2` a setting is missing or not valid (no log group or region, an unknown
+`BYOAI_RECORDER_PAYLOAD_MODE`, boto3 not installed), `3` another reader
+holds this recorder directory.
+
+`ts_device` and `ts_monotonic_ns` carry the **log time** of the record (epoch
+nanoseconds plus the block's position), not the time of the sweep, so the
+latency between a call and its result is the real interval. One reader per
+log group, each enrolled as its own device; two log groups need two readers.
+
 ##### What a Bedrock run looks like in Coriqo
 
 Publishing needs nothing Bedrock-specific: `publish_session` reads the sealed

@@ -103,6 +103,7 @@ def test_ship_once_clean_accept_advances_watermark(ledger, key):
     def handler(request: httpx.Request) -> httpx.Response:
         requests_seen.append(request)
         body = _decode_body(request)
+        # W8: the batch also says who is shipping; a shipper built with no payload mode sends none.
         assert set(body.keys()) == {"device_id", "entries"}
         assert body["device_id"] == key.device_id
         assert len(body["entries"]) == 3

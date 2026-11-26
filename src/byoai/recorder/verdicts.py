@@ -96,6 +96,7 @@ from .mandate import (
     approval_args,
     approval_request_id,
 )
+from .redact import RUNTIME_AUTHORED
 from .schema import (
     EVENT_SCHEMA_VERSION,
     AgentEvent,
@@ -685,7 +686,9 @@ class VerdictRecorder:
             trace_id=self._trace_id,
             span_id=new_span_id(),
         )
-        return self._ledger.append(event)
+        # Runtime-authored: the server reads verdicts and stop acks, so it must never mask
+        # them (W8).
+        return self._ledger.append(event, payload_mode=RUNTIME_AUTHORED)
 
     def _enqueue(
         self,
