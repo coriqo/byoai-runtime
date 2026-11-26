@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- With a mandate loaded from a file, suspend acknowledgements and tool-approval
+  requests no longer fail silently. The file mandate's id (`sha256:...`, longer
+  than Coriqo's 36-character limit) is now sent as `null`, which Coriqo records
+  as an unversioned mandate, the same as verdict batches. The local ledger keeps
+  the full hash. Needs a Coriqo release that accepts a null `mandate_version_id`
+  on these two routes.
+
 ### Added
 - An enrolled device can publish a run to Coriqo with its own signature, with no
   service-account API key in the environment. `CoriqoAgentsClient.for_device()`

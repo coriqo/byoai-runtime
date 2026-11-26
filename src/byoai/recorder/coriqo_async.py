@@ -84,6 +84,7 @@ from .coriqo_agents import (
     CoriqoCredentials,
     parse_response,
     trace_body,
+    wire_mandate_version_id,
 )
 from .identity import CoriqoIdentity, IdentitySource, Signer
 from .redact import PayloadMode, payload_mode_headers
@@ -819,7 +820,7 @@ class AsyncCoriqoAgentsClient:
         self,
         coriqo_agent_id: str,
         *,
-        mandate_version_id: str,
+        mandate_version_id: str | None,
         observed_at: str | None = None,
     ) -> dict[str, Any]:
         """AD-9: report that this host saw the agent's CURRENT suspend and
@@ -835,7 +836,7 @@ class AsyncCoriqoAgentsClient:
             "POST",
             f"{ENFORCEMENT_PREFIX}/agents/{coriqo_agent_id}/suspend-ack",
             json_body={
-                "mandate_version_id": mandate_version_id,
+                "mandate_version_id": wire_mandate_version_id(mandate_version_id),
                 "observed_at": observed_at,
             },
             signed=True,
@@ -849,7 +850,7 @@ class AsyncCoriqoAgentsClient:
         tool: str,
         trajectory_id: str | None,
         step_index: int | None,
-        mandate_version_id: str,
+        mandate_version_id: str | None,
         args: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """AD-10: report a tool call the local gate classified as
@@ -873,7 +874,7 @@ class AsyncCoriqoAgentsClient:
             "tool": tool,
             "trajectory_id": trajectory_id,
             "step_index": step_index,
-            "mandate_version_id": mandate_version_id,
+            "mandate_version_id": wire_mandate_version_id(mandate_version_id),
         }
         if args is not None:
             body["args"] = dict(args)

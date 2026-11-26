@@ -859,3 +859,68 @@ async def test_a_tenantless_enrollment_still_falls_back_to_the_env_var(
         await client.close()
 
     assert seen[0].headers["X-Tenant-Slug"] == "legacy_bank"
+
+
+# -- file-mandate ids on the suspend-ack and approval routes ----------------
+
+_FILE_MANDATE_ID = "sha256:" + "ab" * 32
+_CORIQO_VERSION = "0b9c7c5e-4f3a-4a7e-9d2c-1f6a8e3b2d10"  # 36 characters
+
+
+async def _sent_bodies(call, tmp_path):
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return _json({"ok": True}, 201)
+
+    client = _device_client(handler, tmp_path)
+    try:
+        await call(client)
+    finally:
+        await client.close()
+    return sent
+
+
+async def _ack(client, version):
+    await client.ack_suspend(_AGENT, mandate_version_id=version)
+
+
+async def _approve(client, version):
+    await client.request_tool_approval(
+        _AGENT, request_id="req-1", tool="pay", trajectory_id="t", step_index=1,
+        mandate_version_id=version,
+    )
+
+
+@pytest.mark.parametrize("send", [_ack, _approve])
+async def test_file_mandate_id_goes_out_as_null(send, tmp_path):
+    sent = await _sent_bodies(lambda c: send(c, _FILE_MANDATE_ID), tmp_path)
+    assert sent[0]["mandate_version_id"] is None
+
+
+@pytest.mark.parametrize("send", [_ack, _approve])
+async def test_overlong_id_goes_out_as_null(send, tmp_path):
+    sent = await _sent_bodies(lambda c: send(c, "x" * 37), tmp_path)
+    assert sent[0]["mandate_version_id"] is None
+
+
+@pytest.mark.parametrize("send", [_ack, _approve])
+async def test_coriqo_version_id_is_unchanged(send, tmp_path):
+    assert len(_CORIQO_VERSION) == 36
+    sent = await _sent_bodies(lambda c: send(c, _CORIQO_VERSION), tmp_path)
+    assert sent[0]["mandate_version_id"] == _CORIQO_VERSION
+
+
+@pytest.mark.parametrize("send", [_ack, _approve])
+async def test_no_version_stays_null(send, tmp_path):
+    sent = await _sent_bodies(lambda c: send(c, None), tmp_path)
+    assert sent[0]["mandate_version_id"] is None
+
+
+def test_wire_helper_does_not_touch_the_local_value():
+    from byoai.recorder.coriqo_agents import wire_mandate_version_id
+
+    version = _FILE_MANDATE_ID
+    assert wire_mandate_version_id(version) is None
+    assert version == "sha256:" + "ab" * 32  # the caller's (ledger's) copy is unchanged
