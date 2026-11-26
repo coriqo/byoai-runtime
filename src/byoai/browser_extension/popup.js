@@ -322,6 +322,12 @@ function wire() {
     el('copy-id').textContent = 'Copied'
     setTimeout(() => { el('copy-id').textContent = 'Copy id' }, 1200)
   })
+  // An administrator who set the port owns it: no "change address", and a line saying who manages it.
+  withTimeout(send({ type: 'agent.getEndpoint' }), 1500).then((r) => {
+    if (!r?.managed) return
+    el('change-addr').hidden = true
+    el('addr').title = `Set by ${r.managedBy || 'your administrator'}`
+  }).catch(() => {})
   el('change-addr').addEventListener('click', (ev) => {
     ev.preventDefault()
     el('change-box').hidden = false
