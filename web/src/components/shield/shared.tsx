@@ -226,6 +226,12 @@ export function inWhen(date: string | undefined, when: When, now = Date.now()): 
   return Boolean(d) && d >= start && d <= end
 }
 
+/** First local day of a window ("" for all time), for the server's `since`. */
+export function whenStart(when: When, now = Date.now()): string {
+  if (when === 'all') return ''
+  return localDay(when === 'today' ? now : now - (Number(when) - 1) * 86_400_000)
+}
+
 /* ------------------------------------------------------------------- feed */
 
 /** The newest 200 interactions, shared by every tab (one fetch, one answer).
@@ -340,6 +346,50 @@ export function NeedFilter({ value, onChange }: { value: Need; onChange: (n: Nee
 }
 
 /* ------------------------------------------------------------ primitives */
+
+/** Rows per page a reader can choose. The default is a named constant, not a
+ * policy: it is a per-reader display choice kept in the URL, and Shield has no
+ * display-settings store (its policy is signed and managed by an admin). */
+export const PAGE_SIZES = [25, 50, 100] as const
+export const DEFAULT_PAGE_SIZE = 25
+
+/** Previous / next paging with "Showing 26 to 50 of 305 events" and a page
+ * size. The screen owns the state (Timeline keeps it in the URL). Same words
+ * as the Coriqo app's pager. */
+export function Pager({ page, pages, from, to, total, pageSize, onPage, onPageSize, noun = 'rows', note }: {
+  page: number; pages: number; from: number; to: number; total: number; pageSize: number
+  onPage: (page: number) => void
+  onPageSize?: (size: number) => void
+  noun?: string
+  /** A caveat that stays visible, e.g. that older rows are not in this list. */
+  note?: string
+}) {
+  if (!total) return null
+  return (
+    <nav className="pager" aria-label={`${noun} pages`} data-testid="pager">
+      <span className="page-stat" data-testid="pager-range" aria-live="polite">
+        Showing {from} to {to} of {total.toLocaleString()} {noun}
+      </span>
+      <span className="spacer" />
+      {onPageSize && (
+        <label className="pager-size">
+          Rows per page
+          <select value={pageSize} onChange={e => onPageSize(Number(e.target.value))}>
+            {PAGE_SIZES.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </label>
+      )}
+      <button className="btn sm icon" disabled={page <= 1} aria-label="Previous page" onClick={() => onPage(page - 1)}>
+        <Icon name="chevron-left" size={16} />Previous
+      </button>
+      <span className="page-stat" data-testid="pager-page">Page {page} of {pages}</span>
+      <button className="btn sm icon" disabled={page >= pages} aria-label="Next page" onClick={() => onPage(page + 1)}>
+        Next<Icon name="chevron-right" size={16} />
+      </button>
+      {note && <p className="pager-note">{note}</p>}
+    </nav>
+  )
+}
 
 /** "1 record", "12 records". */
 export function plural(n: number, one: string, many = `${one}s`) {

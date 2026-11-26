@@ -67,6 +67,12 @@ export const ShieldFeed = z.object({
   limit: z.number().int(),
   has_more: z.boolean(),
   items: z.array(ShieldItem),
+  /** Paging fields (absent from a Shield older than this change). */
+  matched: z.number().int().nonnegative().optional(),
+  newer: z.number().int().nonnegative().optional(),
+  capacity: z.number().int().positive().nullish(),
+  focus_item: ShieldItem.nullish(),
+  newest_id: z.string().nullish(),
 })
 
 export const ShieldCheckpoint = z.object({
@@ -207,6 +213,27 @@ async function get<T>(path: string, schema: z.ZodType<T>): Promise<T> {
 export function fetchFeed(page: ShieldPage) {
   const qs = `/feed?limit=${Math.min(page.perPage, 200)}&offset=${page.page * page.perPage}`
   return get(qs, ShieldFeed)
+}
+
+export interface FeedQuery {
+  limit: number
+  offset: number
+  /** Server-side filters, applied before paging. */
+  need?: string
+  since?: string
+  /** Hide rows newer than this id, so a page holds still while rows arrive. */
+  anchor?: string
+  /** Also return this row as `focus_item`, wherever it sits. */
+  focus?: string
+}
+
+export function fetchFeedPage(q: FeedQuery) {
+  const p = new URLSearchParams({ limit: String(Math.min(q.limit, 200)), offset: String(q.offset) })
+  for (const k of ['need', 'since', 'anchor', 'focus'] as const) {
+    const v = q[k]
+    if (v && !(k === 'need' && v === 'all')) p.set(k, v)
+  }
+  return get(`/feed?${p}`, ShieldFeed)
 }
 
 export function fetchVerify() {

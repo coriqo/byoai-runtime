@@ -109,9 +109,16 @@
 .pager { display: flex; gap: var(--space-md); align-items: center; padding: var(--space-md) var(--space-xl);
   border-top: var(--hairline-soft); flex-wrap: wrap; }
 .pager button[disabled] { opacity: .6; }
+.pager .spacer { flex: 1 1 0; }
+.pager-size { display: flex; align-items: center; gap: var(--space-sm); font-size: var(--text-xs); color: var(--ink-soft); }
+.pager-size select { font: inherit; font-size: var(--text-sm); color: var(--ink); background: var(--field);
+  border: 1px solid var(--control); border-radius: var(--radius-sm); min-height: var(--target-min); padding: var(--space-xs) var(--space-md); }
+.pager-note { flex-basis: 100%; margin: 0; font-size: var(--text-xs); color: var(--ink-soft); }
+.tl-busy { opacity: .6; transition: opacity var(--motion-fast); }
+.tl-new { margin-bottom: var(--space-md); }
 .empty-row, .rows .empty { padding: var(--space-xxl) var(--space-xl); color: var(--ink-soft); font-size: var(--text-sm); text-align: center; }
 .empty-row b, .empty-row .empty-title { display: block; color: var(--ink); font-weight: var(--weight-semibold); margin-bottom: var(--space-xs); }
-.empty-row .btn { margin-top: var(--space-sm); }
+.empty-row .btn { display: flex; margin: var(--space-sm) auto 0; }
 .page-stat { font-size: var(--text-xs); color: var(--ink-soft); font-variant-numeric: tabular-nums; }
 
 /* privacy-first: notice strip, "What Shield keeps", Settings */
