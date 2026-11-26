@@ -469,7 +469,7 @@ byoai-shield ./examples/mcp_capture/captures.jsonl --host 127.0.0.1 --port 17831
 byoai-shield --install-login-item   # start at login (macOS launchd, Linux systemd user unit, Windows Task Scheduler), low priority; --remove-login-item undoes it
 ```
 
-API: `/api/feed` (limit/offset pagination), `/api/verify`, `/api/policy`
+API: `/api/feed` (limit/offset pagination, `need`/`since` filters, `anchor` for a stable page), `/api/verify`, `/api/policy`
 GET+POST (validated; a bad value is a 400 that names the field),
 `/api/privacy` (what the ledger holds right now), `POST /api/privacy/scrub`,
 and `/api/receipt/<seal>`, plus `POST /api/browser` for the Chrome

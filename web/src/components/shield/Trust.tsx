@@ -7,7 +7,7 @@ import { useState } from 'react'
 import { fetchPrivacy, savePolicy, scrubStoredText } from '@/api/shield'
 import type { ShieldPolicy, ShieldPrivacy, ShieldVerify } from '@/api/shield'
 import {
-  Banner, HashChip, Icon, NeedFilter, SectionHead, StatusSeal, WhenFilter, flagTagClass, humanize, inWhen, matchesNeed,
+  Banner, HashChip, NeedFilter, Pager, SectionHead, StatusSeal, WhenFilter, flagTagClass, humanize, inWhen, matchesNeed,
   plural, ruleLabel, toolLabel, useFeed,
 } from './shared'
 import type { Item, Need, When } from './shared'
@@ -115,11 +115,8 @@ export function Trust({ verify, policy, onOpen, goSettings, goLedger }: {
             {shown.map(it => <Row key={it.id} item={it} onOpen={() => onOpen(it)} />)}
           </div>
           {visible.length > PER_PAGE && (
-            <div className="pager">
-              <button className="btn sm icon" disabled={cur === 0} onClick={() => setPage(cur - 1)}><Icon name="chevron-left" size={16} />Newer</button>
-              <span className="page-stat">Page {cur + 1} of {pages} · {visible.length} matching</span>
-              <button className="btn sm icon" disabled={cur >= pages - 1} onClick={() => setPage(cur + 1)}>Older<Icon name="chevron-right" size={16} /></button>
-            </div>
+            <Pager page={cur + 1} pages={pages} from={cur * PER_PAGE + 1} to={cur * PER_PAGE + shown.length}
+              total={visible.length} pageSize={PER_PAGE} noun="matching events" onPage={n => setPage(n - 1)} />
           )}
         </section>
       </div>

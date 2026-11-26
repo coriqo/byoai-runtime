@@ -17,6 +17,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on these two routes.
 
 ### Added
+- The Shield window's Timeline has paging. It shows "Showing 26 to 50 of 312
+  events" with Previous, Next, a page count and a rows-per-page choice (25, 50
+  or 100); the page, size and the two filters are in the address
+  (`?tab=timeline&page=3&size=50&when=7&need=warn`), so a reload or Back returns
+  to the same page. The filters now count every event Shield holds, not only the
+  newest 200. A page holds still while new events arrive and offers "N new
+  events". Each empty state says why, with a Clear filters button. The Trust
+  tab's activity list uses the same pager wording.
+- `GET /api/feed` takes `need`, `since`, `anchor` and `focus`, and reports
+  `matched`, `newer`, `capacity`, `newest_id` and `focus_item`. With no
+  parameters it returns what it did before. A malformed `limit` or `offset` now
+  falls back to its default (the reply echoes the value used) instead of failing.
+  Shield keeps its latest 400 events in memory; the Timeline says so when the
+  list is full and older ones are only in the ledger file.
 - An enrolled device can publish a run to Coriqo with its own signature, with no
   service-account API key in the environment. `CoriqoAgentsClient.for_device()`
   and `make_publish_client()` build the client; `publish_session` then uses

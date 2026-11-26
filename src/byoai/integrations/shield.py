@@ -1859,6 +1859,71 @@ def _stat_sig(path) -> tuple:
         return (0, 0)
 
 
+FEED_PAGE_DEFAULT = 60   # rows served when a caller sends no ``limit``
+FEED_PAGE_MAX = 200      # hard ceiling per request; the reply echoes what it served
+FEED_NEEDS = ("all", "warn", "bad", "mcp", "browser")
+
+
+def _qs_int(qs: dict, key: str, default: int, lo: int, hi: int | None = None) -> int:
+    """A query integer clamped to [lo, hi]; missing or malformed uses the
+    default. The reply echoes the value used, so a caller is never left guessing."""
+    try:
+        n = int(qs.get(key, [default])[0])
+    except (TypeError, ValueError):
+        n = default
+    n = max(lo, n)
+    return min(n, hi) if hi is not None else n
+
+
+def _need_ok(it: dict, need: str) -> bool:
+    if need in ("warn", "bad"):
+        return it.get("tier") == need
+    if need in ("mcp", "browser"):
+        return it.get("source") == need
+    return True
+
+
+def feed_page(feed: Feed, qs: dict) -> dict:
+    """One page of the interaction feed, newest first. No parameters returns
+    what it always did (the newest 60). Parameters, all optional:
+
+    ``limit`` (1..200) and ``offset``; ``need`` (all|warn|bad|mcp|browser) and
+    ``since`` (local date, YYYY-MM-DD, inclusive) filter before paging, so
+    ``matched`` and ``has_more`` describe the filtered list; ``anchor`` (an
+    interaction id) hides everything newer than that row, so page 3 keeps its
+    rows while new interactions arrive (``newer`` counts the hidden ones);
+    ``focus`` (an id) also returns that one row as ``focus_item``.
+    ``newest_id`` is the newest row overall (the anchor a client pins).
+    ``total`` is every interaction Shield holds, and ``capacity`` the most it
+    holds: older rows stay in the ledger file and the seal chain but are not
+    in this list."""
+    limit = _qs_int(qs, "limit", FEED_PAGE_DEFAULT, 1, FEED_PAGE_MAX)
+    offset = _qs_int(qs, "offset", 0, 0)
+    need = qs.get("need", ["all"])[0]
+    need = need if need in FEED_NEEDS else "all"
+    since = qs.get("since", [""])[0][:10]
+    anchor = qs.get("anchor", [""])[0]
+    focus = qs.get("focus", [""])[0]
+    items = list(feed.items)
+    newer = 0
+    if anchor:
+        idx = next((i for i, it in enumerate(items) if it.get("id") == anchor), None)
+        if idx is not None:
+            newer, items = idx, items[idx:]
+    pool = [it for it in items if _need_ok(it, need)
+            and (not since or (it.get("date") or "")[:10] >= since)]
+    page = [{k: v for k, v in it.items() if not k.startswith("_")}
+            for it in pool[offset:offset + limit]]
+    focus_item = next(({k: v for k, v in it.items() if not k.startswith("_")}
+                       for it in feed.items if focus and it.get("id") == focus), None)
+    return {"counts": feed.counts(),
+            "total": len(feed.items), "offset": offset, "limit": limit,
+            "has_more": offset + limit < len(pool), "items": page,
+            "matched": len(pool), "newer": newer,
+            "capacity": feed.items.maxlen, "focus_item": focus_item,
+            "newest_id": feed.items[0].get("id") if feed.items else None}
+
+
 class Feed:
     """Turns ledger rows into shield interactions and re-flags replies."""
 
@@ -2520,15 +2585,7 @@ def serve(cfg: ShieldConfig, host: str = "127.0.0.1", port: int = DEFAULT_PORT,
             from urllib.parse import parse_qs, urlparse
             path = self.path.split("?")[0]
             if path == "/api/feed":
-                qs = parse_qs(urlparse(self.path).query)
-                limit = min(int(qs.get("limit", ["60"])[0]), 200)
-                offset = int(qs.get("offset", ["0"])[0])
-                page = [{k: v for k, v in it.items() if not k.startswith("_")}
-                        for it in list(feed.items)[offset:offset + limit]]
-                return {"counts": feed.counts(),
-                        "total": len(feed.items), "offset": offset,
-                        "limit": limit, "has_more": offset + limit < len(feed.items),
-                        "items": page}
+                return feed_page(feed, parse_qs(urlparse(self.path).query))
             if path == "/api/verify":
                 return feed.seals.verify_chain()
             if path == "/api/identity":

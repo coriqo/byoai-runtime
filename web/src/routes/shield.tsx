@@ -15,8 +15,8 @@ import { Settings } from '@/components/shield/Settings'
 import { Sheet } from '@/components/shield/Sheet'
 import { Timeline } from '@/components/shield/Timeline'
 import { Trust } from '@/components/shield/Trust'
-import { HashChip, NoticeStrip, SealMark } from '@/components/shield/shared'
-import type { Item } from '@/components/shield/shared'
+import { HashChip, NEED_OPTIONS, NoticeStrip, PAGE_SIZES, SealMark, WHEN_OPTIONS } from '@/components/shield/shared'
+import type { Item, Need, When } from '@/components/shield/shared'
 
 const TABS = ['trust', 'ledger', 'timeline', 'settings'] as const
 type Tab = (typeof TABS)[number]
@@ -24,21 +24,31 @@ const TAB_LABEL: Record<Tab, string> = {
   trust: 'Trust', ledger: 'Ledger', timeline: 'Timeline', settings: 'Settings',
 }
 
-interface ShieldSearch {
+export interface ShieldSearch {
   tab?: Tab
   focus?: string
+  /** Timeline paging and filters; absent means the default (page 1, 25 rows, All, All time). */
+  page?: number
+  size?: number
+  when?: When
+  need?: Need
 }
 
 export const Route = createFileRoute('/shield')({
   validateSearch: (s: Record<string, unknown>): ShieldSearch => ({
     tab: TABS.includes(s.tab as Tab) ? (s.tab as Tab) : undefined,
     focus: typeof s.focus === 'string' && s.focus ? s.focus : undefined,
+    page: Number.isInteger(Number(s.page)) && Number(s.page) > 1 ? Number(s.page) : undefined,
+    size: (PAGE_SIZES as readonly number[]).includes(Number(s.size)) && Number(s.size) !== PAGE_SIZES[0] ? Number(s.size) : undefined,
+    when: WHEN_OPTIONS.some(([k]) => k === s.when) && s.when !== 'all' ? (s.when as When) : undefined,
+    need: NEED_OPTIONS.some(([k]) => k === s.need) && s.need !== 'all' ? (s.need as Need) : undefined,
   }),
   component: ShieldPage,
 })
 
 function ShieldPage() {
-  const { tab = 'trust', focus } = Route.useSearch()
+  const search = Route.useSearch()
+  const { tab = 'trust', focus } = search
   const navigate = useNavigate({ from: '/shield' })
   const [sheet, setSheet] = useState<Item | null>(null)
   useEffect(() => {
@@ -51,6 +61,10 @@ function ShieldPage() {
 
   const go = useCallback((next: ShieldSearch) => {
     void navigate({ search: next })
+  }, [navigate])
+  /** Change part of the Timeline's URL state; each change is a history step, so Back undoes it. */
+  const patch = useCallback((p: Partial<ShieldSearch>, replace = false) => {
+    void navigate({ search: prev => ({ ...prev, tab: 'timeline', ...p }), replace })
   }, [navigate])
   const openTimeline = useCallback((id: string) => {
     setSheet(null)
@@ -108,8 +122,7 @@ function ShieldPage() {
         )}
         {tab === 'ledger' && <Ledger onOpen={setSheet} />}
         {tab === 'timeline' && (
-          <Timeline focus={focus} onOpen={setSheet}
-            setFocus={id => go({ tab: 'timeline', focus: id })} />
+          <Timeline search={search} patch={patch} onOpen={setSheet} />
         )}
         {tab === 'settings' && <Settings />}
       </div>
