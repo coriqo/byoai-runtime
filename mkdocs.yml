@@ -65,6 +65,7 @@ nav:
       - Telemetry (OpenTelemetry): guides/telemetry.md
       - Mandate enforcement: guides/mandate-enforcement.md
       - Testing: guides/testing.md
+  - Shield zero-touch deployment (MDM): msp-zero-touch.md
   - Shield Sync protocol: shield-sync-protocol.md
   - Recorder seal format: seal-format.md
   - API Reference: reference/api.md
