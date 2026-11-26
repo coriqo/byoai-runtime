@@ -1318,6 +1318,12 @@ def test_the_extension_sites_file_is_generated_from_sites_json():
     # Every host the extension runs on has a profile, and the manifest loads the shared files in both worlds.
     manifest = json.loads((mod.SITES_SOURCE.parent / "manifest.json").read_text())
     hosts = {h for s in sites for h in s["hosts"]}
+    # A redirect to a new host must not silently drop coverage (copilot.microsoft.com -> copilot.com).
+    for entry in manifest["content_scripts"]:
+        covered = {m.split("//")[1].split("/")[0] for m in entry["matches"]}
+        assert hosts <= covered, f"sites.json hosts missing from a manifest content_scripts match: {hosts - covered}"
+    for entry in manifest["web_accessible_resources"]:
+        assert hosts <= {m.split("//")[1].split("/")[0] for m in entry["matches"]}
     for entry in manifest["content_scripts"]:
         assert {m.split("//")[1].split("/")[0] for m in entry["matches"]} == hosts
         # The shared engine reads the rules and the site list, and both scripts read the engine.

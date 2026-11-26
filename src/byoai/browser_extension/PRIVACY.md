@@ -9,7 +9,7 @@ it, and you can turn it off again at any time from its popup.
 ## What it does
 
 When you send a message on claude.ai, chatgpt.com (and chat.openai.com),
-gemini.google.com or copilot.microsoft.com, the extension notes the fact and
+gemini.google.com or copilot.microsoft.com (and copilot.com), the extension notes the fact and
 hands it to **Shield, a separate program running on your own computer**
 (`byoai-shield`). No other site is watched. Without Shield running, nothing is
 recorded.
@@ -122,7 +122,7 @@ from them). *Record only* (`observe`) leaves messages unchanged, and so does
 an app switched off in Shield. Until the extension has heard from your Shield
 it uses the default, *redact*.
 
-On gemini.google.com and copilot.microsoft.com the network requests are only
+On gemini.google.com and copilot.microsoft.com (and copilot.com) the network requests are only
 noted, never rewritten: those sites send messages as form-encoded or websocket
 traffic the extension can't safely rewrite. When those apps are turned on in
 Shield (they are off in Shield's default policy, and checked like the others
