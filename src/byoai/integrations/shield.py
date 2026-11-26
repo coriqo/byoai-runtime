@@ -2877,6 +2877,10 @@ def serve(cfg: ShieldConfig, host: str = "127.0.0.1", port: int = DEFAULT_PORT,
             f"else is using that port. Set BYOAI_SHIELD_PORT (or --port) to a "
             f"free one and enter the same address in the extension popup.") from exc
     print(f"Coriqo Shield → http://{host}:{port}/shield", flush=True)
+    from byoai.agent_context_cache import console as _console
+    stale = _console.stale_reason()
+    if stale:
+        print(f"WARNING: {stale}", flush=True)
     print(f"seal chain: {feed.seals.height} entries, root "
           f"{(feed.seals.root_hex() or '')[:10]}", flush=True)
     print(f"device: {feed.seals._key.device_id}", flush=True)
