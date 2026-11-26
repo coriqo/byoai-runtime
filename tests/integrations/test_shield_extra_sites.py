@@ -47,7 +47,11 @@ def test_manifest_list_validator_script_and_generator_agree():
     hosts = curated_hosts()
     assert manifest["optional_host_permissions"] == [f"https://{h}/*" for h in hosts]
     assert "scripting" in manifest["permissions"]
-    assert manifest["version"] == "0.10.7"
+    assert manifest["version"] == "0.10.8"
+    # Chrome Web Store limit for the summary the store shows.
+    assert len(manifest["description"]) <= 132, len(manifest["description"])
+    # Only extension pages open PRIVACY.md, and they need no exposure to a website.
+    assert "web_accessible_resources" not in manifest
     for pattern in manifest["optional_host_permissions"]:
         assert pattern.startswith("https://") and "*." not in pattern and pattern.count("*") == 1
     forbidden = {"https://*/*", "<all_urls>", "*://*/*"}
@@ -132,3 +136,13 @@ def test_popup_and_worker_load_the_same_list_and_logic():
     sites = (EXT / "shield-sites.js").read_text()
     for s in json.loads((EXT / "optional_sites.json").read_text())["sites"]:
         assert s["host"] in sites and s["app"] in sites
+
+
+def test_popup_offers_no_sign_in_and_no_page_loads_login():
+    """The privacy notice says there is no account: nothing reachable may sign in."""
+    popup = (EXT / "popup.html").read_text() + (EXT / "popup.js").read_text()
+    for word in ("Sign in", "login.html", "coriqo_session", "open-login"):
+        assert word not in popup, word
+    for page in ("popup.html", "welcome.html"):
+        assert "login.js" not in (EXT / page).read_text()
+    assert "login.html" not in (EXT / "manifest.json").read_text()

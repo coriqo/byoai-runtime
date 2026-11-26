@@ -291,28 +291,11 @@ function render({ state, endpoint, verify, apps, mode, shorter }, app) {
 function protection(appKey, mode) {
   if (appKey !== 'claude' && appKey !== 'chatgpt') {
     if (mode === 'observe') return 'Messages go out unchanged: Shield is set to record only.'
-    return 'Shield checks your message when you press Enter or Send and replaces personal details in the box first. If it cannot find the box, it says so below.'
+    return 'Shield checks your message in the box when you press Enter or Send, and replaces personal details there first. Best effort: not yet confirmed on every page. If it cannot find the box, it says so below.'
   }
   if (mode === 'observe') return 'Messages go out unchanged: Shield is set to record only.'
   if (mode === 'block') return 'Personal details are replaced before a message leaves this page, and high-risk messages are stopped.'
   return 'Personal details are replaced before a message leaves this page.'
-}
-
-// Renders the same `coriqo_session` login.js writes on a successful sign-in
-// — read-only here, this popup never signs anyone in or out itself.
-function refreshCoriqoAccount() {
-  chrome.storage.local.get('coriqo_session', (v) => {
-    const session = v.coriqo_session
-    const status = el('coriqo-account-status')
-    const button = el('open-login')
-    if (session) {
-      status.textContent = `Signed in as ${session.email} (${session.tenant_slug}).`
-      button.textContent = 'Manage account'
-    } else {
-      status.textContent = 'Not signed in.'
-      button.textContent = 'Sign in to Coriqo'
-    }
-  })
 }
 
 function wire() {
@@ -357,16 +340,17 @@ function wire() {
     chrome.tabs.create({ url: chrome.runtime.getURL('PRIVACY.md') })
     window.close()
   })
-  el('open-login').addEventListener('click', () => {
-    chrome.tabs.create({ url: chrome.runtime.getURL('login.html') })
-    window.close()
-  })
-  refreshCoriqoAccount()
   el('copy-id').addEventListener('click', () => {
     navigator.clipboard.writeText(chrome.runtime.id)
     el('copy-id').textContent = 'Copied'
     setTimeout(() => { el('copy-id').textContent = 'Copy id' }, 1200)
   })
+  // An administrator who set the port owns it: no "change address", and a line saying who manages it.
+  withTimeout(send({ type: 'agent.getEndpoint' }), 1500).then((r) => {
+    if (!r?.managed) return
+    el('change-addr').hidden = true
+    el('addr').title = `Set by ${r.managedBy || 'your administrator'}`
+  }).catch(() => {})
   el('change-addr').addEventListener('click', (ev) => {
     ev.preventDefault()
     el('change-box').hidden = false

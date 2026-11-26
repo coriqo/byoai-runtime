@@ -19,7 +19,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by default); a refusal is logged once with that location. The device picks the
   run id, so a retried open or close is safe.
 
+### Changed
+- Browser extension 0.10.8 (Chrome Web Store readiness): the store summary
+  (`manifest.json` description) is now 111 characters, under the store's 132
+  limit, and says only what the code does. The popup no longer offers "Sign in
+  to Coriqo": the privacy notice says there is no account, and the sign-in page
+  needs a Coriqo service that is not available yet (`login.html` and `login.js`
+  stay in the package, unlinked). PRIVACY.md, the welcome page, the popup and
+  the README now say the same thing about replacement: personal details are
+  replaced in the message box on Claude, ChatGPT, Gemini and Copilot, and also
+  in the network request on Claude and ChatGPT; Gemini and Copilot are best
+  effort and not yet confirmed on every page. Release links in this file point
+  at `coriqo/byoai-runtime`.
+
 ### Fixed
+- Browser extension 0.10.8: PRIVACY.md is no longer listed in
+  `web_accessible_resources`. Only the extension's own pages open it, and
+  listing it let the chat sites detect that the extension is installed.
 - Browser extension 0.10.7: Microsoft Copilot messages are checked even when the
   page's message box is not the old `textarea#userInput`. The input gate now
   falls back to a visible textarea, contenteditable or `role=textbox` field
@@ -49,6 +65,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ask again on update. Not yet confirmed in a browser.
 
 ### Fixed
+- `coriqo-mcp --mandate FILE`: verdict batches are no longer refused with a 422
+  (`string_too_long`) that dropped the whole batch. A file mandate's id is
+  `sha256:<64 hex>`, longer than the 36 characters Coriqo accepts for
+  `mandate_version_id`, so it is now sent as `null` (Coriqo counts it as
+  unversioned). The local ledger still records the full hash. A Coriqo-issued
+  mandate version id is sent unchanged.
+- A verdict batch Coriqo refuses with any permanent 4xx (not only 422) is parked
+  as `rejected` and logged once at WARNING with the status, the field name and
+  the number of verdicts, never their values. Retryable statuses (401, 403, 408,
+  409, 423, 425, 429) are still resent.
 - Browser extension 0.10.5: Copilot is now covered on copilot.com.
   copilot.microsoft.com redirects there, and the manifest listed only the old
   host, so no extension script ran on the page the user ends up on. The host is
@@ -1200,9 +1226,9 @@ Initial alpha release.
   documented "a semantic-cache or embedder hiccup must never fail a request" guarantee.
   Broadened to catch any exception.
 
-[Unreleased]: https://github.com/ravikings/byoai-runtime/compare/v0.1.0a5...HEAD
-[0.1.0a5]: https://github.com/ravikings/byoai-runtime/compare/v0.1.0a4...v0.1.0a5
-[0.1.0a4]: https://github.com/ravikings/byoai-runtime/compare/v0.1.0a3...v0.1.0a4
-[0.1.0a3]: https://github.com/ravikings/byoai-runtime/compare/v0.1.0a2...v0.1.0a3
-[0.1.0a2]: https://github.com/ravikings/byoai-runtime/compare/v0.1.0a1...v0.1.0a2
-[0.1.0a1]: https://github.com/ravikings/byoai-runtime/releases/tag/v0.1.0a1
+[Unreleased]: https://github.com/coriqo/byoai-runtime/compare/v0.1.0a5...HEAD
+[0.1.0a5]: https://github.com/coriqo/byoai-runtime/compare/v0.1.0a4...v0.1.0a5
+[0.1.0a4]: https://github.com/coriqo/byoai-runtime/compare/v0.1.0a3...v0.1.0a4
+[0.1.0a3]: https://github.com/coriqo/byoai-runtime/compare/v0.1.0a2...v0.1.0a3
+[0.1.0a2]: https://github.com/coriqo/byoai-runtime/compare/v0.1.0a1...v0.1.0a2
+[0.1.0a1]: https://github.com/coriqo/byoai-runtime/releases/tag/v0.1.0a1
