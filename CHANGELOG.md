@@ -8,7 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Browser extension 0.10.8 (Chrome Web Store readiness): the store summary
+  (`manifest.json` description) is now 129 characters, under the store's 132
+  limit, and says only what the code does. The popup no longer offers "Sign in
+  to Coriqo": the privacy notice says there is no account, and the sign-in page
+  needs a Coriqo service that is not available yet (`login.html` and `login.js`
+  stay in the package, unlinked). PRIVACY.md, the welcome page, the popup and
+  the README now say the same thing about replacement: personal details are
+  replaced in the message box on Claude, ChatGPT, Gemini and Copilot, and also
+  in the network request on Claude and ChatGPT; Gemini and Copilot are best
+  effort and not yet confirmed on every page. Release links in this file point
+  at `coriqo/byoai-runtime`.
+
 ### Fixed
+- Browser extension 0.10.8: PRIVACY.md is no longer listed in
+  `web_accessible_resources`. Only the extension's own pages open it, and
+  listing it let the chat sites detect that the extension is installed.
 - Browser extension 0.10.7: Microsoft Copilot messages are checked even when the
   page's message box is not the old `textarea#userInput`. The input gate now
   falls back to a visible textarea, contenteditable or `role=textbox` field
@@ -1189,9 +1205,9 @@ Initial alpha release.
   documented "a semantic-cache or embedder hiccup must never fail a request" guarantee.
   Broadened to catch any exception.
 
-[Unreleased]: https://github.com/ravikings/byoai-runtime/compare/v0.1.0a5...HEAD
-[0.1.0a5]: https://github.com/ravikings/byoai-runtime/compare/v0.1.0a4...v0.1.0a5
-[0.1.0a4]: https://github.com/ravikings/byoai-runtime/compare/v0.1.0a3...v0.1.0a4
-[0.1.0a3]: https://github.com/ravikings/byoai-runtime/compare/v0.1.0a2...v0.1.0a3
-[0.1.0a2]: https://github.com/ravikings/byoai-runtime/compare/v0.1.0a1...v0.1.0a2
-[0.1.0a1]: https://github.com/ravikings/byoai-runtime/releases/tag/v0.1.0a1
+[Unreleased]: https://github.com/coriqo/byoai-runtime/compare/v0.1.0a5...HEAD
+[0.1.0a5]: https://github.com/coriqo/byoai-runtime/compare/v0.1.0a4...v0.1.0a5
+[0.1.0a4]: https://github.com/coriqo/byoai-runtime/compare/v0.1.0a3...v0.1.0a4
+[0.1.0a3]: https://github.com/coriqo/byoai-runtime/compare/v0.1.0a2...v0.1.0a3
+[0.1.0a2]: https://github.com/coriqo/byoai-runtime/compare/v0.1.0a1...v0.1.0a2
+[0.1.0a1]: https://github.com/coriqo/byoai-runtime/releases/tag/v0.1.0a1
