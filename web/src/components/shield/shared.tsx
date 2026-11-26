@@ -194,6 +194,7 @@ export function flagTagClass(tier: string) {
 }
 
 export function tierLabel(it: Item) {
+  if (it.unreadable) return 'Cannot show'
   if (it.status === 'blocked') return 'Blocked'
   return it.tier === 'bad' ? 'High risk' : it.tier === 'warn' ? 'Flagged' : 'No exception'
 }

@@ -1807,16 +1807,27 @@ def save_policy(cfg: ShieldConfig, p: dict) -> None:
 # --------------------------------------------------------------------- feed
 
 
+#: The tiers the console's API contract knows. Internal rule tiers map onto
+#: them: a credential is high risk, a soft signal is an agent-level note.
+CONTRACT_TIERS = ("agent", "high", "pii", "conduct")
+_TIER_TO_CONTRACT = {"secret": "high", "flag": "agent"}
+
+
+def contract_tier(tier: str) -> str:
+    """Map any internal flag tier to one the API contract names. An unknown
+    tier reads as personal data (flagged), never as clean."""
+    tier = _TIER_TO_CONTRACT.get(tier, tier)
+    return tier if tier in CONTRACT_TIERS else "pii"
+
+
 def _flags_from_row(r: dict) -> list[tuple[str, str, str]]:
     out = []
     for f in r.get("flags") or []:
         tier, _, rule = str(f).partition(":")
         # The console's tag colours know agent|high|pii|conduct; the rule
         # table's secret and flag tiers map onto high and agent.
-        tier = {"secret": "high", "flag": "agent"}.get(tier, tier)
         if rule:
-            out.append((tier if tier in ("high", "pii", "agent", "conduct")
-                        else "pii", rule, ""))
+            out.append((contract_tier(tier), rule, ""))
     return out
 
 
@@ -1838,9 +1849,9 @@ def _as_list(v) -> list[str]:
 
 def _tier(item: dict) -> str:
     if item.get("status") == "blocked" or any(
-            f["tier"] == "high" for f in item["flags"]):
+            contract_tier(f["tier"]) == "high" for f in item["flags"]):
         return "bad"
-    if any(f["tier"] in ("pii", "conduct") for f in item["flags"]):
+    if any(contract_tier(f["tier"]) in ("pii", "conduct") for f in item["flags"]):
         return "warn"
     return "ok"
 
@@ -1883,6 +1894,14 @@ def _need_ok(it: dict, need: str) -> bool:
     return True
 
 
+def _public_item(it: dict) -> dict:
+    """An item as the API serves it: private keys dropped, flag tiers in the
+    contract vocabulary. Stored items and their seals keep the raw tiers."""
+    out = {k: v for k, v in it.items() if not k.startswith("_")}
+    out["flags"] = [{**f, "tier": contract_tier(f["tier"])} for f in it["flags"]]
+    return out
+
+
 def feed_page(feed: Feed, qs: dict) -> dict:
     """One page of the interaction feed, newest first. No parameters returns
     what it always did (the newest 60). Parameters, all optional:
@@ -1912,9 +1931,8 @@ def feed_page(feed: Feed, qs: dict) -> dict:
             newer, items = idx, items[idx:]
     pool = [it for it in items if _need_ok(it, need)
             and (not since or (it.get("date") or "")[:10] >= since)]
-    page = [{k: v for k, v in it.items() if not k.startswith("_")}
-            for it in pool[offset:offset + limit]]
-    focus_item = next(({k: v for k, v in it.items() if not k.startswith("_")}
+    page = [_public_item(it) for it in pool[offset:offset + limit]]
+    focus_item = next((_public_item(it)
                        for it in feed.items if focus and it.get("id") == focus), None)
     return {"counts": feed.counts(),
             "total": len(feed.items), "offset": offset, "limit": limit,

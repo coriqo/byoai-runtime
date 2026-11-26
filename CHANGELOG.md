@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- One older ledger row no longer blanks the Shield window. Rows from older
+  versions (tool calls with `input_preview`, old-format prompts) carried the
+  flag tiers `secret` and `flag`, which the window's API contract does not
+  name, so the whole feed failed to parse and the window said "Can't reach
+  Shield". The server now serves every flag tier as `agent`, `high`, `pii` or
+  `conduct` (a credential is `high`), a credential in such a row counts as high
+  risk and matches the "Blocked or high risk" filter, and a running tool call
+  with no seal yet no longer fails the schema. The window also reads rows one
+  by one: a row it cannot read stays in the list as "An entry from an older
+  Shield version that this window cannot show", never as clean. Stored rows,
+  seals and receipts are unchanged.
 - With a mandate loaded from a file, suspend acknowledgements and tool-approval
   requests no longer fail silently. The file mandate's id (`sha256:...`, longer
   than Coriqo's 36-character limit) is now sent as `null`, which Coriqo records

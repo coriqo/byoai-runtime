@@ -11,7 +11,12 @@ import { z } from 'zod'
 /* ----------------------------------------------------------------- schema */
 
 export const ShieldFlag = z.object({
-  tier: z.enum(['agent', 'high', 'pii', 'conduct']),
+  // A Shield from before the contract named two tiers by their internal words:
+  // a credential (`secret`) is high risk, a soft signal (`flag`) is agent-level.
+  tier: z.preprocess(
+    v => (v === 'secret' ? 'high' : v === 'flag' ? 'agent' : v),
+    z.enum(['agent', 'high', 'pii', 'conduct']),
+  ),
   rule: z.string().min(1),
 })
 
@@ -51,10 +56,31 @@ export const ShieldItem = z.object({
   identity: z.record(z.unknown()).nullish(),
   usage: z.record(z.unknown()).nullish(),
   latency_ms: z.number().nullish(),
-  seal: z.string().min(1),
+  /** Empty while a tool call is still running: sealed when its result lands. */
+  seal: z.string(),
   /** Present on rows for an uploaded file. */
   file: ShieldFile.nullish(),
+  /** Set by this window, never by the server: the row could not be read. */
+  unreadable: z.boolean().optional(),
 })
+
+export const UNREADABLE_VERB = 'An entry from an older Shield version that this window cannot show'
+
+/** One row this window cannot read must not hide the rest of the list. The row
+ * stays in the list, counted and never shown as clean, with only its id and
+ * seal (when they are plain strings); nothing else from it is kept or logged. */
+function parseItem(raw: unknown): z.infer<typeof ShieldItem> {
+  const ok = ShieldItem.safeParse(raw)
+  if (ok.success) return ok.data
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+  const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined)
+  return {
+    id: str(r.id) ?? 'unreadable', source: 'mcp', surface: 'Older Shield version',
+    ts: '', date: str(r.date) ?? '', verb: UNREADABLE_VERB, status: 'answered',
+    tier: 'warn', flags: [], seal: '', unreadable: true,
+  }
+}
+const LenientItem = z.unknown().transform(parseItem)
 
 export const ShieldFeed = z.object({
   counts: z.object({
@@ -66,12 +92,12 @@ export const ShieldFeed = z.object({
   offset: z.number().int(),
   limit: z.number().int(),
   has_more: z.boolean(),
-  items: z.array(ShieldItem),
+  items: z.array(LenientItem),
   /** Paging fields (absent from a Shield older than this change). */
   matched: z.number().int().nonnegative().optional(),
   newer: z.number().int().nonnegative().optional(),
   capacity: z.number().int().positive().nullish(),
-  focus_item: ShieldItem.nullish(),
+  focus_item: LenientItem.nullish(),
   newest_id: z.string().nullish(),
 })
 
@@ -204,7 +230,7 @@ export interface ShieldPage {
   perPage: number
 }
 
-async function get<T>(path: string, schema: z.ZodType<T>): Promise<T> {
+async function get<T>(path: string, schema: z.ZodType<T, z.ZodTypeDef, unknown>): Promise<T> {
   const res = await fetch(`/shield-api${path}`, { cache: 'no-store' })
   if (!res.ok) throw new Error(`${res.status} from shield (${path})`)
   return schema.parse(await res.json())
@@ -244,7 +270,7 @@ export function fetchPolicy() {
   return get('/policy', ShieldPolicy)
 }
 
-async function post<T>(path: string, body: unknown, schema: z.ZodType<T>): Promise<T> {
+async function post<T>(path: string, body: unknown, schema: z.ZodType<T, z.ZodTypeDef, unknown>): Promise<T> {
   const res = await fetch(`/shield-api${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

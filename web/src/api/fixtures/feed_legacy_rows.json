@@ -1,0 +1,111 @@
+{
+ "counts": {
+  "checked": 3,
+  "caught": 0,
+  "high_risk": 2
+ },
+ "total": 3,
+ "offset": 0,
+ "limit": 60,
+ "has_more": false,
+ "items": [
+  {
+   "id": "07b585385c",
+   "source": "desktop",
+   "surface": "Claude \u00b7 desktop",
+   "ts": "09:02:00",
+   "date": "2026-09-01",
+   "verb": "Message to Claude \u00b7 sent before privacy settings",
+   "status": "answered",
+   "tool": null,
+   "identity": {},
+   "flags": [],
+   "seal": "9954e55159d8fd16",
+   "usage": {},
+   "latency_ms": null,
+   "verdict": null,
+   "chars": null,
+   "redactions": [],
+   "reply": null,
+   "tools": [],
+   "sources": null,
+   "tier": "ok"
+  },
+  {
+   "id": "525000c959",
+   "source": "desktop",
+   "surface": "Claude \u00b7 desktop",
+   "ts": "09:01:00",
+   "date": "2026-09-01",
+   "verb": "Message to Claude \u00b7 sent before privacy settings",
+   "status": "answered",
+   "tool": null,
+   "identity": {},
+   "flags": [
+    {
+     "tier": "high",
+     "rule": "credential_assign"
+    },
+    {
+     "tier": "agent",
+     "rule": "password_said"
+    }
+   ],
+   "seal": "01db22d51c748a30",
+   "usage": {},
+   "latency_ms": null,
+   "verdict": null,
+   "chars": null,
+   "redactions": [],
+   "reply": null,
+   "tools": [],
+   "sources": null,
+   "tier": "bad"
+  },
+  {
+   "id": "c6a25ee1b1",
+   "source": "mcp",
+   "surface": "MCP client",
+   "ts": "09:00:00",
+   "date": "2026-09-01",
+   "verb": "execute call \u00b7 0 characters",
+   "status": "running",
+   "tool": "execute",
+   "identity": {},
+   "flags": [
+    {
+     "tier": "high",
+     "rule": "openai_key"
+    },
+    {
+     "tier": "high",
+     "rule": "credential_assign"
+    },
+    {
+     "tier": "agent",
+     "rule": "tool_intent"
+    },
+    {
+     "tier": "pii",
+     "rule": "reply_leak"
+    }
+   ],
+   "seal": "",
+   "usage": {},
+   "latency_ms": null,
+   "verdict": null,
+   "chars": 0,
+   "redactions": [],
+   "reply": null,
+   "tools": [],
+   "sources": null,
+   "tier": "bad",
+   "call_id": null
+  }
+ ],
+ "matched": 3,
+ "newer": 0,
+ "capacity": 100,
+ "focus_item": null,
+ "newest_id": "07b585385c"
+}

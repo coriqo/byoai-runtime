@@ -14,7 +14,7 @@ vi.mock('@/api/shield', async orig => ({
 }))
 
 const row = (i: number) => ({
-  id: `i${i}`, tier: 'ok', status: 'ok', surface: `App ${i}`, source: 'browser', date: '2026-09-01', ts: '10:00',
+  id: `i${i}`, tier: 'ok', status: 'answered', surface: `App ${i}`, source: 'browser', date: '2026-09-01', ts: '10:00',
   verb: `Sent message ${i}`, flags: [], seal: '',
 })
 function feedOf(total: number, q: FeedQuery, extra: object = {}) {
@@ -154,5 +154,23 @@ describe('Timeline paging', () => {
     reply = q => feedOf(400, q)
     mount()
     await screen.findByText(/Shield lists its latest 400 events/)
+  })
+})
+
+describe('Timeline with a row this window cannot read', () => {
+  it('shows a quiet row for it and keeps the rest and the total', async () => {
+    reply = q => {
+      const { items, ...rest } = feedOf(3, q)
+      return { ...rest, items: [items[0], { ...items[1], tier: 'mystery' }, items[2]] }
+    }
+    // Same parse path as the app: the mock replaces the fetch, so parse here.
+    const { ShieldFeed } = await import('@/api/shield')
+    const inner = reply
+    reply = q => ShieldFeed.parse(inner(q))
+    mount()
+    expect((await screen.findAllByText(/older Shield version that this window cannot show/)).length).toBe(1)
+    expect(screen.getByText('Sent message 0')).toBeTruthy()
+    expect(screen.getByText('Sent message 2')).toBeTruthy()
+    expect(screen.getByText('Cannot show')).toBeTruthy()
   })
 })
