@@ -52,7 +52,9 @@ export function Sheet({ item, onClose, onOpenTimeline }: {
         </p>
         <p className="sheet-line">{verb}</p>
         <Banner tone={item.tier === 'ok' ? 'info' : item.tier === 'bad' ? 'bad' : 'warn'}>
-          <span><b>{what(item)}</b> {VERDICT[item.tier]}</span>
+          {item.unreadable
+            ? <span><b>Not shown.</b> This entry is still in the ledger, but this window cannot read its details. Update Shield to see it.</span>
+            : <span><b>{what(item)}</b> {VERDICT[item.tier]}</span>}
         </Banner>
 
         {item.file && (<>

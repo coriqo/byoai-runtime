@@ -32,7 +32,7 @@ export function Trust({ verify, policy, onOpen, goSettings, goLedger }: {
   const todays = all.filter(it => inWhen(it.date, 'today'))
   const counts = {
     checked: todays.length,
-    caught: todays.filter(it => it.tier === 'warn').length,
+    caught: todays.filter(it => it.tier === 'warn' && !it.unreadable).length,
     bad: todays.filter(it => it.tier === 'bad').length,
     mcp: todays.filter(it => it.source === 'mcp').length,
     browser: todays.filter(it => it.source === 'browser').length,

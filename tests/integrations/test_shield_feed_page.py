@@ -99,3 +99,67 @@ def test_focus_returns_the_row_off_the_page(tmp_path):
     assert out["focus_item"]["id"] == oldest and oldest not in [i["id"] for i in out["items"]]
     assert feed_page(feed, q(focus="nope"))["focus_item"] is None
     assert not any(k.startswith("_") for k in out["focus_item"])
+
+
+# ---- legacy rows: every flag tier served is one the window's schema names ----
+
+CONTRACT = {"agent", "high", "pii", "conduct"}
+
+
+def make_legacy_feed(tmp_path):
+    ledger = tmp_path / "captures.jsonl"
+    rows = [
+        {"wall_clock": "2026-09-01 09:00:00", "kind": "tool.call", "tool": "execute",
+         "input_preview": "api_key = sk-abcdefghijklmnop1234 refund"},
+        {"wall_clock": "2026-09-01 09:01:00", "kind": "desktop.chat.request",
+         "prompt": "my password: hunter2hunter2 please"},
+        {"wall_clock": "2026-09-01 09:02:00", "kind": "desktop.chat.request",
+         "prompt": "plain message"},
+    ]
+    ledger.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    cfg = ShieldConfig(
+        ledger=ledger, seal_path=tmp_path / "sealchain.json", key_dir=tmp_path / "keys",
+        policy_path=tmp_path / "policy.json", managed_policy_path=tmp_path / "m.json",
+        sig_every=4, max_interactions=100)
+    feed = Feed(cfg)
+    feed.scan_initial()
+    return feed
+
+
+def test_legacy_rows_serve_only_contract_tiers(tmp_path):
+    feed = make_legacy_feed(tmp_path)
+    internal = {f["tier"] for it in feed.items for f in it["flags"]}
+    assert internal & {"secret", "flag"}          # the rows really are legacy-shaped
+    out = feed_page(feed, {})
+    served = {f["tier"] for it in out["items"] for f in it["flags"]}
+    assert served and served <= CONTRACT
+    assert len(out["items"]) == 3 and out["total"] == 3
+
+
+def test_a_credential_in_a_legacy_row_is_high_risk(tmp_path):
+    feed = make_legacy_feed(tmp_path)
+    out = feed_page(feed, q(need="bad"))
+    assert out["matched"] == 2 and {i["tier"] for i in out["items"]} == {"bad"}
+    assert out["counts"]["high_risk"] == 2
+    assert {f["tier"] for f in out["items"][0]["flags"]} >= {"high"}
+
+
+def test_serving_does_not_change_stored_flags_or_seals(tmp_path):
+    feed = make_legacy_feed(tmp_path)
+    before = [(it["flags"], it["seal"]) for it in feed.items]
+    feed_page(feed, {})
+    assert [(it["flags"], it["seal"]) for it in feed.items] == before
+    assert any(f["tier"] == "secret" for it in feed.items for f in it["flags"])
+
+
+def test_response_matches_the_window_fixture(tmp_path):
+    """Records the response the web schema test parses (web/src/api/fixtures)."""
+    import os
+    feed = make_legacy_feed(tmp_path)
+    out = feed_page(feed, {})
+    path = os.path.join(os.path.dirname(__file__), "..", "..", "web", "src", "api",
+                        "fixtures", "feed_legacy_rows.json")
+    with open(path) as fh:
+        recorded = json.load(fh)
+    assert {f["tier"] for it in recorded["items"] for f in it["flags"]} <= CONTRACT
+    assert [i["tier"] for i in out["items"]] == [i["tier"] for i in recorded["items"]]
