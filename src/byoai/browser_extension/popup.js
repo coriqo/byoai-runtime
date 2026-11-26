@@ -28,7 +28,47 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 let consented = false
 
+/*
+ * Admin-added sites that this browser has not allowed yet: one plain line per
+ * site and a button. chrome.permissions.request only works from a click, so the
+ * button is the whole reason this lives in the popup. Also says when the
+ * service worker could not set a site up.
+ */
+async function renderExtraSites() {
+  const box = el('extra-sites')
+  box.textContent = ''
+  box.hidden = true
+  try {
+    const X = globalThis.SHIELD_EXTRA_SITES
+    const store = await chrome.storage.local.get(['shield_policy', 'extra_sites_status'])
+    const wanted = X.cleanExtraSites(store.shield_policy?.extra_sites, globalThis.SHIELD_OPTIONAL_SITES)
+    const granted = new Set()
+    for (const s of wanted) {
+      if (await chrome.permissions.contains({ origins: [X.originOf(s.host)] })) granted.add(s.host)
+    }
+    const line = (text) => { const p = document.createElement('p'); p.className = 'help'; p.textContent = text; box.append(p) }
+    for (const site of X.pendingGrants(wanted, granted)) {
+      line(X.grantLine(site))
+      const b = document.createElement('button')
+      b.className = 'small'
+      b.textContent = `Allow ${site.host}`
+      b.addEventListener('click', async () => {
+        let ok = false
+        try { ok = await chrome.permissions.request({ origins: [X.originOf(site.host)] }) } catch { ok = false }
+        if (ok) await send({ type: 'agent.syncExtraSites' }).catch(() => null)
+        else b.textContent = `Not allowed. Click to try again: ${site.host}`
+        await renderExtraSites()
+      })
+      box.append(b)
+    }
+    const off = store.extra_sites_status?.off
+    if (off && wanted.length) line(`${off} Reload the extension at chrome://extensions, or ask your administrator.`)
+    box.hidden = !box.childNodes.length
+  } catch { /* the popup still works without this block */ }
+}
+
 async function refresh() {
+  renderExtraSites()
   // A cold worker can miss the timeout; fall back to what is stored rather than
   // showing "off" for someone whose capture is running.
   const asked = await withTimeout(send({ type: 'agent.getConsent' }), 3000).catch(() => null)

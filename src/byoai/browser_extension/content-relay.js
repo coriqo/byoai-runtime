@@ -65,8 +65,22 @@
   const RULES = window.__shieldRules
   const core = window.__shieldCore // this world's own copy: the page can't reach it
   const sites = (window.__shieldSites && window.__shieldSites.sites) || []
-  const site = sites.find((x) => Array.isArray(x.hosts) && x.hosts.includes(location.host)) ||
+  const found = sites.find((x) => Array.isArray(x.hosts) && x.hosts.includes(location.host)) ||
     { compose: [], send: [], upload: [] }
+  // A copy, so an admin's selectors (below) never touch the shared profile.
+  const site = { ...found, compose: [...(found.compose || [])], send: [...(found.send || [])] }
+  const baseCompose = [...site.compose]
+  const baseSend = [...site.send]
+  // An admin-added site is on unless Shield's app toggles say it is off; the
+  // admin's own selectors go before the generic ones, and only for this host.
+  const isExtra = found.optional === true
+  function applyExtra() {
+    if (!isExtra) return
+    const mine = (policy && Array.isArray(policy.extra_sites) ? policy.extra_sites : [])
+      .find((x) => x && x.host === location.host)
+    site.compose.splice(0, site.compose.length, ...((mine && mine.compose) || []), ...baseCompose)
+    site.send.splice(0, site.send.length, ...((mine && mine.send) || []), ...baseSend)
+  }
   const gateApp = site.app
   let cfg = { consented: false, mode: 'redact', apps: null, actions: {}, files: {} }
   const eng = gateApp && RULES && core && core.engine(RULES, () => cfg)
@@ -83,6 +97,7 @@
   let lastPointer = null
 
   function syncCfg() {
+    applyExtra()
     if (!eng) return
     cfg = {
       consented: consented === true,
@@ -313,7 +328,7 @@
    * network wrapper uses (shield-core.js), and that wrapper stays as the
    * backstop.
    */
-  const governing = () => !disabled && eng && cfg.consented && (cfg.apps === null || cfg.apps[gateApp] === true)
+  const governing = () => !disabled && eng && cfg.consented && (cfg.apps === null || cfg.apps[gateApp] === true || (isExtra && cfg.apps[gateApp] === undefined))
   const newId = () => (globalThis.crypto && crypto.randomUUID ? crypto.randomUUID()
     : Array.from({ length: 32 }, () => Math.floor(Math.random() * 16).toString(16)).join(''))
 

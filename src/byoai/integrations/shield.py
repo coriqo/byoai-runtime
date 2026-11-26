@@ -47,6 +47,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from byoai.integrations.shield_extra_sites import (
+    clean_extra_sites,
+    removed_hosts,
+    validate_extra_sites,
+)
 from byoai.integrations.shield_sync import SYNC_LEVELS, level_words, sync_level
 from byoai.recorder.keys import load_or_create_device_key
 from byoai.recorder.merkle import MerkleTree, checkpoint_leaf_hash
@@ -1309,6 +1314,9 @@ def default_policy() -> dict:
         # "daily" totals, or per-message "events". Only a signed managed
         # policy moves it; see byoai.integrations.shield_sync.
         "sync": "seal",
+        # Curated AI sites an admin switched on (see shield_extra_sites):
+        # none until someone adds one.
+        "extra_sites": [],
     }
 
 
@@ -1317,6 +1325,7 @@ def merge_policy(disc: dict) -> dict:
     p["apps"] = {**default_policy()["apps"], **(disc.get("apps") or {})}
     p["actions"] = clean_actions(disc.get("actions"))
     p["files"] = clean_files(disc.get("files"))
+    p["extra_sites"] = clean_extra_sites(disc.get("extra_sites"))
     return p
 
 
@@ -1342,6 +1351,10 @@ def load_policy(cfg: ShieldConfig) -> dict:
     for key in locked:
         if key == "apps" and isinstance(policy.get("apps"), dict):
             out["apps"] = {**out.get("apps", {}), **policy["apps"]}
+        elif key == "extra_sites":
+            # Locked means the signed policy decides, and a policy that lists
+            # none means none: the device's own list is not added to it.
+            out[key] = clean_extra_sites(policy.get(key))
         elif key in policy:
             out[key] = policy[key]
     return out
@@ -1364,7 +1377,7 @@ def load_policy(cfg: ShieldConfig) -> dict:
 # offers mode, apps, keep_text, retention_days and notice. ``actions`` and
 # ``files`` are not lockable yet.
 MANAGED_LOCKABLE_KEYS = ("mode", "apps", "keep_text", "retention_days", "notice",
-                         "sync")
+                         "sync", "extra_sites")
 
 
 def load_managed_policy(path: Path | None = None) -> dict | None:
@@ -1415,6 +1428,8 @@ def _validate_managed_policy(policy: dict) -> None:
     for key in ("keep_text", "notice"):
         if key in policy and not isinstance(policy[key], bool):
             raise ValueError(f"{key} must be true or false")
+    if "extra_sites" in policy:
+        validate_extra_sites(policy["extra_sites"])
     if "sync" in policy and policy["sync"] not in SYNC_LEVELS:
         raise ValueError("sync must be " + ", ".join(SYNC_LEVELS[:-1])
                          + " or " + SYNC_LEVELS[-1])
@@ -1661,6 +1676,11 @@ def apply_policy_update(policy: dict, payload: dict) -> dict:
                 a in APP_LABEL and v in FILE_ACTIONS for a, v in fl.items()):
             raise ValueError("files must map app names to " + ", ".join(FILE_ACTIONS))
         out["files"] = {**clean_files(out.get("files")), **fl}
+    removing_site = False
+    if "extra_sites" in payload:
+        new_sites = validate_extra_sites(payload["extra_sites"])
+        removing_site = bool(removed_hosts(policy.get("extra_sites"), new_sites))
+        out["extra_sites"] = new_sites
     for key in ("keep_text", "notice"):
         if key in payload:
             if not isinstance(payload[key], bool):
@@ -1671,7 +1691,7 @@ def apply_policy_update(policy: dict, payload: dict) -> dict:
             raise ValueError("retention_days must be one of "
                              + ", ".join(map(str, RETENTION_CHOICES)))
         out["retention_days"] = payload["retention_days"]
-    weakened = ((out["mode"] == "observe" and policy.get("mode") != "observe")
+    weakened = (removing_site or (out["mode"] == "observe" and policy.get("mode") != "observe")
                 or (out["keep_text"] and not policy.get("keep_text"))
                 or any(ACTIONS.index(a) < ACTIONS.index(
                     clean_actions(policy.get("actions"))[t])
