@@ -69,7 +69,9 @@
         "app": "copilot",
         "hosts": [
           "copilot.microsoft.com",
-          "copilot.com"
+          "copilot.com",
+          "copilot.cloud.microsoft",
+          "m365.cloud.microsoft"
         ],
         "compose": [
           "textarea#userInput",
@@ -83,6 +85,32 @@
         "upload": [
           "input[type=\"file\"]"
         ]
+      },
+      {
+        "app": "mistral_web",
+        "hosts": [
+          "chat.mistral.ai"
+        ],
+        "compose": [],
+        "send": [],
+        "chat_paths": [],
+        "upload": [
+          "input[type=\"file\"]"
+        ],
+        "optional": true
+      },
+      {
+        "app": "deepseek_web",
+        "hosts": [
+          "chat.deepseek.com"
+        ],
+        "compose": [],
+        "send": [],
+        "chat_paths": [],
+        "upload": [
+          "input[type=\"file\"]"
+        ],
+        "optional": true
       }
     ]
   }

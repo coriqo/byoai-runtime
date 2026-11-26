@@ -56,7 +56,7 @@
     <section>
       <h2>Where it watches</h2>
       <p>Only when you send a message on claude.ai, chatgpt.com
-        (and chat.openai.com), gemini.google.com or copilot.microsoft.com (and copilot.com).
+        (and chat.openai.com), gemini.google.com or copilot.microsoft.com (and copilot.com, copilot.cloud.microsoft, and m365.cloud.microsoft/chat).
         No other site.</p>
     </section>
     <section>
@@ -79,7 +79,7 @@
         messages, a message carrying a password or an executable file name is not sent at all and the chat
         shows an error.</p>
       <p style="margin-top:8px">Your Shield's settings decide this: "Record only" leaves messages
-        unchanged. On gemini.google.com and copilot.microsoft.com (and copilot.com) messages always go out unchanged, because
+        unchanged. On gemini.google.com and copilot.microsoft.com (and copilot.com, copilot.cloud.microsoft, and m365.cloud.microsoft/chat) messages always go out unchanged, because
         those sites don't send them in a form the extension can safely rewrite.</p>
     </section>
     <section>
@@ -93,6 +93,14 @@
       <p>This extension is the browser side of Shield, a separate program you install on this computer
         (<code>byoai-shield</code>). Without it, nothing is recorded; a few messages are held for a short
         while and then dropped.</p>
+    </section>
+    <section>
+      <h2>Sites your administrator adds</h2>
+      <p>If your administrator switches on another AI chat site in Shield (today only
+        <code>chat.mistral.ai</code> or <code>chat.deepseek.com</code>), the popup tells you which one and
+        asks Chrome for your permission for that one site. Nothing runs there until you allow it. To do this
+        the extension has the <code>scripting</code> permission, which it uses only to add its own checking
+        scripts to that site. It never asks for access to all sites.</p>
     </section>
     <section>
       <h2>Turning it off</h2>

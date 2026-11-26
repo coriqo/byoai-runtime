@@ -41,6 +41,9 @@ const isGranted = (value) => value?.version === CONSENT_VERSION
 // it first) cannot slip behind a check that already passed.
 let consentOn = false
 const hasConsent = async () => { await restore(); return consentOn }
+importScripts('extra-sites.js', 'shield-optional.js')
+const EXTRA = globalThis.SHIELD_EXTRA_SITES
+const EXTRA_STATUS_KEY = 'extra_sites_status'
 const TODAY_KEY = 'today'
 // app -> when Shield last saw chat traffic it does not recognise (the canary).
 const HEALTH_KEY = 'health_unmatched'
@@ -126,11 +129,61 @@ async function refreshPolicy(endpoint, { verified = false } = {}) {
     const files = {}
     for (const app of POLICY_APPS) if (FILE_ACTIONS.includes(p?.files?.[app])) files[app] = p.files[app]
     if (!consentOn) return // withdrawn while asking
+    // Admin-added sites: only curated hosts survive, at most MAX_SITES.
+    const extra_sites = EXTRA.cleanExtraSites(p?.extra_sites, globalThis.SHIELD_OPTIONAL_SITES)
     await chrome.storage.local.set({
-      [POLICY_KEY]: { mode: MODES.includes(p?.mode) ? p.mode : 'redact', apps, actions, files, at: Date.now() },
+      [POLICY_KEY]: { mode: MODES.includes(p?.mode) ? p.mode : 'redact', apps, actions, files, extra_sites, at: Date.now() },
     })
+    syncExtraSites(extra_sites)
   } catch { /* unreachable: keep what was saved */ }
 }
+
+/*
+ * Admin-added sites. Shield policy (already verified above) lists curated
+ * hosts; each one that this browser has been allowed to run on gets the same
+ * scripts the manifest injects, registered at runtime. A host the user has not
+ * allowed yet is not touched: the popup says which one and offers the button.
+ * Every outcome is written to `extra_sites_status` so nothing fails silently.
+ */
+let extraChain = Promise.resolve()
+function syncExtraSites(wanted) {
+  return (extraChain = extraChain.then(() => doSyncExtraSites(wanted), () => doSyncExtraSites(wanted)))
+}
+async function doSyncExtraSites(wantedIn) {
+  const status = { at: Date.now(), errors: {}, off: null }
+  try {
+    const wanted = consentOn ? (wantedIn || []) : []
+    if (!chrome.scripting?.registerContentScripts) {
+      status.off = wanted.length ? 'This browser has no scripting API, so admin-added sites cannot be checked.' : null
+      return
+    }
+    const granted = new Set()
+    for (const site of wanted) {
+      try {
+        if (await chrome.permissions.contains({ origins: [EXTRA.originOf(site.host)] })) granted.add(site.host)
+      } catch (e) { status.errors[site.host] = String(e?.message || e) }
+    }
+    const registered = (await chrome.scripting.getRegisteredContentScripts())
+      .filter((r) => r.id.startsWith('shield-extra-'))
+    const plan = EXTRA.planExtraSites({ wanted, registered, granted })
+    // Unregister first: a removed site stops being checked as soon as policy says so.
+    if (plan.unregister.length) await chrome.scripting.unregisterContentScripts({ ids: plan.unregister })
+    if (plan.update.length) await chrome.scripting.updateContentScripts(plan.update)
+    if (plan.register.length) await chrome.scripting.registerContentScripts(plan.register)
+    for (const host of plan.needsPermission) status.errors[host] = status.errors[host] || 'needs permission'
+  } catch (e) {
+    status.off = `Admin-added sites could not be set up: ${String(e?.message || e)}`
+  } finally {
+    try { await chrome.storage.local.set({ [EXTRA_STATUS_KEY]: status }) } catch { /* nothing to report to */ }
+  }
+}
+const syncExtraFromStore = async () => {
+  await restore()
+  const kept = (await chrome.storage.local.get(POLICY_KEY))[POLICY_KEY]
+  return syncExtraSites(kept?.extra_sites || [])
+}
+chrome.permissions?.onAdded?.addListener(() => { syncExtraFromStore() })
+chrome.permissions?.onRemoved?.addListener(() => { syncExtraFromStore() })
 
 // A content script shares the extension's id but runs for a web page and reports
 // that page's URL; only our own pages (the popup) report an extension URL.
@@ -194,7 +247,7 @@ let queue = []
 let timer = null
 let restoring = null
 
-const WATCHED_HOST = ['claude.ai', 'chatgpt.com', 'chat.openai.com', 'gemini.google.com', 'copilot.microsoft.com', 'copilot.com']
+const WATCHED_HOST = ['claude.ai', 'chatgpt.com', 'chat.openai.com', 'gemini.google.com', 'copilot.microsoft.com', 'copilot.com', 'copilot.cloud.microsoft', 'm365.cloud.microsoft']
 
 /*
  * Badge on the Shield-covered surfaces: while a Shield page (claude.ai,
@@ -262,6 +315,7 @@ function setOfflineIfQueued() {
 
 chrome.runtime.onInstalled.addListener((details) => {
   chrome.action.setBadgeText({ text: '' })
+  syncExtraFromStore() // an update may have dropped runtime-registered scripts
   // First install: show exactly what this does and ask, before anything runs.
   // Also for someone upgrading from a build that asked less (before 0.5 it
   // captured without asking; before 0.6 it never rewrote a message): they are
@@ -276,7 +330,7 @@ chrome.runtime.onInstalled.addListener((details) => {
 // A worker that starts fresh (cold start, after termination, after browser
 // restart) resumes from what it persisted — or, finding nothing, honestly
 // reports the gap.
-chrome.runtime.onStartup.addListener(() => restore())
+chrome.runtime.onStartup.addListener(() => { syncExtraFromStore() })
 restore()
 
 chrome.storage.onChanged.addListener((changes, area) => {
@@ -372,6 +426,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         ? chrome.storage.local.set({ [CONSENT_KEY]: { version: CONSENT_VERSION, at: Date.now() } })
           .then(() => { getEndpoint().then((e) => refreshPolicy(e)) })
         : chrome.storage.local.remove([CONSENT_KEY, LAST_CAPTURE_KEY, TODAY_KEY, POLICY_KEY, HEALTH_KEY])
+          .then(() => syncExtraSites([])) // withdrawn: admin-added sites stop too
       return done
     }).then(() => reply?.({ ok: true }), () => reply?.({ error: 'failed' }))
     return true
@@ -387,6 +442,10 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     }
     const job = msg.type === 'agent.noteWitness' ? noteWitness(msg.total) : acceptRecord(msg.total)
     job.then((shorter) => reply?.({ shorter: shorter || null }), () => reply?.({ error: 'failed' }))
+    return true
+  } else if (msg?.type === 'agent.syncExtraSites') {
+    if (!isExtensionPage(sender)) { reply?.({ error: 'not allowed' }); return false }
+    syncExtraFromStore().then(() => reply?.({ ok: true }), () => reply?.({ error: 'failed' }))
     return true
   } else if (msg?.type === 'agent.getEndpoint') {
     chrome.storage.local.get(ENDPOINT_KEY, (v) =>

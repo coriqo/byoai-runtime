@@ -32,6 +32,7 @@ from typing import Any
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
+from byoai.integrations.shield_extra_sites import validate_extra_sites
 from byoai.recorder.canonical import canonicalize
 from byoai.shield_server.store import PolicyRow, ServerStore
 
@@ -54,7 +55,7 @@ __all__ = [
 
 MODES = {"observe", "redact", "block"}
 RETENTION_DAYS = {7, 30, 90, 365}
-LOCKABLE_KEYS = ("mode", "apps", "keep_text", "retention_days", "notice")
+LOCKABLE_KEYS = ("mode", "apps", "keep_text", "retention_days", "notice", "extra_sites")
 
 
 class PolicyValidationError(ValueError):
@@ -91,10 +92,18 @@ def validate_policy(policy: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(key, str) or not isinstance(value, bool):
             raise PolicyValidationError("apps must map string app names to true/false")
         normalized_apps[key] = value
-    return {
+    normalized = {
         "mode": mode, "apps": normalized_apps, "keep_text": keep_text,
         "retention_days": retention_days, "notice": notice,
     }
+    # Only written when the admin set it, so every policy made before this key
+    # existed signs to the same document as before.
+    if "extra_sites" in policy:
+        try:
+            normalized["extra_sites"] = validate_extra_sites(policy["extra_sites"])
+        except ValueError as exc:
+            raise PolicyValidationError(str(exc)) from exc
+    return normalized
 
 
 def validate_locked(locked: list[str] | None) -> list[str]:

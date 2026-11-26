@@ -9,7 +9,7 @@ it, and you can turn it off again at any time from its popup.
 ## What it does
 
 When you send a message on claude.ai, chatgpt.com (and chat.openai.com),
-gemini.google.com or copilot.microsoft.com (and copilot.com), the extension notes the fact and
+gemini.google.com or copilot.microsoft.com (and copilot.com, copilot.cloud.microsoft, and m365.cloud.microsoft/chat), the extension notes the fact and
 hands it to **Shield, a separate program running on your own computer**
 (`byoai-shield`). No other site is watched. Without Shield running, nothing is
 recorded.
@@ -122,7 +122,7 @@ from them). *Record only* (`observe`) leaves messages unchanged, and so does
 an app switched off in Shield. Until the extension has heard from your Shield
 it uses the default, *redact*.
 
-On gemini.google.com and copilot.microsoft.com (and copilot.com) the network requests are only
+On gemini.google.com and copilot.microsoft.com (and copilot.com, copilot.cloud.microsoft, and m365.cloud.microsoft/chat) the network requests are only
 noted, never rewritten: those sites send messages as form-encoded or websocket
 traffic the extension can't safely rewrite. When those apps are turned on in
 Shield (they are off in Shield's default policy, and checked like the others
@@ -162,6 +162,7 @@ setting of Shield, off by default, not of this extension.
 | `chrome.storage.local` `pinned_shield` | Shield's public key, saved when first paired | until you re-pair |
 | `chrome.storage.local` `witness` / `rollback` | the highest count of sealed entries Shield reported (one number), and a flag if it later dropped | until you re-pair or accept |
 | `chrome.storage.local` `shield_policy` | Shield's mode, its per-tier actions and which apps it covers, as your paired Shield reported them | refreshed from Shield; removed when you turn capture off |
+| `chrome.storage.local` `extra_sites_status` | whether each admin-added site was set up, or why not (host names and a short reason, no content) | overwritten on each policy refresh |
 | `chrome.storage.local` `health_unmatched` | the time the canary last fired, per app | until that app's sends are recognised again, or you turn capture off |
 | `chrome.storage.local` `last_capture` / `today` | one "last message noted" time per app, and today's message count | overwritten on each send; removed when you turn capture off |
 
@@ -180,6 +181,21 @@ None of this contains message text, and none of it leaves your computer.
   since the sites' security policies block injecting anything else); the
   other relays the text-free fact to the extension, and passes Shield's mode
   back to the page. Neither loads remote code. All code ships in the package.
+- `scripting` (from 0.10.6): lets the extension add its own two content scripts
+  (the same files listed above, nothing new) to an extra chat site your
+  administrator switched on in Shield's policy. It is used for nothing else and
+  cannot inject code of its own or from anywhere else.
+- Optional host access to specific sites (from 0.10.6, currently
+  `chat.mistral.ai` and `chat.deepseek.com`): not granted at install. Chrome
+  asks you, for one site at a time, when you press the button in the popup that
+  says which site your administrator added. Until you allow it, nothing runs
+  there. There is no `https://*/*` or all-sites permission, and a site that is
+  not in the manifest's list cannot be added by policy, only by a new release.
+  An administrator can pre-grant these origins on managed browsers through
+  Chrome's ExtensionSettings policy; whether its `runtime_allowed_hosts`
+  setting grants optional hosts (rather than only exempting them from
+  `runtime_blocked_hosts`) is not verified here, so test it on one managed
+  browser before relying on it.
 
 ## Your choices
 
