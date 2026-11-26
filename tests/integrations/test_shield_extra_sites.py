@@ -47,7 +47,7 @@ def test_manifest_list_validator_script_and_generator_agree():
     hosts = curated_hosts()
     assert manifest["optional_host_permissions"] == [f"https://{h}/*" for h in hosts]
     assert "scripting" in manifest["permissions"]
-    assert manifest["version"] == "0.10.6"
+    assert manifest["version"] == "0.10.7"
     for pattern in manifest["optional_host_permissions"]:
         assert pattern.startswith("https://") and "*." not in pattern and pattern.count("*") == 1
     forbidden = {"https://*/*", "<all_urls>", "*://*/*"}

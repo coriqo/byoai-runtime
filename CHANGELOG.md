@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Browser extension 0.10.7: Microsoft Copilot messages are checked even when the
+  page's message box is not the old `textarea#userInput`. The input gate now
+  falls back to a visible textarea, contenteditable or `role=textbox` field
+  (shadow roots included) on Enter, the send button and a form submit, and
+  recognises send buttons by `data-testid` containing `submit`, `type=submit`,
+  or a label of "send", "submit" or "ask". Search boxes, rename and other
+  dialogs are never edited. If the gate cannot tell which field is the message
+  box it leaves it alone and records why (`data-shield-gate`); the popup shows
+  that reason as one line with where to fix it, and a new "Copy page check"
+  button copies the page's control shapes (tag, role, label, `data-testid`; no
+  message text, no field values) for us to fix selectors without live access.
+  Not yet confirmed on a signed-in Copilot page; covered by jsdom tests of the
+  three known box shapes.
+
 ### Added
 - Browser extension 0.10.6: an administrator can switch on a known AI chat site
   through Shield policy (`extra_sites`, default none) without a new extension

@@ -86,7 +86,11 @@
   const eng = gateApp && RULES && core && core.engine(RULES, () => cfg)
   // Why the gate did or didn't act, readable from the page for support (no text,
   // no rule matches: a state word only).
-  const diag = (s) => { try { document.documentElement.setAttribute('data-shield-gate', s) } catch { /* no DOM yet */ } }
+  let gateInfo = { state: '', via: '', kind: '', at: 0 } // what the popup's page check reports
+  const diag = (s, kind) => {
+    gateInfo = { state: s, via: gateInfo.via, kind: kind || gateInfo.kind, at: Date.now() }
+    try { document.documentElement.setAttribute('data-shield-gate', s) } catch { /* no DOM yet */ }
+  }
   diag(eng ? 'ready' : `off:${!gateApp ? `no-site:n=${sites.length}:h=${location.host}:top=${window === window.top}:g=${typeof window.__shieldSites}` : !RULES ? 'no-rules' : !core ? 'no-core' : 'no-engine'}`)
   const localWaiters = new Map()
   var gateListeners = null // eslint-disable-line no-var -- read by disable(), which can run first
@@ -351,21 +355,130 @@
     for (const sel of sels) { try { const m = root.querySelector(sel); if (m) return m } catch { /* bad selector */ } }
     return null
   }
-  const GENERIC_COMPOSE = 'textarea, [contenteditable=""], [contenteditable="true"], [contenteditable="plaintext-only"]'
-  const GENERIC_SEND = 'button[aria-label*="send" i], [role="button"][aria-label*="send" i], [data-testid*="send" i]'
-  // Enter is a send only inside the site's own message box; a search field or
-  // an "edit message" textarea is not one.
-  const composeOf = (t) => (t && t.closest ? closestAny(t, site.compose) : null)
-  const sendOf = (t) => (t && t.closest ? (closestAny(t, site.send) || closestDeep(t, GENERIC_SEND)) : null)
-  // The message box a send button belongs to: the nearest ancestor that holds one
-  // (site profile first, then any textarea/contenteditable).
-  function composeFor(btn) {
-    for (let n = btn.parentNode; n; n = n.parentNode || n.host) {
-      if (!n.querySelector) continue
-      const m = queryAny(n, site.compose) || n.querySelector(GENERIC_COMPOSE)
-      if (m) return m
+  const GENERIC_COMPOSE = 'textarea, [contenteditable=""], [contenteditable="true"], [contenteditable="plaintext-only"], [role="textbox"]'
+  const GENERIC_SEND = 'button[aria-label*="send" i], [role="button"][aria-label*="send" i], [data-testid*="send" i], ' +
+    '[data-testid*="submit" i], button[type="submit"], button[aria-label*="submit" i], [role="button"][aria-label*="submit" i], ' +
+    'button[aria-label~="ask" i], [role="button"][aria-label~="ask" i]'
+  // A button that is labelled in words only ("Submit") still counts as a send control.
+  const SEND_WORD = /\b(send|submit|ask)\b/i
+  const BUTTONS = 'button, [role="button"], [type="submit"]'
+  // Fields that are never a message box: search, rename and settings dialogs, menus.
+  const NOT_COMPOSE = '[role="dialog"], [role="alertdialog"], dialog, [aria-modal="true"], [role="search"], [role="searchbox"], ' +
+    '[role="combobox"], [role="listbox"], [role="menu"], [type="search"]'
+  const NOT_COMPOSE_LABEL = /search|find|rename|filter|title|folder|name/i
+  const labelOf = (el) => {
+    const t = (el.textContent || '').trim()
+    return `${el.getAttribute('aria-label') || ''} ${el.getAttribute('title') || ''} ${t.length <= 24 ? t : ''}`
+  }
+  const isSendLike = (el) => {
+    try { if (el.matches(GENERIC_SEND)) return true } catch { /* bad selector */ }
+    return SEND_WORD.test(labelOf(el))
+  }
+  const editableAttr = (n) => ['', 'true', 'plaintext-only'].includes(n.getAttribute && n.getAttribute('contenteditable'))
+  // The editable field the user is in (a textarea or a contenteditable, shadow roots crossed), or null.
+  function editableOf(t) {
+    for (let n = t; n; n = n.parentNode || n.host) {
+      if (n.nodeType !== 1) continue
+      if (n.tagName === 'TEXTAREA') return n.disabled || n.readOnly ? null : n
+      if (editableAttr(n)) return n
     }
     return null
+  }
+  function visible(el) {
+    try {
+      if (el.hidden) return false
+      const st = window.getComputedStyle(el)
+      return st.display !== 'none' && st.visibility !== 'hidden'
+    } catch { return true }
+  }
+  // Search boxes, rename dialogs and the like are never edited by the fallback.
+  function excluded(el) {
+    if (closestDeep(el, NOT_COMPOSE)) return true
+    const named = `${el.getAttribute('aria-label') || ''} ${el.getAttribute('placeholder') || ''} ${el.getAttribute('name') || ''} ${el.id || ''}`
+    return NOT_COMPOSE_LABEL.test(named) || !visible(el)
+  }
+  // Every match of a selector under root, open shadow roots included (capped, so a huge page stays cheap).
+  function deepAll(root, sel, out = [], budget = { n: 4000 }) {
+    if (!root || !root.querySelectorAll) return out
+    let found = []
+    try { found = root.querySelectorAll(sel) } catch { /* bad selector */ }
+    for (const m of found) out.push(m)
+    for (const e of root.querySelectorAll('*')) {
+      if (--budget.n < 0) break
+      if (e.shadowRoot) deepAll(e.shadowRoot, sel, out, budget)
+    }
+    return out
+  }
+  const editablesIn = (root) => deepAll(root, GENERIC_COMPOSE).filter((e) => editableOf(e) === e || e.getAttribute('role') === 'textbox')
+    .map((e) => editableOf(e)).filter((e, i, all) => e && all.indexOf(e) === i && !excluded(e))
+  const area = (el) => { try { const r = el.getBoundingClientRect(); return r.width * r.height } catch { return 0 } }
+  const deepActive = () => { let a = document.activeElement; while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement; return a }
+  // Of several fields, the one the user is in, else the only one, else the strictly largest.
+  function pickEditable(list) {
+    if (!list.length) return null
+    const act = deepActive()
+    const focused = list.find((e) => e === act || (act && e.contains && e.contains(act)))
+    if (focused) return focused
+    if (list.length === 1) return list[0]
+    const sorted = [...list].sort((x, y) => area(y) - area(x))
+    return area(sorted[0]) > area(sorted[1]) ? sorted[0] : null
+  }
+  // The field looks like a message box when a send control sits with it alone, or
+  // it is the only or the largest field on the page.
+  function looksLikeComposer(el) {
+    if (!el || excluded(el)) return false
+    let n = el
+    for (let i = 0; n && i < 8; i++, n = n.parentNode || n.host) {
+      if (!n.querySelectorAll) continue
+      const btns = deepAll(n, BUTTONS).filter(isSendLike)
+      if (btns.length) return editablesIn(n).length === 1
+    }
+    const all = editablesIn(document)
+    if (all.length === 1) return all[0] === el
+    const big = [...all].sort((x, y) => area(y) - area(x))
+    return big[0] === el && area(el) > area(big[1])
+  }
+  // Enter is a send inside the site's own message box, or inside a field that
+  // looks like one (see looksLikeComposer); a search field, a rename dialog or
+  // an unrelated textarea is not one.
+  function composeOf(t) {
+    if (!t || !t.closest) return null
+    const known = closestAny(t, site.compose)
+    if (known) { gateInfo.via = 'site'; return known }
+    const f = editableOf(t)
+    if (f && looksLikeComposer(f)) { gateInfo.via = 'generic'; return f }
+    return null
+  }
+  const sendOf = (t) => {
+    if (!t || !t.closest) return null
+    const known = closestAny(t, site.send)
+    if (known) return known
+    const b = closestDeep(t, BUTTONS)
+    return b && isSendLike(b) ? b : null
+  }
+  // The message box a send button belongs to: the nearest ancestor that holds one
+  // (site profile first, then any field), else the page's only or largest box.
+  function composeFor(btn) {
+    if (closestDeep(btn, NOT_COMPOSE)) return null
+    for (let n = btn.parentNode || btn.host; n; n = n.parentNode || n.host) {
+      if (!n.querySelector) continue
+      const m = queryAny(n, site.compose)
+      if (m) { gateInfo.via = 'site'; return m }
+      const g = pickEditable(editablesIn(n))
+      if (g) { gateInfo.via = 'generic'; return g }
+    }
+    const g = pickEditable(editablesIn(document))
+    if (g) gateInfo.via = 'generic'
+    return g
+  }
+  // The box inside a submitted form.
+  function composeInForm(form) {
+    if (closestDeep(form, NOT_COMPOSE)) return null
+    const m = queryAny(form, site.compose)
+    if (m) { gateInfo.via = 'site'; return m }
+    const g = pickEditable(editablesIn(form))
+    if (g) gateInfo.via = 'generic'
+    return g
   }
   const isField = (el) => el.tagName === 'TEXTAREA' || el.tagName === 'INPUT'
   const readText = (el) => (isField(el) ? el.value : (el.innerText ?? el.textContent ?? ''))
@@ -452,7 +565,7 @@
     try {
       if (kind === 'submit' && ev.target && ev.target.requestSubmit) { ev.target.requestSubmit(); return }
       let btn = kind === 'click' ? sendOf(tgt(ev)) : null
-      if (!btn || btn.disabled) btn = queryAny(document, site.send) || document.querySelector(GENERIC_SEND)
+      if (!btn || btn.disabled) btn = queryAny(document, site.send) || deepAll(document, BUTTONS).find(isSendLike)
       if (btn && !btn.disabled) { btn.click(); return }
       // No button: a synthetic Enter may not be taken as a send. If the box still
       // holds the same text a moment later, say so instead of failing silently.
@@ -469,13 +582,13 @@
 
   function gateSend(ev, kind, compose) {
     if (!eng) return diag('skip:no-engine')
-    if (!compose) return diag(`skip:no-compose:${kind}`)
+    if (!compose) return diag(`skip:no-compose:${kind}`, kind)
     if (bypass) { bypass = false; return }
     const text = readText(compose)
     const halt = () => { stop(ev); if (kind === 'key') stopKeyUntil = Date.now() + 2000 }
     if (!text.trim()) return diag('skip:empty')
     if (!governing()) return diag(`skip:not-governing:${cfg.consented ? 'c' : 'nc'}:${cfg.apps === null ? 'all' : cfg.apps[gateApp] ? 'on' : 'off'}`)
-    diag('judged')
+    diag('judged', kind)
     const now = Date.now()
     // pointerdown then click, or Enter then the form's submit, are one send: one
     // decision. A repeat of the same text any other way is a new send, judged and recorded.
@@ -547,7 +660,15 @@
   function onGateKey(ev) {
     if (ev.key !== 'Enter' || ev.shiftKey || ev.altKey || ev.isComposing || ev.keyCode === 229) return
     // Ctrl/Cmd+Enter is a send in several apps, so it is gated like Enter.
-    gateSend(ev, 'key', composeOf(tgt(ev)))
+    const t = tgt(ev)
+    const c = composeOf(t)
+    if (!c) {
+      // An editable field that is not a message box: left alone, and said so.
+      const f = t && t.closest ? editableOf(t) : null
+      if (f) diag(excluded(f) ? 'skip:excluded:key' : 'skip:no-compose:key', 'key')
+      return
+    }
+    gateSend(ev, 'key', c)
   }
   function onGateKeyAfter(ev) {
     if (ev.key !== 'Enter' || Date.now() >= stopKeyUntil) return
@@ -561,13 +682,17 @@
     // A blocked pointerdown also stops the click that follows it, whatever the box holds by then.
     if (!bypass && ev.type === 'click' && lastPointer && lastPointer.btn === btn && lastPointer.stopped &&
         now - lastPointer.at < 1000) { stop(ev); return }
-    gateSend(ev, 'click', composeFor(btn))
+    const c = composeFor(btn)
+    if (!c) { if (ev.type === 'click') diag('skip:no-compose:click', 'click'); return }
+    gateSend(ev, 'click', c)
     if (ev.type === 'pointerdown') lastPointer = { btn, at: now, stopped: ev.defaultPrevented }
   }
   function onGateSubmit(ev) {
     const form = ev.target
     if (!form || !form.querySelector) return
-    gateSend(ev, 'submit', queryAny(form, site.compose))
+    const c = composeInForm(form)
+    if (!c) { diag('skip:no-compose:submit', 'submit'); return }
+    gateSend(ev, 'submit', c)
   }
 
   // --- files ---
@@ -689,6 +814,45 @@
   }
   syncCfg()
   installGate()
+
+  /*
+   * The popup's "Copy page check": facts about this page's controls and the
+   * gate's last decision, so a selector that misses can be fixed without live
+   * access. Tag, role, aria-label, data-testid and type only (each cut short);
+   * never a field's text or value, and never what the user typed. Asked for by
+   * the popup through activeTab; nothing leaves the browser until the user
+   * copies it.
+   */
+  const cut = (v) => (v == null ? '' : String(v).replace(/\s+/g, ' ').slice(0, 60))
+  const shape = (el) => ({
+    tag: el.tagName.toLowerCase(), role: cut(el.getAttribute('role')), aria_label: cut(el.getAttribute('aria-label')),
+    data_testid: cut(el.getAttribute('data-testid')), type: cut(el.getAttribute('type')),
+    editable: el.tagName === 'TEXTAREA' || editableAttr(el),
+  })
+  function pageCheck() {
+    const count = (sel) => { try { return deepAll(document, sel).length } catch { return 0 } }
+    const act = deepActive()
+    const focused = act && act !== document.body ? editableOf(act) || act : null
+    const buttons = deepAll(document, BUTTONS).filter((b) => /send|submit|ask/i.test(labelOf(b)) || isSendLike(b)).slice(0, 12)
+    return {
+      host: location.host, framed: window !== window.top, version: chrome.runtime.getManifest().version,
+      gate: document.documentElement.getAttribute('data-shield-gate') || '', last_kind: gateInfo.kind, found_by: gateInfo.via,
+      last_at: gateInfo.at ? new Date(gateInfo.at).toISOString() : '',
+      app: gateApp || '', consented: cfg.consented, mode: cfg.mode,
+      app_on: cfg.apps === null ? 'all' : cfg.apps[gateApp] === true ? 'on' : 'off',
+      compose_selectors: Object.fromEntries(site.compose.map((x) => [x, count(x)])),
+      send_selectors: Object.fromEntries(site.send.map((x) => [x, count(x)])),
+      generic_editables: editablesIn(document).length,
+      focused: focused ? { ...shape(focused), excluded: excluded(focused), looks_like_composer: looksLikeComposer(editableOf(focused) || focused) } : null,
+      buttons: buttons.map(shape),
+    }
+  }
+  try {
+    chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
+      if (!msg || msg.type !== 'shield.pageCheck') return
+      try { reply(pageCheck()) } catch (e) { reply({ host: location.host, gate: 'check-failed', error: String(e && e.message).slice(0, 80) }) }
+    })
+  } catch { /* extension context gone: a page reload fixes it */ }
 
   // Fallback for sends that don't go over fetch: watch the send control so a
   // websocket-only send is still recorded as data-free activity. Enter or a
