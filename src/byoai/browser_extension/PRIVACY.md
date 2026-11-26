@@ -104,6 +104,17 @@ remove a detail it may rewrite the message box, and to stop a file it may clear
 the file picker. It does not read voice input or anything you have not sent,
 picked, dropped or pasted.
 
+### Copy page check
+
+The popup's "Copy page check" button (0.10.7) asks the open tab for the shape of
+its controls and puts the answer on your clipboard. It holds the host name,
+extension version, the input gate's last state word, which of the extension's
+selectors matched, and for the focused field and for buttons labelled send,
+submit or ask: the tag, role, `aria-label`, `data-testid` and type, each cut to
+60 characters. It holds no message text and no field value. It is read through
+the permission the extension already has for the tab you opened the popup on, is
+not stored, and goes nowhere unless you paste it.
+
 ## What it changes
 
 On claude.ai and chatgpt.com (and chat.openai.com), when Shield's mode is

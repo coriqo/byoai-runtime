@@ -80,11 +80,23 @@ async function refresh() {
       || FALLBACK_ENDPOINT
     lastRender = { probed: { state: 'off', endpoint }, app: await currentApp() }
     render(lastRender.probed, lastRender.app)
+    el('gate-line').hidden = true
     return
   }
   const [probed, app] = await Promise.all([probe(), currentApp()])
   lastRender = { probed, app }
   render(probed, app)
+  await showGate(app)
+}
+
+async function showGate(app) {
+  const line = el('gate-line')
+  line.hidden = true
+  if (!app || !app.name) return
+  const check = await pageCheck()
+  const text = gateLine(check && check.gate, check)
+  line.textContent = text
+  line.hidden = !text
 }
 
 async function probe() {
@@ -129,6 +141,38 @@ async function currentApp() {
   } catch {
     return { host: '', name: null, lastSeen: null, seen: {}, notedToday: 0 }
   }
+}
+
+/*
+ * Ask the open tab's content script what it found (activeTab, no new
+ * permission). No answer means its scripts are not running there. The reply
+ * holds control shapes and the gate's state only, never what was typed.
+ */
+async function pageCheck() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+    if (!tab || tab.id == null) return null
+    return await withTimeout(new Promise((resolve) => {
+      try {
+        chrome.tabs.sendMessage(tab.id, { type: 'shield.pageCheck' }, { frameId: 0 }, (r) => { void chrome.runtime.lastError; resolve(r || null) })
+      } catch { resolve(null) }
+    }), 1500)
+  } catch { return null }
+}
+
+/*
+ * One plain line for what the gate last did on this page, with where to fix it,
+ * or '' when there is nothing to say. Values are those of data-shield-gate.
+ */
+function gateLine(gate, check) {
+  if (!check) return 'Shield\'s page checks are not running in this tab. Reload the tab. If this stays, choose Copy page check and send it to us.'
+  const g = check.gate || ''
+  if (g.startsWith('off:')) return 'Shield\'s page checks did not finish starting here. Reload the tab, or update the extension at chrome://extensions.'
+  if (g.startsWith('skip:no-compose')) return 'Shield could not tell which box on this page is the message box, so your last message was not checked. Choose Copy page check and send it to us.'
+  if (g.startsWith('skip:excluded')) return 'Your last Enter was in a search, rename or dialog field, which Shield does not check.'
+  if (g === 'skip:not-governing:nc:all' || g.startsWith('skip:not-governing:nc')) return 'Capture is off, so messages here are not checked. Choose Review and turn on.'
+  if (g.startsWith('skip:not-governing')) return 'Shield is set not to check this app, so messages here are not checked. Turn it on in Shield, Settings.'
+  return ''
 }
 
 const baseOf = (endpoint) => endpoint.replace(/\/api\/browser$/, '')
@@ -246,7 +290,8 @@ function render({ state, endpoint, verify, apps, mode, shorter }, app) {
 // and ChatGPT send their messages as JSON the extension can read and rewrite.
 function protection(appKey, mode) {
   if (appKey !== 'claude' && appKey !== 'chatgpt') {
-    return 'Messages here go out unchanged: Shield can only note that they were sent.'
+    if (mode === 'observe') return 'Messages go out unchanged: Shield is set to record only.'
+    return 'Shield checks your message when you press Enter or Send and replaces personal details in the box first. If it cannot find the box, it says so below.'
   }
   if (mode === 'observe') return 'Messages go out unchanged: Shield is set to record only.'
   if (mode === 'block') return 'Personal details are replaced before a message leaves this page, and high-risk messages are stopped.'
@@ -348,6 +393,15 @@ function wire() {
     navigator.clipboard.writeText(lines.join('\n'))
     el('copy-diag').textContent = 'Copied'
     setTimeout(() => { el('copy-diag').textContent = 'Copy details for a bug report' }, 1400)
+  })
+  el('copy-page').addEventListener('click', async () => {
+    const check = await pageCheck()
+    const { probed } = lastRender || {}
+    const out = { extension: chrome.runtime.getManifest?.().version ?? '?', shield_state: probed?.state ?? '?',
+      page: check || 'no answer: the content scripts are not running in this tab' }
+    navigator.clipboard.writeText(JSON.stringify(out, null, 2))
+    el('copy-page').textContent = 'Copied'
+    setTimeout(() => { el('copy-page').textContent = 'Copy page check' }, 1400)
   })
   el('save').addEventListener('click', async () => {
     const msg = el('msg')
