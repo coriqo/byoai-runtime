@@ -1049,13 +1049,19 @@ class AsyncCoriqoAgentsClient:
         cost_usd: float | None = None,
         token_count: int | None = None,
         occurred_at: str | None = None,
+        payload_mode: PayloadMode | str | None = None,
     ) -> dict[str, Any]:
         """:meth:`record_trace` attested by the device key instead of a
         service-account key. Same sealing path on Coriqo's side; what differs
-        is who the sealed event names as actor. Never retried."""
+        is who the sealed event names as actor. Never retried.
+
+        ``payload_mode`` declares the mode the body was prepared under
+        (``X-Coriqo-Payload-Mode``); like :meth:`record_trace`, the caller
+        shapes ``output`` and the other text fields for that mode first."""
         return await self._request(
             "POST",
             f"{ENFORCEMENT_PREFIX}/agents/{coriqo_agent_id}/traces",
+            extra_headers=payload_mode_headers(payload_mode),
             json_body=trace_body(
                 inputs=inputs,
                 output=output,
