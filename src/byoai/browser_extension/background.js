@@ -33,7 +33,7 @@ const ROLLBACK_KEY = 'rollback'
 // The user's agreement to capture, given on the welcome page. Nothing is
 // queued, sent or counted until it exists; withdrawing it removes it again.
 const CONSENT_KEY = 'consent'
-importScripts('consent.js')
+importScripts('consent.js', 'managed-settings.js')
 const CONSENT_VERSION = globalThis.SHIELD_CONSENT_VERSION
 const isGranted = (value) => value?.version === CONSENT_VERSION
 // A synchronous copy of the stored choice. Every gate reads this right before it
@@ -448,17 +448,21 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     syncExtraFromStore().then(() => reply?.({ ok: true }), () => reply?.({ error: 'failed' }))
     return true
   } else if (msg?.type === 'agent.getEndpoint') {
-    chrome.storage.local.get(ENDPOINT_KEY, (v) =>
-      reply?.({ endpoint: resolveEndpoint(v[ENDPOINT_KEY]) }))
+    Promise.all([getEndpoint(), globalThis.ShieldManaged.readManaged(chrome.storage)]).then(([endpoint, managed]) =>
+      reply?.({ endpoint, managed: managed.managed, managedBy: managed.managedBy }))
   } else if (msg?.type === 'agent.setEndpoint') {
     // The batcher carries Shield metadata; redirecting it anywhere but the
     // local Shield server would exfiltrate that record off the machine.
     // Same local-only rule the server enforces on inbound requests.
-    if (isLocalEndpoint(msg.endpoint)) {
-      chrome.storage.local.set({ [ENDPOINT_KEY]: msg.endpoint }, () => reply?.({ ok: true }))
-    } else {
-      reply?.({ error: 'endpoint must be a localhost Shield server' })
-    }
+    globalThis.ShieldManaged.readManaged(chrome.storage).then((managed) => {
+      // An administrator set the port: it is not the person's to change.
+      if (managed.managed) { reply?.({ error: 'set by your administrator' }); return }
+      if (isLocalEndpoint(msg.endpoint)) {
+        chrome.storage.local.set({ [ENDPOINT_KEY]: msg.endpoint }, () => reply?.({ ok: true }))
+      } else {
+        reply?.({ error: 'endpoint must be a localhost Shield server' })
+      }
+    })
   }
   return true // async reply
 })
@@ -586,7 +590,11 @@ async function flush() {
   }
 }
 
-function getEndpoint() {
-  return new Promise((resolve) =>
-    chrome.storage.local.get(ENDPOINT_KEY, (v) => resolve(resolveEndpoint(v[ENDPOINT_KEY]))))
+// The administrator's port (managed storage) wins over the person's saved
+// choice; with none set, behaviour is exactly as before.
+async function getEndpoint() {
+  const managed = await globalThis.ShieldManaged.readManaged(chrome.storage)
+  const saved = await new Promise((resolve) =>
+    chrome.storage.local.get(ENDPOINT_KEY, (v) => resolve(v[ENDPOINT_KEY])))
+  return globalThis.ShieldManaged.pickEndpoint(managed, saved, resolveEndpoint)
 }

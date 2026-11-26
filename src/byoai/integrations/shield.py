@@ -2843,6 +2843,11 @@ def default_paths(ledger: str | Path) -> ShieldConfig:
 def main() -> None:  # console-script entrypoint: byoai-shield
     import argparse
 
+    if len(_sys.argv) > 1 and _sys.argv[1] == "enrol":
+        # `byoai-shield enrol ...`: set this Mac up from a managed token, then exit.
+        from byoai.integrations import shield_enrol
+        raise SystemExit(shield_enrol.run_enrol(_sys.argv[2:]))
+
     ap = argparse.ArgumentParser(prog="byoai-shield", description=__doc__)
     ap.add_argument("ledger", nargs="?",
                     default=str(DATA_DIR / "captures.jsonl"),

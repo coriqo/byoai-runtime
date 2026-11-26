@@ -15,6 +15,9 @@
     "http://127.0.0.1/*",
     "http://localhost/*"
   ],
+  "storage": {
+    "managed_schema": "managed_schema.json"
+  },
   "action": {
     "default_title": "Coriqo Shield capture",
     "default_popup": "popup.html",

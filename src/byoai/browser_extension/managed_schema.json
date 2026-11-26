@@ -1,0 +1,17 @@
+{
+  "type": "object",
+  "properties": {
+    "shield_port": {
+      "title": "Shield port",
+      "description": "The port the Shield app on this computer listens on. When set, the extension talks to Shield on this port only (always this computer, never another address) and the person cannot change it.",
+      "type": "integer",
+      "minimum": 1024,
+      "maximum": 65535
+    },
+    "managed_by": {
+      "title": "Managed by",
+      "description": "The name of the organisation that manages this computer, shown in the extension window so the person knows who set it up.",
+      "type": "string"
+    }
+  }
+}
