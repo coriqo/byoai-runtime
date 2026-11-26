@@ -61,8 +61,11 @@ Typical wiring::
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import threading
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -91,6 +94,7 @@ __all__ = [
     "PublishResult",
     "ToolStep",
     "ensure_registered",
+    "make_publish_client",
     "parse_response",
     "publish_session",
     "send_device_receipts",
@@ -458,28 +462,67 @@ class CoriqoAgentsClient:
         http_client: httpx.Client | None = None,
         timeout: float = _DEFAULT_TIMEOUT,
         device_signer: Any | None = None,
+        device_publish: bool = False,
     ) -> None:
         """Pass ``device_signer`` (a device key: ``device_id``, ``public_key_b64``,
         ``sign``) and receipt fetches are device-signed instead of sent with the
-        API key. Pass ``http_client`` to supply your own transport, retry policy, or
+        API key. With ``device_publish`` (use :meth:`for_device`) the client
+        holds no API key at all and publishes a run on Coriqo's device-signed
+        routes instead. Pass ``http_client`` to supply your own transport, retry policy, or
         a test double. A caller-supplied client is never closed by
         :meth:`close`, since closing something shared out from under its owner
         would break its next use elsewhere."""
         self._device_signer = device_signer
+        self.device_publish = device_publish
+        self._tenant_slug = credentials.tenant_slug
+        if device_publish and device_signer is None:
+            raise ValueError("device_publish needs a device_signer")
         if http_client is not None:
             self._client = http_client
             self._owns_client = False
         else:
+            headers = {
+                "X-Tenant-Slug": credentials.tenant_slug,
+                "content-type": "application/json",
+            }
+            if not device_publish:
+                headers["X-API-Key"] = credentials.api_key
             self._client = httpx.Client(
-                base_url=credentials.base_url,
-                headers={
-                    "X-API-Key": credentials.api_key,
-                    "X-Tenant-Slug": credentials.tenant_slug,
-                    "content-type": "application/json",
-                },
-                timeout=timeout,
+                base_url=credentials.base_url, headers=headers, timeout=timeout
             )
             self._owns_client = True
+
+    @classmethod
+    def for_device(
+        cls,
+        identity: Any,
+        *,
+        http_client: httpx.Client | None = None,
+        timeout: float = _DEFAULT_TIMEOUT,
+    ) -> CoriqoAgentsClient:
+        """A client for an enrolled device, with no service-account API key.
+
+        ``identity`` is a device :class:`~byoai.recorder.identity.CoriqoIdentity`
+        that carries a tenant. :func:`publish_session` then publishes on
+        Coriqo's device-signed routes, for the agents bound to this device
+        only, and only while an organization admin has turned device
+        publishing on (Settings, Agent evaluations, Record completeness).
+        Registration and listing need a service account and are refused here.
+        """
+        if not getattr(identity, "enforcement_capable", False):
+            raise ValueError("for_device needs an enrolled device identity")
+        if not identity.tenant_slug:
+            raise ValueError(
+                "this device's enrollment does not record a tenant; re-enroll it or set "
+                "BYOAI_CORIQO_TENANT_SLUG"
+            )
+        creds = CoriqoCredentials(
+            base_url=identity.base_url, api_key="", tenant_slug=identity.tenant_slug
+        )
+        return cls(
+            creds, http_client=http_client, timeout=timeout,
+            device_signer=identity.signer, device_publish=True,
+        )
 
     def close(self) -> None:
         if self._owns_client:
@@ -504,33 +547,64 @@ class CoriqoAgentsClient:
             raise CoriqoAgentsError(None, f"request to {path} failed: {exc}") from exc
         return parse_response(response, path=path)
 
-    def _send_device_signed(self, method: str, path: str) -> tuple[Any, int]:
-        """A body-less request carrying the device-signature headers.
+    def _send_device_signed(
+        self,
+        method: str,
+        path: str,
+        json_body: Any = None,
+        *,
+        headers: Mapping[str, str] | None = None,
+    ) -> tuple[Any, int]:
+        """A request carrying the device-signature headers, with an optional JSON body.
 
         Coriqo refuses a request that carries both an API key and a device
         signature, so the API key header is removed from this one request. The
-        signature is made over the final URL (path and query) and is fresh per
-        call, because Coriqo accepts a timestamp only ~2 minutes old.
+        signature is made over the final URL (path and query) and the exact
+        body bytes, and is fresh per call, because Coriqo accepts a timestamp
+        only ~2 minutes old.
         """
         from .coriqo_async import device_headers, request_path
 
-        request = self._client.build_request(method, path)
+        content = (
+            json.dumps(json_body, separators=(",", ":"), ensure_ascii=False).encode()
+            if json_body is not None
+            else b""
+        )
+        request = self._client.build_request(
+            method, path, content=content or None,
+            headers={**({"content-type": "application/json"} if content else {}), **(headers or {})},
+        )
         request.headers.pop("X-API-Key", None)
+        if self._tenant_slug and "X-Tenant-Slug" not in request.headers:
+            request.headers["X-Tenant-Slug"] = self._tenant_slug
         request.headers.update(
             device_headers(
                 self._device_signer,  # pyright: ignore[reportArgumentType]  # only called when _device_signer is set (see the guard in the caller)
                 method=method,
                 path=request_path(request.url),
-                body=b"",
+                body=content,
             )
         )
         try:
             response = self._client.send(request)
         except httpx.HTTPError as exc:
             raise CoriqoAgentsError(None, f"request to {path} failed: {exc}") from exc
-        return parse_response(response, path=path)
+        try:
+            return parse_response(response, path=path)
+        except CoriqoAgentsError as exc:
+            _note_publish_refusal(exc)
+            raise
+
+    def _runs(self, agent_id: str, run_id: str, tail: str = "") -> str:
+        return f"/api/v1/agent-runtime/agents/{agent_id}/runs/{run_id}{tail}"
 
     def _request(self, method: str, path: str, **kwargs: Any) -> Any:
+        if self.device_publish:
+            raise CoriqoAgentsError(
+                None,
+                f"{method} {path} needs a service-account API key; a device-signed client "
+                "only publishes runs for agents already bound to this device",
+            )
         body, _status = self._send(method, path, **kwargs)
         return body
 
@@ -583,6 +657,12 @@ class CoriqoAgentsClient:
         pre-approves. That is what makes self-registration safe — it files a
         governance to-do rather than granting the agent any standing.
         """
+        if self.device_publish:
+            raise CoriqoAgentsError(
+                None,
+                "registering an agent needs a service-account API key; a device-signed "
+                "client only publishes runs for agents already bound to this device",
+            )
         body, status = self._send("POST", "/api/v1/agents", json=registration.to_body())
         if not isinstance(body, dict):
             raise CoriqoAgentsError(status, "registration response was not an object")
@@ -622,6 +702,18 @@ class CoriqoAgentsClient:
             body["parent_trajectory_id"] = parent_trajectory_id
         if started_at is not None:
             body["started_at"] = started_at
+        if self.device_publish:
+            # The device chooses the run id, so a retry names the same run:
+            # Coriqo answers 200 with the run it already holds.
+            run_id = str(uuid.uuid4())
+            for attempt in (1, 2):
+                try:
+                    return self._send_device_signed(
+                        "PUT", self._runs(coriqo_agent_id, run_id), body
+                    )[0]
+                except CoriqoAgentsError as exc:
+                    if exc.status_code is not None or attempt == 2:
+                        raise
         return self._request("POST", f"/api/v1/agents/{coriqo_agent_id}/trajectories", json=body)
 
     def complete_trajectory(
@@ -638,6 +730,16 @@ class CoriqoAgentsClient:
         body: dict[str, Any] = {"status": status}
         if ended_at is not None:
             body["ended_at"] = ended_at
+        if self.device_publish:
+            try:
+                return self._send_device_signed(
+                    "POST", self._runs(coriqo_agent_id, trajectory_id, "/complete"), body
+                )[0]
+            except CoriqoAgentsError as exc:
+                # A retried close of a run that already closed: it is done.
+                if exc.status_code == 409 and "already completed" in str(exc.detail):
+                    return {}
+                raise
         return self._request(
             "POST",
             f"/api/v1/agents/{coriqo_agent_id}/trajectories/{trajectory_id}/complete",
@@ -734,6 +836,15 @@ class CoriqoAgentsClient:
             raise ValueError("traces must not be empty")
         if len(traces) > MAX_TRACE_BATCH:
             raise ValueError(f"a batch holds at most {MAX_TRACE_BATCH} traces, got {len(traces)}")
+        if self.device_publish:
+            run_ids = {t.get("trajectory_id") for t in traces}
+            if len(run_ids) != 1 or None in run_ids:
+                raise ValueError("a device-signed batch holds the steps of exactly one run")
+            return self._send_device_signed(
+                "POST", self._runs(coriqo_agent_id, str(run_ids.pop()), "/traces/batch"),
+                {"traces": [dict(t) for t in traces]},
+                headers=payload_mode_headers(payload_mode),
+            )[0]
         return self._request(
             "POST",
             f"/api/v1/agents/{coriqo_agent_id}/traces/batch",
@@ -760,6 +871,11 @@ class CoriqoAgentsClient:
             raise ValueError(
                 f"a batch holds at most {MAX_EXTERNAL_CONTROLS} control events, got {len(controls)}"
             )
+        if self.device_publish:
+            return self._send_device_signed(
+                "POST", self._runs(coriqo_agent_id, trajectory_id, "/external-controls"),
+                {"trajectory_id": trajectory_id, "controls": [dict(c) for c in controls]},
+            )[0]
         return self._request(
             "POST",
             f"/api/v1/agents/{coriqo_agent_id}/external-controls",
@@ -784,6 +900,11 @@ class CoriqoAgentsClient:
             raise ValueError(
                 f"a request holds at most {MAX_DEVICE_RECEIPTS} receipts, got {len(receipts)}"
             )
+        if self.device_publish:
+            return self._send_device_signed(
+                "POST", self._runs(coriqo_agent_id, trajectory_id, "/device-receipts"),
+                {"receipts": [dict(r) for r in receipts]},
+            )[0]
         return self._request(
             "POST",
             f"/api/v1/agents/{coriqo_agent_id}/trajectories/{trajectory_id}/device-receipts",
@@ -898,6 +1019,63 @@ def trace_body(
 
 
 # -- orchestration ---------------------------------------------------------
+
+
+_refusal_lock = threading.Lock()
+_refusal_noted = False
+
+#: What Coriqo's refusal starts with while a workspace has device publishing off.
+_PUBLISH_OFF = "Device publishing is off"
+
+
+def _note_publish_refusal(exc: CoriqoAgentsError) -> None:
+    """Say once per process, with where to fix it, that Coriqo refused device publishing.
+
+    Coriqo's message names the Settings page, so it is logged as it came. A run is
+    published once at its end; saying this for every run would bury the one line that
+    tells an administrator what to change."""
+    global _refusal_noted
+    if exc.status_code != 403 or _PUBLISH_OFF not in str(exc.detail):
+        return
+    with _refusal_lock:
+        if _refusal_noted:
+            return
+        _refusal_noted = True
+    log.warning(
+        "coriqo: this device's runs are not being published. %s "
+        "The runs stay in the local ledger and can be published later.",
+        exc.detail,
+    )
+
+
+def _reset_publish_refusal_notice_for_tests() -> None:
+    global _refusal_noted
+    with _refusal_lock:
+        _refusal_noted = False
+
+
+def make_publish_client(device_signer: Any, *, key_dir: Any = None) -> CoriqoAgentsClient | None:
+    """The client :func:`publish_session` should use on this host, or ``None``.
+
+    With the service-account variables set (``BYOAI_CORIQO_URL``, ``_API_KEY``,
+    ``_TENANT_SLUG``) behaviour is unchanged: that key publishes, and
+    ``device_signer`` signs receipt fetches. Without them, an enrolled device that
+    records its tenant publishes with its own signature on Coriqo's device routes,
+    so no API key has to sit on the machine. ``None`` when neither exists.
+    """
+    creds = CoriqoCredentials.from_env()
+    if creds is not None:
+        return CoriqoAgentsClient(creds, device_signer=device_signer)
+    from .identity import resolve_identity
+
+    try:
+        identity = resolve_identity(key_dir=key_dir)
+    except Exception as exc:  # noqa: BLE001 - a broken enrolment must not stop a run
+        log.warning("coriqo: cannot read this device's enrolment: %s", exc)
+        return None
+    if identity is None or not identity.enforcement_capable or not identity.tenant_slug:
+        return None
+    return CoriqoAgentsClient.for_device(identity)
 
 
 def ensure_registered(

@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- An enrolled device can publish a run to Coriqo with its own signature, with no
+  service-account API key in the environment. `CoriqoAgentsClient.for_device()`
+  and `make_publish_client()` build the client; `publish_session` then uses
+  Coriqo's device-signed run routes, and `coriqo-mcp --shield-dir` does the same
+  at close when no API key is set. With the API key variables set, behaviour is
+  unchanged. Coriqo must have "Hosts may publish runs with their own device
+  signature" switched on (Settings > Agent evaluations > Record completeness, off
+  by default); a refusal is logged once with that location. The device picks the
+  run id, so a retried open or close is safe.
+
 ### Fixed
 - Browser extension 0.10.7: Microsoft Copilot messages are checked even when the
   page's message box is not the old `textarea#userInput`. The input gate now
