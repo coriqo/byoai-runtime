@@ -2226,6 +2226,7 @@ _APP_TAG_FOR_HOST = {
     "chat.openai.com": "chatgpt",
     "gemini.google.com": "gemini",
     "copilot.microsoft.com": "copilot",
+    "copilot.com": "copilot",
 }
 
 

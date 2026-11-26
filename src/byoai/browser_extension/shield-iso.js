@@ -239,7 +239,8 @@
       {
         "app": "copilot",
         "hosts": [
-          "copilot.microsoft.com"
+          "copilot.microsoft.com",
+          "copilot.com"
         ],
         "compose": [
           "textarea#userInput",

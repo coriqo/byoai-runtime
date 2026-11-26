@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Browser extension 0.10.5: Copilot is now covered on copilot.com.
+  copilot.microsoft.com redirects there, and the manifest listed only the old
+  host, so no extension script ran on the page the user ends up on. The host is
+  added to the manifest (content scripts and the privacy notice resource),
+  `sites.json`, the popup and Shield's host-to-app map. Because the manifest
+  gains a host, Chrome asks for permission again on update. A new test fails
+  when a host in `sites.json` is not matched by a manifest content script. The
+  store description now says what is true: Gemini and Copilot get the input
+  gate only, and personal details are replaced on Claude and ChatGPT. Not yet
+  confirmed on copilot.com in a browser.
+
 ### Added
 - `coriqo-mcp` enforces tool pins. New `--server NAME` (the server's key in
   `tool_pins.servers`) and `--pin-hold-timeout SECONDS` (default 10). The
