@@ -1515,3 +1515,42 @@ def test_receipt_checkpoint_signature_verifies_from_receipt_alone(tmp_path):
     for field in ("kind", "ts"):
         bad = {k: v for k, v in cp.items() if k != field}
         assert not runtime_ok(bad) and not _independent_checkpoint_check(bad)
+
+
+def _chat_row(i):
+    return {"wall_clock": f"2026-09-24 10:{i // 60:02d}:{i % 60:02d}",
+            "kind": "desktop.chat.request", "target": "claude.ai", "prompt": f"incremental poll {i}"}
+
+
+def test_poll_reads_only_appended_rows_and_matches_a_full_read(tmp_path):
+    inc, full = tmp_path / "inc", tmp_path / "full"
+    inc.mkdir(), full.mkdir()
+    cfg = make_cfg(inc)
+    cfg.ledger.write_text("".join(json.dumps(_chat_row(i)) + "\n" for i in range(3)))
+    feed = Feed(cfg)
+    feed.scan_initial()
+    reads = []
+    real_read_text = type(cfg.ledger).read_text
+    type(cfg.ledger).read_text = lambda self, *a, **k: (reads.append(self), real_read_text(self, *a, **k))[1]
+    try:
+        for i in range(3, 8):
+            with cfg.ledger.open("a") as fh:
+                fh.write(json.dumps(_chat_row(i)) + "\n")
+            assert feed.poll() == 1
+        # a half-written row waits for its newline, then arrives whole
+        with cfg.ledger.open("a") as fh:
+            fh.write(json.dumps(_chat_row(8))[:20])
+        assert feed.poll() == 0
+        with cfg.ledger.open("a") as fh:
+            fh.write(json.dumps(_chat_row(8))[20:] + "\n")
+        assert feed.poll() == 1
+    finally:
+        type(cfg.ledger).read_text = real_read_text
+    assert cfg.ledger not in reads
+    cfg2 = make_cfg(full)
+    cfg2.ledger.write_text(cfg.ledger.read_text())
+    ref = Feed(cfg2)
+    ref.scan_initial()
+    assert feed.seals.height == ref.seals.height == 9
+    assert [i["verb"] for i in feed.items] == [i["verb"] for i in ref.items]
+    assert feed.seals.verify_chain()["tamper_evident"] is True
