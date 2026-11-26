@@ -81,3 +81,21 @@ def test_console_mount_does_not_shadow_v1(client, built):
     res = client.get("/v1/stats")
     assert res.status_code == 200
     assert "optimizer_enabled" in res.json()
+
+
+def test_stale_build_is_reported_with_the_rebuild_command(built, tmp_path, monkeypatch):
+    src = tmp_path.parent / (tmp_path.name + "_web_src")
+    src.mkdir()
+    (src / "app.tsx").write_text("x")
+    monkeypatch.setattr(console_mod, "WEB_SRC", src)
+    import os
+    old = (built / "index.html").stat().st_mtime
+    os.utime(src / "app.tsx", (old + 100, old + 100))
+    assert "npm --prefix web run build" in console_mod.stale_reason()
+    os.utime(src / "app.tsx", (old - 100, old - 100))
+    assert console_mod.stale_reason() is None
+
+
+def test_installed_package_without_source_is_never_stale(built, tmp_path, monkeypatch):
+    monkeypatch.setattr(console_mod, "WEB_SRC", tmp_path / "nope")
+    assert console_mod.stale_reason() is None

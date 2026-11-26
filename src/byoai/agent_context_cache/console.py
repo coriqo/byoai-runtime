@@ -39,6 +39,31 @@ def assets_available() -> bool:
     return INDEX_FILE.is_file()
 
 
+WEB_SRC = STATIC_DIR.parent.parent.parent / "web" / "src"
+
+
+def stale_reason() -> str | None:
+    """Why the built console is older than its source, or None.
+
+    Only a source checkout has ``web/src`` beside the package; an installed
+    wheel never does, so it is never reported stale. The build is git-ignored,
+    so after a pull that changes the UI the old build keeps being served until
+    someone rebuilds. Cheap: stats the source tree, no reads.
+    """
+    if not INDEX_FILE.is_file() or not WEB_SRC.is_dir():
+        return None
+    built = INDEX_FILE.stat().st_mtime
+    newest = max((p.stat().st_mtime for p in WEB_SRC.rglob("*") if p.is_file()),
+                 default=0.0)
+    if newest <= built:
+        return None
+    return (
+        "The console in this checkout was built before its source last "
+        "changed, so the window still shows the older design. Rebuild it: "
+        f"{BUILD_COMMAND}  (no restart needed; reload the page)."
+    )
+
+
 def resolve_asset(rel_path: str) -> Path | None:
     """Map a URL path under ``/console/`` onto a file inside ``STATIC_DIR``.
 
