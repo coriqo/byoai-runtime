@@ -1,0 +1,16 @@
+{
+  "sites": [
+    {
+      "host": "chat.mistral.ai",
+      "app": "mistral_web",
+      "vendor": "Mistral AI (Le Chat)",
+      "source": "https://mistral.ai/products/le-chat links to https://chat.mistral.ai (read 2026-11-26)"
+    },
+    {
+      "host": "chat.deepseek.com",
+      "app": "deepseek_web",
+      "vendor": "DeepSeek",
+      "source": "https://www.deepseek.com/ links to https://chat.deepseek.com/ as the web version (read 2026-11-26)"
+    }
+  ]
+}

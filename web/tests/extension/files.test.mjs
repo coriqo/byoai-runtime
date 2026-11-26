@@ -844,6 +844,6 @@ describe('FormData and unreadable chat bodies', () => {
   }
   it('the build is visible to the page', () => {
     make({})
-    expect(cur.win.__shieldVersion).toBe('0.10.5')
+    expect(cur.win.__shieldVersion).toBe('0.10.6')
   })
 })
