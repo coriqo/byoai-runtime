@@ -22,7 +22,7 @@ if (SKIP) console.warn(`[ext-test] link: skipped — ${SKIP}`)
 
 let shield, coriqo, browser
 
-function stubCoriqo(seen) {
+function stubCoriqo(seen, clients) {
   const challenges = new Map()
   const keys = []
   const minted = new Map()
@@ -34,6 +34,7 @@ function stubCoriqo(seen) {
       seen.push(`${req.method} ${url.pathname}`)
       const json = (code, body) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)) }
       if (req.method === 'GET' && url.pathname === '/oauth/authorize') {
+        clients.push(url.searchParams.get('client_id'))
         const code = 'c' + challenges.size
         challenges.set(code, url.searchParams.get('code_challenge'))
         const back = new URL(url.searchParams.get('redirect_uri'))
@@ -79,7 +80,8 @@ describe.skipIf(SKIP)('extension sign-in and link (real browser)', () => {
 
   it('signs in with OAuth and links this computer to a stub Coriqo', { timeout: 120_000 }, async () => {
     const seen = []
-    coriqo = stubCoriqo(seen)
+    const clients = []
+    coriqo = stubCoriqo(seen, clients)
     await new Promise((r) => coriqo.listen(0, '127.0.0.1', r))
     const base = `http://127.0.0.1:${coriqo.address().port}`
 
@@ -99,12 +101,23 @@ describe.skipIf(SKIP)('extension sign-in and link (real browser)', () => {
     })
     const worker = await (await browser.waitForTarget((t) => t.type() === 'service_worker', { timeout: 15_000 })).worker()
     await worker.evaluate((p, b) => chrome.storage.local.set({
-      endpoint: `http://127.0.0.1:${p}/api/browser`, coriqo_api_base: b }), PORT, base)
+      endpoint: `http://127.0.0.1:${p}/api/browser`, coriqo_api_base: b,
+      coriqo_client_id: 'https://coriqo.test/shield-client.json' }), PORT, base)
 
     // Pair with the Shield first (first contact pins its key), as a user does by opening the popup.
     const popup = await browser.newPage()
     await popup.goto(`chrome-extension://${EXT_ID}/popup.html`)
     await popup.waitForFunction(() => document.getElementById('state-title').textContent !== 'Checking Shield', { timeout: 10_000 })
+
+    // A saved client id that is not valid must say so, not hang the sign-in.
+    const bad = await browser.newPage()
+    await worker.evaluate(() => chrome.storage.local.set({ coriqo_client_id: 'not valid' }))
+    await bad.goto(`chrome-extension://${EXT_ID}/login.html`)
+    await bad.click('#oauth-start')
+    await bad.waitForFunction(() => /client id is not valid/.test(document.getElementById('request-msg').textContent), { timeout: 10_000 })
+    expect(await bad.$eval('#oauth-start', (b) => b.disabled)).toBe(false)
+    await bad.close()
+    await worker.evaluate(() => chrome.storage.local.set({ coriqo_client_id: 'https://coriqo.test/shield-client.json' }))
 
     const page = await browser.newPage()
     await page.emulateTimezone('America/New_York') // the region guess reads the time zone; pin it so the test is the same everywhere
@@ -127,6 +140,7 @@ describe.skipIf(SKIP)('extension sign-in and link (real browser)', () => {
     await until(() => existsSync(state), 10_000, 'the Shield to be enrolled')
     expect(JSON.parse(readFileSync(state, 'utf8')).tenant_slug).toBe('coriqo_msp_usa')
     expect(seen).toContain('GET /oauth/authorize')
+    expect(clients).toEqual(['https://coriqo.test/shield-client.json']) // the configured client id is what Coriqo is sent
     expect(seen.filter((s) => s === 'POST /v1/enroll').length).toBe(1)
 
     // A second press: this Mac is enrolled, so Shield keeps its identity and says so.

@@ -2294,7 +2294,11 @@ other host). The extension needs the `identity` permission for the sign-in
 window.
 
 1. **Sign-in:** OAuth 2.0 authorization code with PKCE (S256, no client
-   secret), client id `coriqo-shield-extension`, redirect
+   secret), client id `coriqo-shield-extension` by default (extension setting
+   `coriqo_client_id` overrides it: a short name such as `coriqo-shield-extension`,
+   or the https address of a client metadata document, which some authorization
+   servers require; anything else is refused, and the value is trusted
+   configuration: only the extension itself writes it), redirect
    `https://<extension id>.chromiumapp.org/`. `GET /oauth/authorize`, then
    `POST /oauth/token` (form fields `grant_type`, `client_id`, `redirect_uri`,
    `code`, `code_verifier`), answering `{access_token, email, tenant_slug,

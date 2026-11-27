@@ -13,7 +13,7 @@
  * this repo. The shapes this file expects are documented in CONFIGURATION.md.
  */
 ;(function (root) {
-  const CLIENT_ID = 'coriqo-shield-extension'
+  const CLIENT_ID = 'coriqo-shield-extension' // the default; the `coriqo_client_id` setting overrides it
 
   function b64url(bytes) {
     let s = ''
@@ -31,6 +31,18 @@
     return u.origin
   }
 
+  // A client id is either a short registered name or the https address of a client metadata
+  // document; anything else (a space, a script URL, an overlong value) is refused rather than sent.
+  function checkClientId(value) {
+    const v = String(value ?? '').trim()
+    if (/^[A-Za-z0-9._-]{1,128}$/.test(v)) return v
+    try {
+      const u = new URL(v)
+      if (u.protocol === 'https:' && !u.username && !u.password && v.length <= 512) return v
+    } catch { /* fall through */ }
+    throw new Error('bad_client_id')
+  }
+
   async function makePkce(cryptoImpl) {
     const rand = (n) => b64url(cryptoImpl.getRandomValues(new Uint8Array(n)))
     const verifier = rand(32) // 43 chars, inside RFC 7636's 43..128
@@ -38,10 +50,10 @@
     return { verifier, challenge: b64url(new Uint8Array(digest)), state: rand(16) }
   }
 
-  function buildAuthorizeUrl({ base, redirectUri, challenge, state, tenant }) {
+  function buildAuthorizeUrl({ base, clientId = CLIENT_ID, redirectUri, challenge, state, tenant }) {
     const u = new URL('/oauth/authorize', checkBase(base))
     u.searchParams.set('response_type', 'code')
-    u.searchParams.set('client_id', CLIENT_ID)
+    u.searchParams.set('client_id', checkClientId(clientId))
     u.searchParams.set('redirect_uri', redirectUri)
     u.searchParams.set('code_challenge', challenge)
     u.searchParams.set('code_challenge_method', 'S256')
@@ -66,12 +78,12 @@
     return code
   }
 
-  async function exchangeCode({ fetchImpl, base, redirectUri, code, verifier }) {
+  async function exchangeCode({ fetchImpl, base, clientId = CLIENT_ID, redirectUri, code, verifier }) {
     const res = await fetchImpl(new URL('/oauth/token', checkBase(base)).toString(), {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
-        grant_type: 'authorization_code', client_id: CLIENT_ID, redirect_uri: redirectUri,
+        grant_type: 'authorization_code', client_id: checkClientId(clientId), redirect_uri: redirectUri,
         code, code_verifier: verifier,
       }).toString(),
     })
@@ -224,7 +236,7 @@
     return (region && list.find((t) => splitTenant(t).region === region)) || list[0] || null
   }
 
-  const api = { CLIENT_ID, tenantLabel, detectRegion, pickTenant, checkBase, makePkce, buildAuthorizeUrl, parseRedirect, exchangeCode,
+  const api = { CLIENT_ID, checkClientId, tenantLabel, detectRegion, pickTenant, checkBase, makePkce, buildAuthorizeUrl, parseRedirect, exchangeCode,
     requestEnrolGrant, linkLocalShield, verifiedShieldKey }
   root.CoriqoLink = api
   if (typeof module !== 'undefined' && module.exports) module.exports = api

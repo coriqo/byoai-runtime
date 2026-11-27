@@ -286,3 +286,26 @@ console.log(JSON.stringify({
     # Coriqo's own workspace always wins over the region guess; the guess only fills a gap
     assert (g["pickRegion"], g["pickNoneNamed"], g["pickNoMatch"], g["pickPreferred"], g["pickFirst"], g["pickEmpty"]) == (
         "coriqo_msp_usa", "coriqo_msp_uk", "coriqo_msp_uk", "b", "a", None)
+
+
+def test_the_oauth_client_id_is_configurable_and_validated():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed")
+    code = r"""
+const L=require(process.argv[1]);
+const ok=(v)=>{try{return L.checkClientId(v)}catch(e){return e.message}};
+const q=(id)=>new URL(L.buildAuthorizeUrl({base:'https://c.test',clientId:id,redirectUri:'https://x.chromiumapp.org/',challenge:'c',state:'s'})).searchParams.get('client_id');
+console.log(JSON.stringify({
+ name:ok('my-client'), meta:ok('https://c.test/.well-known/shield-client.json'),
+ http:ok('http://c.test/m.json'), space:ok('a b'), js:ok('javascript:alert(1)'), empty:ok(''), long:ok('a'.repeat(200)),
+ userinfo:ok('https://u:p@c.test/m'), dflt:q(undefined), custom:q('https://c.test/m.json'),
+ builderBad:(()=>{try{q('a b');return 'accepted'}catch(e){return e.message}})()}))
+"""
+    done = subprocess.run([node, "-e", code, str(Path(__file__).parents[2] / "src/byoai/browser_extension/coriqo-link.js")],
+                          capture_output=True, text=True, timeout=20)
+    g = json.loads(done.stdout)
+    assert g["name"] == "my-client" and g["meta"] == "https://c.test/.well-known/shield-client.json"
+    assert {g[k] for k in ("http", "space", "js", "empty", "long", "userinfo")} == {"bad_client_id"}
+    assert g["dflt"] == "coriqo-shield-extension" and g["custom"] == "https://c.test/m.json"
+    assert g["builderBad"] == "bad_client_id"      # the builders check it themselves, not only the caller

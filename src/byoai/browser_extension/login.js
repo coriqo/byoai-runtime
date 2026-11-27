@@ -23,6 +23,7 @@
  */
 const API_BASE_KEY = 'coriqo_api_base'
 const SESSION_KEY = 'coriqo_session'
+const CLIENT_ID_KEY = 'coriqo_client_id'
 // Dev default. Production base is configured once Coriqo's real host is
 // decided — deliberately not hardcoded to a guessed production URL.
 const DEFAULT_API_BASE = 'http://localhost:8000'
@@ -32,6 +33,18 @@ const el = (id) => document.getElementById(id)
 function getApiBase() {
   return new Promise((resolve) =>
     chrome.storage.local.get(API_BASE_KEY, (v) => resolve(v[API_BASE_KEY] || DEFAULT_API_BASE)))
+}
+
+function getClientId() {
+  // Validate after the callback, inside the promise: a throw in the callback itself would
+  // never reject, and sign-in would hang with no message.
+  return new Promise((resolve, reject) => chrome.storage.local.get(CLIENT_ID_KEY, (v) => {
+    try {
+      resolve(globalThis.CoriqoLink.checkClientId(v[CLIENT_ID_KEY] || globalThis.CoriqoLink.CLIENT_ID))
+    } catch (err) {
+      reject(err)
+    }
+  }))
 }
 
 function getSession() {
@@ -60,12 +73,13 @@ async function onOAuth() {
   try {
     const L = globalThis.CoriqoLink
     const base = await getApiBase()
+    const clientId = await getClientId()
     const redirectUri = chrome.identity.getRedirectURL()
     const pkce = await L.makePkce(crypto)
-    const url = L.buildAuthorizeUrl({ base, redirectUri, challenge: pkce.challenge, state: pkce.state })
+    const url = L.buildAuthorizeUrl({ base, clientId, redirectUri, challenge: pkce.challenge, state: pkce.state })
     const returned = await chrome.identity.launchWebAuthFlow({ url, interactive: true })
     const code = L.parseRedirect(returned, { redirectUri, state: pkce.state })
-    const t = await L.exchangeCode({ fetchImpl: fetch, base, redirectUri, code, verifier: pkce.verifier })
+    const t = await L.exchangeCode({ fetchImpl: fetch, base, clientId, redirectUri, code, verifier: pkce.verifier })
     const list = t.tenants.length ? t.tenants : (t.tenant_slug ? [t.tenant_slug] : [])
     const tenant = L.pickTenant(list, L.detectRegion({ language: navigator.language,
       timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }), t.tenant_slug)
@@ -80,6 +94,7 @@ async function onOAuth() {
       m === 'denied' || /canceled|cancelled|did not approve/i.test(m) ? 'Sign-in was cancelled.'
         : m === 'no_tenant' ? 'Your account has no workspace yet. Ask your Coriqo admin to add you.'
           : m === 'bad_base' ? 'The Coriqo address must start with https://.'
+          : m === 'bad_client_id' ? 'The saved Coriqo client id is not valid.'
             : /^http:/.test(m) ? 'Coriqo had a problem. Try again shortly.'
               : "Couldn't sign in. Check your connection and try again.", 'bad')
   } finally {
