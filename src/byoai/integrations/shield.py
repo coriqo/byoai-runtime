@@ -34,6 +34,7 @@ import json
 # (the proxy) or any other number a dev stack likes; the browser extension
 # ships the same default (browser_extension/background.js). Override with
 # BYOAI_SHIELD_PORT and enter the same port in the extension popup.
+import base64
 import os as _os
 import re
 import sys as _sys
@@ -79,6 +80,23 @@ DEFAULT_PORT = _port_from_env()
 # What /api/identity signs (prefix + caller's nonce); the extension checks the
 # same bytes. Changing it breaks pairing with installed extensions.
 IDENTITY_PREFIX = b"byoai-shield-identity:"
+
+# What /api/coriqo/proof signs for Coriqo's device-proof check: this prefix, then
+# nonce, tenant slug and the 32-byte public key as lowercase hex, each on its own
+# line. A different prefix from IDENTITY_PREFIX and from every seal/checkpoint
+# format, so a signature made for one purpose can never pass for another.
+LINK_PROOF_PREFIX = b"coriqo-shield-link-v1\n"
+_PROOF_NONCE = re.compile(r"[A-Za-z0-9_.~+/=-]{8,256}")
+_PROOF_TENANT = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+def workspace_pin() -> list[str]:
+    """BYOAI_CORIQO_LINK_WORKSPACES as lower-case slugs; empty means no pin."""
+    return [w.strip().lower() for w in _os.environ.get("BYOAI_CORIQO_LINK_WORKSPACES", "").split(",") if w.strip()]
+
+
+def link_proof_message(nonce: str, tenant_slug: str, public_key_hex: str) -> bytes:
+    return LINK_PROOF_PREFIX + f"{nonce}\n{tenant_slug}\n{public_key_hex}".encode()
 
 MAX_INTERACTIONS = 400
 # Most entries an older seal file may claim to have trimmed before an upgrade.
@@ -2408,7 +2426,7 @@ def request_problem(method: str, path: str, headers) -> str | None:
     if ctype != "application/json":
         return "Send JSON with Content-Type: application/json."
     origin = (headers.get("Origin") or "").strip()
-    if path in ("/api/browser", "/api/coriqo/link"):
+    if path in ("/api/browser", "/api/coriqo/link", "/api/coriqo/proof"):
         if not origin.startswith(EXTENSION_SCHEMES):
             return "Only the Shield browser extension can use this."
         pinned = [x.strip() for x in os.environ.get(
@@ -2820,6 +2838,9 @@ def serve(cfg: ShieldConfig, host: str = "127.0.0.1", port: int = DEFAULT_PORT,
             if self.path.split("?")[0] == "/api/coriqo/link":
                 self._enrol(link=True)
                 return
+            if self.path.split("?")[0] == "/api/coriqo/proof":
+                self._link_proof()
+                return
             if self.path.split("?")[0] == "/api/publish":
                 self._publish_now()
                 return
@@ -2911,6 +2932,57 @@ def serve(cfg: ShieldConfig, host: str = "127.0.0.1", port: int = DEFAULT_PORT,
             self._send(200, json.dumps(
                 {"accepted": accepted, "sealed_total": feed.seals.total}).encode())
 
+        def _link_proof(self) -> None:
+            """Sign Coriqo's one-time nonce with this device's key, so Coriqo can tell the key
+            is held by this Shield. Extension origin only (same gate as /api/coriqo/link),
+            only before this computer is enrolled, never for a workspace outside the pin, and
+            only these exact bytes (see LINK_PROOF_PREFIX)."""
+            from byoai.recorder.enroll import EnrollmentError, load_enrollment_state
+            try:
+                n = int(self.headers.get("Content-Length", 0))
+            except ValueError:
+                n = -1
+            if not 0 <= n <= 4096:
+                self._send(400, b'{"error":"invalid length"}')
+                return
+            try:
+                payload = json.loads(self.rfile.read(n) or b"{}")
+            except ValueError:
+                payload = None
+            if not isinstance(payload, dict):
+                self._send(400, b'{"error":"invalid json"}')
+                return
+            nonce, tenant = payload.get("nonce"), payload.get("tenant_slug")
+            if not (isinstance(nonce, str) and _PROOF_NONCE.fullmatch(nonce)
+                    and isinstance(tenant, str) and _PROOF_TENANT.fullmatch(tenant)):
+                self._send(400, b'{"error":"bad nonce or workspace"}')
+                return
+            # Same trust gate as the link route: only for a Coriqo server this Mac was told to trust,
+            # so a nonce from some other server never gets this Mac's key to sign it.
+            problem = link_host_problem(str(payload.get("base_url") or ""))
+            if problem:
+                self._send(403, json.dumps({"error": problem}).encode())
+                return
+            pin = workspace_pin()
+            if pin and tenant.lower() not in pin:
+                self._send(403, b'{"error":"That Coriqo workspace is not one this computer may join (BYOAI_CORIQO_LINK_WORKSPACES)."}')
+                return
+            # Under the publisher's lock, the same one an enrolment holds, so a proof cannot be
+            # signed while an enrolment is being written.
+            with publisher._lock:
+                try:
+                    already = load_enrollment_state(cfg.key_dir) is not None
+                except EnrollmentError:
+                    already = True  # unreadable counts as enrolled: refusing is the safe side
+                if already:
+                    self._send(409, b'{"error":"This Mac is already connected to Coriqo."}')
+                    return
+                key = feed.seals._key
+                pub_hex = base64.b64decode(key.public_key_b64).hex()
+                sig = key.sign(link_proof_message(nonce, tenant, pub_hex))
+            self._send(200, json.dumps({"public_key_hex": pub_hex,
+                                        "signature": sig.removeprefix("ed25519:")}).encode())
+
         def _enrol(self, link: bool = False) -> None:
             """One-time setup: exchange a Coriqo enrolment token for this
             Mac's device identity. The token is used once and not kept.
@@ -2937,8 +3009,7 @@ def serve(cfg: ShieldConfig, host: str = "127.0.0.1", port: int = DEFAULT_PORT,
                     self._send(403, json.dumps({"error": problem}).encode())
                     return
             try:
-                pin = [w.strip() for w in _os.environ.get(
-                    "BYOAI_CORIQO_LINK_WORKSPACES", "").split(",") if w.strip()]
+                pin = workspace_pin()
                 status = publisher.enrol(str(payload.get("base_url") or ""),
                                          str(payload.get("token") or ""), keep_existing=link,
                                          allowed_tenants=pin or None)

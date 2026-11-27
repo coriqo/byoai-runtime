@@ -9,7 +9,7 @@ import puppeteer from 'puppeteer-core'
 import { spawn } from 'node:child_process'
 import { existsSync, readFileSync, mkdtempSync } from 'node:fs'
 import http from 'node:http'
-import { createHash } from 'node:crypto'
+import { createHash, createPublicKey, verify as edVerify } from 'node:crypto'
 import { REPO, chromiumPath, pythonPath, skipReason, until, waitForServer } from './env.mjs'
 import path from 'node:path'
 import os from 'node:os'
@@ -21,11 +21,15 @@ const SKIP = skipReason()
 if (SKIP) console.warn(`[ext-test] link: skipped — ${SKIP}`)
 
 let shield, coriqo, browser
+let stubProofs = []
 
 function stubCoriqo(seen, clients) {
   const challenges = new Map()
   const keys = []
   const minted = new Map()
+  const nonces = new Set()
+  const proofs = []
+  stubProofs = proofs
   return http.createServer((req, res) => {
     const url = new URL(req.url, 'http://x')
     let raw = ''
@@ -54,9 +58,23 @@ function stubCoriqo(seen, clients) {
         if (req.headers.authorization !== 'Bearer at_1') return json(401, {})
         return json(200, { sub: 'u1', email: 'a@b.test', tenants: ['coriqo_msp_usa', 'coriqo_msp_uk'] })
       }
+      if (url.pathname === '/v1/enroll/self/nonce') {
+        if (req.headers.authorization !== 'Bearer at_1') return json(401, {})
+        const n = `nonce${nonces.size}-x`
+        nonces.add(n)
+        return json(200, { nonce: n, expires_in: 60 })
+      }
       if (url.pathname === '/v1/enroll/self') {
         if (req.headers.authorization !== 'Bearer at_1') return json(401, {})
         const b = JSON.parse(raw)
+        // the device must prove it holds the key: a signature over the agreed bytes, with a one-time nonce
+        const hex = Buffer.from(b.device_public_key, 'base64').toString('hex')
+        const msg = Buffer.from(`coriqo-shield-link-v1\n${b.device_nonce}\n${req.headers['x-tenant-slug']}\n${hex}`)
+        const spki = Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), Buffer.from(hex, 'hex')])
+        const ok = nonces.delete(b.device_nonce) && b.device_proof &&
+          edVerify(null, msg, createPublicKey({ key: spki, format: 'der', type: 'spki' }), Buffer.from(b.device_proof, 'base64'))
+        if (!ok) return json(400, { error: 'device_proof_invalid' })
+        proofs.push(b.device_nonce)
         if (!keys.includes(b.device_public_key)) {
           if (keys.length >= 1) return json(402, { error: 'device_limit_reached', limit: 1, count: keys.length, upgrade_url: 'https://billing.test/add' })
           keys.push(b.device_public_key)
@@ -155,6 +173,7 @@ describe.skipIf(SKIP)('extension sign-in and link (real browser)', () => {
       .catch(async (e) => {
         throw new Error(`${e.message}; the page said: "${await page.$eval('#connect-msg', (n) => n.textContent)}"; Coriqo saw ${seen.join(', ')}`)
       })
+    expect(stubProofs.length).toBe(1) // the device proved it holds the key, once
 
     const state = path.join(dataDir, '.byoai', 'shield', 'keys', 'enrollment.json')
     await until(() => existsSync(state), 10_000, 'the Shield to be enrolled')
