@@ -230,10 +230,10 @@
   // The local Shield signs the nonce with the device key (only the exact bytes in
   // LINK_PROOF_PREFIX). The key it answers with must be the one this extension paired
   // with, so a different program on the port cannot supply a proof for another key.
-  async function requestDeviceProof({ fetchImpl, endpoint, nonce, tenant, pinned }) {
+  async function requestDeviceProof({ fetchImpl, endpoint, base, nonce, tenant, pinned }) {
     const res = await fetchImpl(`${shieldBase(endpoint)}/api/coriqo/proof`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ nonce, tenant_slug: tenant }),
+      body: JSON.stringify({ base_url: checkBase(base), nonce, tenant_slug: tenant }),
     })
     let b = {}
     try { b = await res.json() } catch { /* generic below */ }

@@ -194,7 +194,7 @@ async function onConnect() {
     let grant
     for (let attempt = 0; attempt < 2; attempt++) {
       const nonce = await L.requestProofNonce({ fetchImpl: fetch, base, accessToken: session.access_token, tenant })
-      const proof = nonce ? await L.requestDeviceProof({ fetchImpl: fetch, endpoint: check.endpoint, nonce, tenant, pinned }) : null
+      const proof = nonce ? await L.requestDeviceProof({ fetchImpl: fetch, endpoint: check.endpoint, base, nonce, tenant, pinned }) : null
       grant = await L.requestEnrolGrant({ fetchImpl: fetch, base, accessToken: session.access_token, tenant, device, proof })
       if (grant.reason !== 'device_proof_invalid' || attempt === 1) break
     }

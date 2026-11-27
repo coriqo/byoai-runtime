@@ -6,6 +6,7 @@ import json
 import urllib.error
 import urllib.request
 
+import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from tests.integrations.test_shield import _serve, make_cfg
 
@@ -21,6 +22,8 @@ EXT = "chrome-extension://jbbongpiablbbmfflcaafjbeejeododc"
 
 
 def _post(base, payload, origin=EXT, raw=None):
+    if isinstance(payload, dict):
+        payload = {"base_url": "https://coriqo.test", **payload}
     headers = {**JSON, **({"Origin": origin} if origin else {})}
     req = urllib.request.Request(base + "/api/coriqo/proof", method="POST",
                                  data=raw if raw is not None else json.dumps(payload).encode(), headers=headers)
@@ -29,6 +32,11 @@ def _post(base, payload, origin=EXT, raw=None):
         return r.status, json.loads(r.read())
     except urllib.error.HTTPError as e:
         return e.code, json.loads(e.read() or b"{}")
+
+
+@pytest.fixture(autouse=True)
+def _trusted_host(monkeypatch):
+    monkeypatch.setenv("BYOAI_CORIQO_LINK_HOSTS", "coriqo.test")
 
 
 def test_proof_is_an_extension_only_route():
@@ -101,3 +109,12 @@ def test_a_bad_content_length_is_a_clean_400(tmp_path):
         assert b" 400 " in first, (value, first)
         # the server stays up and still answers
         assert _post(base, {"nonce": "okokokokok", "tenant_slug": "x"})[0] == 200
+
+
+def test_no_proof_for_a_server_this_mac_was_not_told_to_trust(tmp_path, monkeypatch):
+    base = _serve(make_cfg(tmp_path))
+    for server in ("https://evil.test", "", "http://coriqo.test"):
+        code, body = _post(base, {"base_url": server, "nonce": "okokokokok", "tenant_slug": "x"})
+        assert code == 403 and "signature" not in body, server
+    monkeypatch.delenv("BYOAI_CORIQO_LINK_HOSTS")
+    assert _post(base, {"nonce": "okokokokok", "tenant_slug": "x"})[0] == 403  # no list: nothing is trusted

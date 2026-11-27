@@ -2957,6 +2957,12 @@ def serve(cfg: ShieldConfig, host: str = "127.0.0.1", port: int = DEFAULT_PORT,
                     and isinstance(tenant, str) and _PROOF_TENANT.fullmatch(tenant)):
                 self._send(400, b'{"error":"bad nonce or workspace"}')
                 return
+            # Same trust gate as the link route: only for a Coriqo server this Mac was told to trust,
+            # so a nonce from some other server never gets this Mac's key to sign it.
+            problem = link_host_problem(str(payload.get("base_url") or ""))
+            if problem:
+                self._send(403, json.dumps({"error": problem}).encode())
+                return
             pin = workspace_pin()
             if pin and tenant.lower() not in pin:
                 self._send(403, b'{"error":"That Coriqo workspace is not one this computer may join (BYOAI_CORIQO_LINK_WORKSPACES)."}')
