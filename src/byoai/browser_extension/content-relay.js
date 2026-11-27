@@ -128,7 +128,7 @@
     toPage = channel.port1
     toPage.onmessage = (ev) => {
       if (ev.data && ev.data.t === 'warn') onWarn(ev.data)
-      else if (ev.data && ev.data.t === 'notice') onNotice(ev.data)
+      else if (ev.data && ev.data.t === 'notice') onNotice({ ...ev.data, masked: false }) // "masked" is only this file's to claim
     }
     window.postMessage('shield-agent-port', '*', [channel.port2])
   } catch { toPage = null }
@@ -209,18 +209,83 @@
     try { toPage && toPage.postMessage({ t: 'warn-result', send_id: sendId, choice }) } catch { /* page gone */ }
   }
 
+  // Light and dark follow the page's scheme. One card layout serves the warn
+  // bar and every notice; all text goes in with textContent.
+  const CARD_CSS = ':host{all:initial}' +
+    '.wrap{position:fixed;top:16px;left:50%;transform:translateX(-50%);width:min(440px,calc(100vw - 24px));' +
+    'display:flex;flex-direction:column;gap:10px;font:14px/1.45 system-ui,-apple-system,sans-serif;' +
+    '--bg:#fff;--fg:#111827;--mut:#4b5563;--line:#e5e7eb;--chip:#f3f4f6;--btn:#fff;--accent:#2563eb;--tone:#d97706}' +
+    '@media(prefers-color-scheme:dark){.wrap{--bg:#1c1f26;--fg:#f3f4f6;--mut:#9ca3af;--line:#343a46;--chip:#2a2f3a;--btn:#262b35;--accent:#3b82f6;--tone:#fbbf24}}' +
+    '.card{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-left:4px solid var(--tone);border-radius:12px;' +
+    'padding:14px 16px;box-shadow:0 12px 32px rgba(0,0,0,.22);animation:in .16s ease-out}' +
+    '.card.ok{--tone:#16a34a}.card.stop{--tone:#dc2626}' +
+    '@keyframes in{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}' +
+    '@media(prefers-reduced-motion:reduce){.card{animation:none}}' +
+    '.head{display:flex;align-items:center;gap:8px;font-weight:600}.dot{width:8px;height:8px;border-radius:50%;background:var(--tone);flex:none}' +
+    '.body{color:var(--mut);margin-top:4px}.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}' +
+    '.chip{background:var(--chip);border:1px solid var(--line);border-radius:999px;padding:2px 10px;font-size:12.5px}' +
+    '.acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}' +
+    'button{font:inherit;font-weight:500;border:1px solid var(--line);border-radius:8px;padding:6px 14px;background:var(--btn);color:var(--fg);cursor:pointer}' +
+    'button:hover{filter:brightness(.97)}button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}' +
+    'button.main{background:var(--accent);border-color:var(--accent);color:#fff}' +
+    '.kbd{margin-left:auto;align-self:center;font-size:12px;color:var(--mut)}'
+
   function onWarnHost() {
     barHost = document.createElement('div')
-    barHost.style.cssText = 'all:initial;position:fixed;top:0;left:0;right:0;z-index:2147483647'
+    barHost.style.cssText = 'all:initial;position:fixed;top:0;left:0;right:0;z-index:2147483647;pointer-events:none'
     const root = barHost.attachShadow({ mode: 'closed' })
     const style = document.createElement('style')
-    style.textContent = '.bar{font:14px system-ui,sans-serif;background:#1f2937;color:#fff;padding:10px 16px;' +
-      'display:flex;gap:10px;align-items:center;flex-wrap:wrap;border-bottom:1px solid #4b5563}' +
-      '.msg{flex:1 1 240px}button{font:inherit;border:1px solid #6b7280;border-radius:6px;padding:5px 12px;' +
-      'background:#374151;color:#fff;cursor:pointer}button.main{background:#2563eb;border-color:#2563eb}'
+    style.textContent = CARD_CSS + '.wrap>*{pointer-events:auto}'
     barBox = document.createElement('div')
+    barBox.className = 'wrap'
     root.append(style, barBox)
     ;(document.documentElement || document.body).append(barHost)
+  }
+
+  // Builds one card: tone (warn|stop|ok), a title, a line of text, optional
+  // chips, and buttons [{label, main, fn}]. fn runs on click.
+  function buildCard({ role, tone, title, text, chips, actions }) {
+    const row = document.createElement('div')
+    row.className = `card bar ${tone}`
+    row.setAttribute('role', role)
+    const head = document.createElement('div')
+    head.className = 'head'
+    const dot = document.createElement('span')
+    dot.className = 'dot'
+    const t = document.createElement('span')
+    t.className = 'msg'
+    t.textContent = title
+    head.append(dot, t)
+    row.append(head)
+    if (text) {
+      const b = document.createElement('div')
+      b.className = 'body'
+      b.textContent = text
+      row.append(b)
+    }
+    if (chips && chips.length) {
+      const c = document.createElement('div')
+      c.className = 'chips'
+      for (const n of chips) {
+        const e = document.createElement('span')
+        e.className = 'chip'
+        e.textContent = n
+        c.append(e)
+      }
+      row.append(c)
+    }
+    const acts = document.createElement('div')
+    acts.className = 'acts'
+    let first = null
+    for (const a of actions) {
+      const btn = document.createElement('button')
+      btn.textContent = a.label
+      if (a.main) { btn.className = 'main'; first = btn }
+      btn.addEventListener('click', a.fn)
+      acts.append(btn)
+    }
+    row.append(acts)
+    return { row, focus: () => (first || acts.firstChild)?.focus?.() }
   }
 
   function onWarn(req) {
@@ -244,28 +309,23 @@
     }
     try {
       if (!barHost) onWarnHost()
-      row = document.createElement('div')
-      row.className = 'bar'
-      row.setAttribute('role', 'alertdialog')
-      const msg = document.createElement('span')
-      msg.className = 'msg'
-      msg.textContent = isFile
-        ? `Shield asks before this file goes out${fileName ? ` (${fileName})` : ''}` +
-          `${names.length ? `: it contains ${names.join(', ')}` : ''}.` +
-          `${unreadable ? " Shield couldn't check this file." : ''}`
-        : `This message contains ${names.join(', ') || 'sensitive data'}.`
-      const mk = (label, choice, main) => {
-        const b = document.createElement('button')
-        b.textContent = label
-        if (main) b.className = 'main'
-        b.addEventListener('click', () => finish(choice))
-        return b
-      }
-      const def = isFile ? mk('Remove file', 'removed', true) : mk('Send redacted', 'redacted', true)
-      row.append(msg, def, mk(isFile ? 'Upload anyway' : 'Send anyway', 'sent'), mk('Cancel', 'cancelled'))
+      const what = names.join(', ') || 'sensitive data'
+      const act = (label, choice, main) => ({ label, main, fn: () => finish(choice) })
+      const card = buildCard({
+        role: 'alertdialog', tone: 'warn',
+        title: isFile ? `Check this file before it goes out${fileName ? `: ${fileName}` : ''}` : 'Sensitive data in your message',
+        text: isFile
+          ? `${names.length ? `It contains ${names.join(', ')}. ` : ''}${unreadable ? "Shield couldn't check it. " : ''}Remove it, or upload it as is.`
+          : `This message contains ${what}. Mask it and send in one step, or send it as is.`,
+        chips: names,
+        actions: isFile
+          ? [act('Remove file', 'removed', true), act('Upload anyway', 'sent'), act('Cancel', 'cancelled')]
+          : [act('Send redacted', 'redacted', true), act('Send anyway', 'sent'), act('Cancel', 'cancelled')],
+      })
+      row = card.row
       row.addEventListener('keydown', (e) => { if (e.key === 'Escape') finish('cancelled') })
       barBox.append(row)
-      def.focus?.() // Enter picks the default
+      card.focus() // Enter picks the default
     } catch { answer(sendId, 'cancelled'); return }
     timer = setTimeout(() => finish('cancelled'), WARN_MS)
     bars.set(sendId, { finish })
@@ -278,7 +338,9 @@
    * "sensitive data", names are shown as text and cut short.
    */
   const NOTICE_MS = 20_000
-  function onNotice(req) {
+  // `actions` come only from this file's own callers (never from the page's
+  // message): [{label, main, fn}], each closing the card after it runs.
+  function onNotice(req, actions = []) {
     if (!req) return
     const isMessage = req.message === true
     if (!isMessage && !Array.isArray(req.names)) return
@@ -287,35 +349,44 @@
     const why = [...new Set((Array.isArray(req.labels) ? req.labels : [])
       .map((n) => RULE_LABEL[n] ?? 'sensitive data'))].slice(0, 5)
     const verb = req.verdict === 'blocked' ? 'stopped' : req.verdict === 'removed' ? 'removed' : 'cancelled'
+    let title
+    let text
+    let tone = 'stop'
+    if (req.masked === true) {
+      tone = 'ok'
+      title = 'Masked. Press send when you are ready.'
+      text = `${why.length ? `${why.join(', ')} ${why.length > 1 ? 'are' : 'is'} now a placeholder. ` : ''}Your message is still in the box.`
+    } else if (req.retry === true) {
+      title = "Shield couldn't press send for you"
+      text = 'Your message is clean and still in the box. Press send again.'
+    } else if (req.rewrite === true) {
+      title = "This box wouldn't take the edit"
+      text = `${why.length ? `It contains ${why.join(', ')}. ` : ''}Nothing was sent.` +
+        `${actions.length ? ' A masked copy is ready to paste.' : ' Remove the details and send again.'}`
+    } else if (isMessage) {
+      title = 'Shield stopped this message'
+      text = `${why.length ? `It contains ${why.join(', ')}. ` : ''}Nothing was sent.` +
+        `${actions.length ? ' Mask it and you can send straight away.' : ' Remove that part and send again.'}`
+    } else {
+      title = `Shield ${verb} ${names.join(', ')}`
+      text = `${why.length ? `It contains ${why.join(', ')}. ` : ''}` +
+        `${names.length > 1 ? "They weren't" : "It wasn't"} uploaded. The app may still show ` +
+        `${names.length > 1 ? 'them' : 'it'} as attached; remove ${names.length > 1 ? 'them' : 'it'} before sending.`
+    }
     try {
       if (!barHost) onWarnHost()
-      const row = document.createElement('div')
-      row.className = 'bar'
-      row.setAttribute('role', 'status')
-      const msg = document.createElement('span')
-      msg.className = 'msg'
-      const list = names.join(', ')
-      msg.textContent = req.retry === true
-        ? "Shield couldn't send it for you; press send again."
-        : req.rewrite === true
-        ? "Shield couldn't rewrite this message; remove the details and send again."
-        : isMessage
-        ? `Shield stopped this message${why.length ? `: it contains ${why.join(', ')}` : ''}. It wasn't sent; ` +
-          'remove that part and send again.'
-        : `Shield ${verb} ${list}${why.length ? ` (it contains ${why.join(', ')})` : ''}. ` +
-        `${names.length > 1 ? "They weren't" : "It wasn't"} uploaded; remove ${names.length > 1 ? 'them' : 'it'} ` +
-        'from your message before sending.'
-      const ok = document.createElement('button')
-      ok.textContent = 'OK'
       let timer
+      let card
       const close = () => {
         clearTimeout(timer)
-        try { row.remove(); if (barBox && !barBox.children.length) { barHost.remove(); barHost = null; barBox = null } } catch { /* page gone */ }
+        try { card.row.remove(); if (barBox && !barBox.children.length) { barHost.remove(); barHost = null; barBox = null } } catch { /* page gone */ }
       }
-      ok.addEventListener('click', close)
-      row.append(msg, ok)
-      barBox.append(row)
-      timer = setTimeout(close, NOTICE_MS)
+      const acts = actions.map((a) => ({ ...a, fn: () => { close(); a.fn() } }))
+      acts.push({ label: acts.length ? 'Dismiss' : 'OK', fn: close })
+      card = buildCard({ role: 'status', tone, title, text, chips: req.masked ? [] : why, actions: acts })
+      barBox.append(card.row)
+      card.row.addEventListener('keydown', (e) => { if (e.key === 'Escape') close() })
+      timer = setTimeout(close, req.masked ? 8000 : NOTICE_MS)
     } catch { /* the record still says what happened */ }
   }
 
@@ -603,12 +674,30 @@
     const j = judge(text)
     const dec = { at: now, text, after: null, stopped: false, evType: ev.type }
     lastDec = dec
-    const noticeStop = (labels) => onNotice({ message: true, labels, verdict: 'blocked' })
+    // A stop is not a dead end: "Mask it" edits the box (never sends); the
+    // masked text is clean, so the next send passes with no more steps.
+    const maskAll = new Set(j.hits.filter((h) => h.tier !== 'flag').map((h) => h.name))
+    const maskAction = {
+      label: 'Mask it', main: true,
+      fn: () => {
+        const { out, rules } = redacted(text, maskAll)
+        const ok = rules.length && compose.isConnected && setText(compose, out) &&
+          !judge(readText(compose)).hits.some((h) => h.tier !== 'flag' && maskAll.has(h.name))
+        if (ok) { lastDec = null; onNotice({ message: true, masked: true, labels: j.blocked }); return }
+        // Put the original back untouched if the edit half-applied.
+        if (rules.length && compose.isConnected && readText(compose) !== text) setText(compose, text)
+        onNotice({ message: true, rewrite: true, labels: j.blocked, verdict: 'blocked' }, copyAction(out, rules.length))
+      },
+    }
+    const copyAction = (out, any) => (any ? [{
+      label: 'Copy safe version', main: true,
+      fn: () => { try { window.navigator.clipboard.writeText(out) } catch { /* no clipboard: the box still holds the text */ } },
+    }] : [])
     if (j.top === eng.ORDER.block) {
       dec.stopped = true
       halt()
       gateRow({ ...j.facts, gate_id: id, verdict: 'blocked' })
-      noticeStop(j.blocked)
+      onNotice({ message: true, labels: j.blocked, verdict: 'blocked' }, [maskAction])
       return
     }
     // Rewrites the box; false if what the framework holds still has a name to hide.
@@ -623,7 +712,8 @@
     const failClosed = (labels) => {
       dec.stopped = true
       gateRow({ ...j.facts, gate_id: id, verdict: 'blocked', reason: 'rewrite_failed' })
-      onNotice({ message: true, rewrite: true, labels, verdict: 'blocked' })
+      onNotice({ message: true, rewrite: true, labels, verdict: 'blocked' },
+        copyAction(redacted(text, maskAll).out, maskAll.size))
     }
     if (j.top === eng.ORDER.warn) {
       dec.stopped = true

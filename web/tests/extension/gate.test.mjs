@@ -142,7 +142,8 @@ describe('input gate: sending a message', () => {
     expect(ev.defaultPrevented).toBe(true)
     expect(w.seen.keydown).toBe(0)
     expect(w.seen.own ?? 0).toBe(0)
-    expect(w.noticeText()).toContain('Shield stopped this message: it contains an AWS access key')
+    expect(w.noticeText()).toContain('Shield stopped this message')
+    expect(w.noticeText()).toContain('an AWS access key')
     expect(w.requests()).toMatchObject([{ stage: 'input', app: 'claude', verdict: 'blocked', flags: ['secret:aws_access_key'], chars: 30 }])
   })
   it('the send button, pointerdown then click: one decision, the site handler never runs', () => {
@@ -405,10 +406,33 @@ describe('input gate: review findings', () => {
       expect(w.key().defaultPrevented).toBe(true)
       expect(w.seen.keydown).toBe(0)
       expect(w.compose.textContent).toBe(`mail ${EMAIL}`) // no textContent fallback
-      expect(w.noticeText()).toContain("Shield couldn't rewrite this message; remove the details and send again.")
+      expect(w.noticeText()).toContain("This box wouldn't take the edit")
       expect(w.requests()).toMatchObject([{ verdict: 'blocked', reason: 'rewrite_failed', stage: 'input' }])
       expect(w.requests()[0].redactions).toBeUndefined()
     }
+  })
+  it('a stop offers Mask it: the box is masked, nothing is sent, and the next send passes', () => {
+    const w = gate()
+    w.type(`k ${AWS} and ${EMAIL}`)
+    expect(w.key().defaultPrevented).toBe(true)
+    w.buttons()['Mask it'].click()
+    expect(w.compose.textContent).toBe('k [SECRET_1] and [EMAIL_1]')
+    expect(w.noticeText()).toContain('Press send when you are ready')
+    expect(w.sent).toBe(0)
+    expect(w.key().defaultPrevented).toBe(false)
+    expect(w.seen.keydown).toBe(1)
+    expect(JSON.stringify(w.requests())).not.toContain(AWS)
+  })
+  it('when the box will not take the edit, Copy safe version puts the masked text on the clipboard', () => {
+    const w = gate({ exec: 'false' })
+    const copied = []
+    Object.defineProperty(w.win.navigator, 'clipboard', { value: { writeText: (t) => copied.push(t) }, configurable: true })
+    w.type(`k ${AWS}`)
+    w.key()
+    w.buttons()['Mask it'].click()
+    w.buttons()['Copy safe version'].click()
+    expect(copied).toEqual(['k [SECRET_1]'])
+    expect(w.compose.textContent).toBe(`k ${AWS}`)
   })
   it('a warn whose rewrite fails stops too', async () => {
     const w = gate({ exec: 'false', config: { actions: { secret: 'warn' } } })
@@ -466,6 +490,6 @@ describe('input gate: review findings', () => {
     await w.barUp()
     w.buttons()['Send anyway'].click()
     await vi.waitFor(() => expect(w.requests().at(-1)).toMatchObject({ verdict: 'blocked', reason: 'send_retry_needed' }), { timeout: 3000 })
-    expect(w.noticeText()).toContain("Shield couldn't send it for you; press send again.")
+    expect(w.noticeText()).toContain("Shield couldn't press send for you")
   })
 })
