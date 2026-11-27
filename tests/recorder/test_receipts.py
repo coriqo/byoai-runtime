@@ -607,7 +607,9 @@ def real_verifier(monkeypatch):
     for name in [m for m in sys.modules if m == "coriqo_agents" or m.startswith("coriqo_agents.")]:
         monkeypatch.delitem(sys.modules, name)
     try:
-        from coriqo_agents.receipts import verify_receipt  # pyright: ignore[reportMissingImports]  # sibling SDK put on sys.path just above
+        from coriqo_agents.receipts import (  # pyright: ignore[reportMissingImports]  # sibling SDK put on sys.path just above
+            verify_receipt,
+        )
     except ImportError as exc:
         pytest.skip(f"coriqo_agents.receipts not importable: {exc}")
     return verify_receipt

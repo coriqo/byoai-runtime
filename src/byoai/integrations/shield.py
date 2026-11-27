@@ -42,7 +42,7 @@ import threading
 import time
 import uuid
 from collections import deque
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -2452,7 +2452,7 @@ def request_problem(method: str, path: str, headers) -> str | None:
     return None
 
 
-def link_host_problem(base_url: str, env: dict | None = None) -> str | None:
+def link_host_problem(base_url: str, env: Mapping[str, str] | None = None) -> str | None:
     """Why the extension may not link this Mac to ``base_url``, or None.
 
     The sign-in hand-off carries a token to whatever address the caller names,

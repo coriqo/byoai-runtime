@@ -57,7 +57,12 @@ import httpx
 
 from byoai.integrations.shield_sync import aggregate_daily, build_event, sync_level
 from byoai.recorder.canonical import canonicalize
-from byoai.recorder.enroll import ENROLLMENT_FILENAME, EnrollmentError, enroll, load_enrollment_state
+from byoai.recorder.enroll import (
+    ENROLLMENT_FILENAME,
+    EnrollmentError,
+    enroll,
+    load_enrollment_state,
+)
 from byoai.recorder.keys import atomic_write_bytes
 from byoai.recorder.shipper import ShipError, post_signed_batch
 

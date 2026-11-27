@@ -5,7 +5,6 @@ enrolment grant that counts devices, and the existing /v1/enroll). Nothing here 
 real server; the shapes it checks are the ones CONFIGURATION.md documents."""
 from __future__ import annotations
 
-import hashlib
 import json
 import shutil
 import subprocess
@@ -16,10 +15,10 @@ from pathlib import Path
 from urllib.parse import parse_qs
 
 import pytest
+from tests.integrations.test_shield import _serve, make_cfg
 
 from byoai.integrations.shield import link_host_problem, request_problem
 from byoai.recorder.enroll import load_enrollment_state
-from tests.integrations.test_shield import _serve, make_cfg
 
 SCRIPT = Path(__file__).parent / "link_flow.mjs"
 
@@ -32,7 +31,7 @@ class StubCoriqo:
         stub = self
 
         class H(BaseHTTPRequestHandler):
-            def log_message(self, *a):
+            def log_message(self, format, *args):  # noqa: A002
                 pass
 
             def _json(self, code, body):

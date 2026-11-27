@@ -16,7 +16,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
-from byoai.recorder.merkle import checkpoint_leaf_hash  # noqa: E402  (needs the sys.path entry above to run from a checkout)
+# needs the sys.path entry above to run from a checkout
+from byoai.recorder.merkle import checkpoint_leaf_hash  # noqa: E402
 
 SEAL_PATH = ROOT / "examples" / "mcp_capture" / "sealchain.json"
 
