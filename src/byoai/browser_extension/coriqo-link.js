@@ -13,6 +13,7 @@
  * this repo. The shapes this file expects are documented in CONFIGURATION.md.
  */
 ;(function (root) {
+  const SCOPE = 'devices:link' // the only thing the extension asks for
   const CLIENT_ID = 'coriqo-shield-extension' // the default; the `coriqo_client_id` setting overrides it
 
   function b64url(bytes) {
@@ -58,6 +59,7 @@
     u.searchParams.set('code_challenge', challenge)
     u.searchParams.set('code_challenge_method', 'S256')
     u.searchParams.set('state', state)
+    u.searchParams.set('scope', SCOPE)
     if (tenant) u.searchParams.set('tenant', tenant)
     return u.toString()
   }
@@ -90,13 +92,32 @@
     if (!res.ok) throw new Error(`http:${res.status}`)
     const body = await res.json()
     if (typeof body?.access_token !== 'string' || !body.access_token) throw new Error('bad_token')
+    // Coriqo's token reply carries only the token; who and where come from
+    // userinfo. An older server may still put them in the token reply: that is
+    // used as a whole, only when userinfo names no workspace, never mixed.
+    const who = await fetchUserinfo({ fetchImpl, base, accessToken: body.access_token })
+    const mine = who.tenant_slug || who.tenants.length ? who : parseIdentity(body)
+    return { access_token: body.access_token, ...mine, email: mine.email || who.email }
+  }
+
+  function parseIdentity(b) {
     return {
-      access_token: body.access_token,
-      tenant_slug: typeof body.tenant_slug === 'string' ? body.tenant_slug : null,
+      email: typeof b?.email === 'string' ? b.email : null,
+      tenant_slug: typeof b?.tenant_slug === 'string' ? b.tenant_slug : null,
       // Every tenant the user may use; the person picks when there is more than one.
-      tenants: Array.isArray(body.tenants) ? body.tenants.filter((t) => typeof t === 'string') : [],
-      email: typeof body.email === 'string' ? body.email : null,
+      tenants: Array.isArray(b?.tenants) ? b.tenants.filter((t) => typeof t === 'string') : [],
     }
+  }
+
+  // A failure is an error the person sees (`http:401`, `bad_userinfo`), not a
+  // silent "no workspace".
+  async function fetchUserinfo({ fetchImpl, base, accessToken }) {
+    const res = await fetchImpl(new URL('/oauth/userinfo', checkBase(base)).toString(),
+      { headers: { authorization: `Bearer ${accessToken}` } })
+    if (!res.ok) throw new Error(`http:${res.status}`)
+    let b
+    try { b = await res.json() } catch { throw new Error('bad_userinfo') }
+    return parseIdentity(b)
   }
 
   // Ask Coriqo for a one-time enrolment token for this device. A refusal for

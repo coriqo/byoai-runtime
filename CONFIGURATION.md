@@ -2299,10 +2299,16 @@ window.
    or the https address of a client metadata document, which some authorization
    servers require; anything else is refused, and the value is trusted
    configuration: only the extension itself writes it), redirect
-   `https://<extension id>.chromiumapp.org/`. `GET /oauth/authorize`, then
+   `https://<extension id>.chromiumapp.org/`. `GET /oauth/authorize` (with
+   `scope=devices:link`, the only scope it asks for), then
    `POST /oauth/token` (form fields `grant_type`, `client_id`, `redirect_uri`,
-   `code`, `code_verifier`), answering `{access_token, email, tenant_slug,
-   tenants: [...]}`. A redirect with the wrong `state`, another address or no
+   `code`, `code_verifier`), answering `{access_token, ...}`. The token reply
+   carries no identity, so the extension then calls `GET /oauth/userinfo` with
+   the token and reads `email` and, for the workspace, `tenant_slug` and
+   `tenants: [...]` from it (an older server may put them in the token reply
+   instead; that is used only when userinfo names no workspace, never mixed). A
+   userinfo error stops sign-in with that error, and no workspace at all stops
+   it with "no workspace" rather than guessing one. A redirect with the wrong `state`, another address or no
    code is refused.
 2. **Device grant:** `POST /v1/enroll/self` with `Authorization: Bearer
    <access_token>`, `X-Tenant-Slug`, and `{device_public_key, device_label,
@@ -2322,7 +2328,7 @@ window.
 When `tenants` has more than one slug the login page shows a workspace picker.
 A slug is read as `<who>_<region>` (`coriqo_msp_usa` shows as "Coriqo MSP,
 United States"; known regions are `usa`, `uk`, `eu`, `ca`, `au`, anything else
-is shown as is). Coriqo's `tenant_slug` is preselected when the token response
+is shown as is). Coriqo's `tenant_slug` is preselected when Coriqo
 names one; otherwise the workspace nearest the user is, and the first entry if
 none is. The nearest is tagged "Near you" as a hint, guessed on the device from
 the browser's time zone, then its language; the guess is never sent to Coriqo

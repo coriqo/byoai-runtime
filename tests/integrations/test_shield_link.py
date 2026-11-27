@@ -43,6 +43,13 @@ class StubCoriqo:
                 self.end_headers()
                 self.wfile.write(data)
 
+            def do_GET(self):
+                stub.calls.append(self.path)
+                if self.path == "/oauth/userinfo" and self.headers.get("Authorization") == "Bearer at_1":
+                    return self._json(200, {"sub": "u1", "email": "a@b.test",
+                                            "tenants": ["coriqo_msp_usa", "coriqo_msp_uk"]})
+                self._json(401 if self.path == "/oauth/userinfo" else 404, {})
+
             def do_POST(self):
                 raw = self.rfile.read(int(self.headers.get("Content-Length", 0)))
                 stub.calls.append(self.path)
@@ -50,8 +57,7 @@ class StubCoriqo:
                     f = {k: v[0] for k, v in parse_qs(raw.decode()).items()}
                     ok = (f.get("grant_type") == "authorization_code" and f.get("code") == "goodcode"
                           and len(f.get("code_verifier", "")) >= 43 and f.get("client_id"))
-                    return self._json(200, {"access_token": "at_1", "email": "a@b.test",
-                                            "tenants": ["coriqo_msp_usa", "coriqo_msp_uk"]}) if ok \
+                    return self._json(200, {"access_token": "at_1", "token_type": "Bearer", "expires_in": 600}) if ok \
                         else self._json(400, {"error": "invalid_grant"})
                 if self.path == "/v1/enroll/self":
                     if self.headers.get("Authorization") != "Bearer at_1":
@@ -309,3 +315,41 @@ console.log(JSON.stringify({
     assert {g[k] for k in ("http", "space", "js", "empty", "long", "userinfo")} == {"bad_client_id"}
     assert g["dflt"] == "coriqo-shield-extension" and g["custom"] == "https://c.test/m.json"
     assert g["builderBad"] == "bad_client_id"      # the builders check it themselves, not only the caller
+
+
+def test_sign_in_asks_for_only_the_device_link_scope():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed")
+    code = r"""
+const L=require(process.argv[1]);
+const u=new URL(L.buildAuthorizeUrl({base:'https://c.test',redirectUri:'https://x.chromiumapp.org/',challenge:'c',state:'s'}));
+console.log(u.searchParams.get('scope'))
+"""
+    done = subprocess.run([node, "-e", code, str(Path(__file__).parents[2] / "src/byoai/browser_extension/coriqo-link.js")],
+                          capture_output=True, text=True, timeout=20)
+    assert done.stdout.strip() == "devices:link", done.stderr
+
+
+def test_identity_comes_from_userinfo_with_a_whole_token_reply_fallback_and_real_errors():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed")
+    code = r"""
+const L=require(process.argv[1]);
+const run=async(tok,ui)=>{try{return await L.exchangeCode({base:'https://c.test',redirectUri:'https://x.chromiumapp.org/',code:'c',verifier:'v',
+ fetchImpl:async(u)=>u.endsWith('/oauth/token')?{ok:true,json:async()=>tok}:ui}) }catch(e){return e.message}};
+(async()=>{console.log(JSON.stringify({
+ ui:await run({access_token:'t'},{ok:true,json:async()=>({email:'a@b',tenants:['x','y']})}),
+ fallback:await run({access_token:'t',tenant_slug:'old',tenants:['old']},{ok:true,json:async()=>({email:'a@b'})}),
+ mixed:await run({access_token:'t',tenants:['old']},{ok:true,json:async()=>({tenant_slug:'new'})}),
+ e401:await run({access_token:'t'},{ok:false,status:401}),
+ badjson:await run({access_token:'t'},{ok:true,json:async()=>{throw new Error('x')}})}))})()
+"""
+    done = subprocess.run([node, "-e", code, str(Path(__file__).parents[2] / "src/byoai/browser_extension/coriqo-link.js")],
+                          capture_output=True, text=True, timeout=20)
+    g = json.loads(done.stdout)
+    assert g["ui"]["tenants"] == ["x", "y"] and g["ui"]["email"] == "a@b"
+    assert g["fallback"]["tenant_slug"] == "old" and g["fallback"]["email"] == "a@b"
+    assert g["mixed"]["tenant_slug"] == "new" and g["mixed"]["tenants"] == []
+    assert (g["e401"], g["badjson"]) == ("http:401", "bad_userinfo")

@@ -34,6 +34,7 @@ function stubCoriqo(seen, clients) {
       seen.push(`${req.method} ${url.pathname}`)
       const json = (code, body) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)) }
       if (req.method === 'GET' && url.pathname === '/oauth/authorize') {
+        if (url.searchParams.get('scope') !== 'devices:link') return json(400, { error: 'invalid_scope' })
         clients.push(url.searchParams.get('client_id'))
         const code = 'c' + challenges.size
         challenges.set(code, url.searchParams.get('code_challenge'))
@@ -47,7 +48,11 @@ function stubCoriqo(seen, clients) {
         const want = challenges.get(f.get('code'))
         const got = createHash('sha256').update(f.get('code_verifier') || '').digest('base64url')
         if (!want || want !== got) return json(400, { error: 'invalid_grant' })
-        return json(200, { access_token: 'at_1', email: 'a@b.test', tenants: ['coriqo_msp_usa', 'coriqo_msp_uk'] })
+        return json(200, { access_token: 'at_1', token_type: 'Bearer', expires_in: 600 })
+      }
+      if (url.pathname === '/oauth/userinfo') {
+        if (req.headers.authorization !== 'Bearer at_1') return json(401, {})
+        return json(200, { sub: 'u1', email: 'a@b.test', tenants: ['coriqo_msp_usa', 'coriqo_msp_uk'] })
       }
       if (url.pathname === '/v1/enroll/self') {
         if (req.headers.authorization !== 'Bearer at_1') return json(401, {})
