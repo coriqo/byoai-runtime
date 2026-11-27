@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Shield base app catalog grows from 15 to 1,150 entries, built by
+  `scripts/import_shield_catalog.py`. A sidecar,
+  `shield_catalog_apps_meta.json`, records each entry's category, AI-native or
+  AI-enabled, and trust tier (`listed` or `candidate`; none is auto-trusted).
+  Shared infrastructure and generic platform hosts are rejected. See
+  `docs/shield-signatures.md`, "Base app catalog".
+
 ### Fixed
 - The device-signed single-trace call (`record_signed_trace`) now takes an
   optional `payload_mode` and sends `X-Coriqo-Payload-Mode` like
