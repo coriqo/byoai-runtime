@@ -1,0 +1,479 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coriqo.com/schemas/shield-signatures-v1.json",
+  "title": "Shield signature file v1",
+  "description": "A base list (public, shipped in the repo) or a signed bundle (private) of AI-activity signatures. Matching and loading are specified in docs/shield-signatures.md; this schema checks structure only.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "format",
+    "kind",
+    "file_version",
+    "generated_at",
+    "publisher",
+    "signatures"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "format": {
+      "const": "coriqo.shield.signatures"
+    },
+    "kind": {
+      "enum": [
+        "base",
+        "bundle"
+      ]
+    },
+    "file_version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Monotonic per publisher and kind. A loader never accepts a lower one than it already accepted."
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z$"
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z$"
+    },
+    "publisher": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "signatures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "type",
+          "match",
+          "vendor",
+          "technology",
+          "confidence",
+          "evidence_required",
+          "false_positive_notes",
+          "source",
+          "first_seen",
+          "last_verified",
+          "version",
+          "expires_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9._-]{2,80}$",
+            "description": "Unique within a file and across base plus bundle."
+          },
+          "type": {
+            "enum": [
+              "app_domain",
+              "model_endpoint",
+              "agent_protocol",
+              "mcp_config_path",
+              "local_runtime",
+              "local_app"
+            ]
+          },
+          "match": {
+            "type": "object",
+            "additionalProperties": false,
+            "minProperties": 1,
+            "properties": {
+              "hosts": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^(\\*\\.)?[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$",
+                  "maxLength": 253
+                },
+                "minItems": 1,
+                "maxItems": 20,
+                "uniqueItems": true
+              },
+              "paths": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^/[A-Za-z0-9/_.:*{}-]{0,120}$"
+                },
+                "minItems": 1,
+                "maxItems": 20,
+                "uniqueItems": true
+              },
+              "header_names": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9-]{1,64}$"
+                },
+                "minItems": 1,
+                "maxItems": 20,
+                "uniqueItems": true
+              },
+              "body_fields": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_.\\[\\]-]{1,64}$"
+                },
+                "minItems": 1,
+                "maxItems": 20,
+                "uniqueItems": true
+              },
+              "process_names": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_. -]{1,64}$"
+                },
+                "minItems": 1,
+                "maxItems": 20,
+                "uniqueItems": true
+              },
+              "bundle_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9.-]{2,127}$"
+                },
+                "minItems": 1,
+                "maxItems": 20,
+                "uniqueItems": true
+              },
+              "ports": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 65535
+                },
+                "minItems": 1,
+                "maxItems": 20,
+                "uniqueItems": true
+              },
+              "config_paths": {
+                "type": "object",
+                "additionalProperties": false,
+                "minProperties": 1,
+                "properties": {
+                  "darwin": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^(~|%[A-Z_]{1,30}%|\\$[A-Z_]{1,30})/[^\\u0000]{1,300}$",
+                      "not": {
+                        "pattern": "(^|/)\\.\\.(/|$)"
+                      }
+                    },
+                    "minItems": 1,
+                    "maxItems": 10,
+                    "uniqueItems": true
+                  },
+                  "linux": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^(~|%[A-Z_]{1,30}%|\\$[A-Z_]{1,30})/[^\\u0000]{1,300}$",
+                      "not": {
+                        "pattern": "(^|/)\\.\\.(/|$)"
+                      }
+                    },
+                    "minItems": 1,
+                    "maxItems": 10,
+                    "uniqueItems": true
+                  },
+                  "windows": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^(~|%[A-Z_]{1,30}%|\\$[A-Z_]{1,30})/[^\\u0000]{1,300}$",
+                      "not": {
+                        "pattern": "(^|/)\\.\\.(/|$)"
+                      }
+                    },
+                    "minItems": 1,
+                    "maxItems": 10,
+                    "uniqueItems": true
+                  }
+                }
+              }
+            }
+          },
+          "vendor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "technology": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "confidence": {
+            "enum": [
+              "confirmed",
+              "probable",
+              "possible"
+            ],
+            "description": "The most a match may report, and only when every evidence_required item was observed."
+          },
+          "evidence_required": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "host_match",
+                "path_match",
+                "header_present",
+                "body_field_present",
+                "process_running",
+                "bundle_installed",
+                "config_file_present",
+                "config_entry_present",
+                "port_listening"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 9,
+            "uniqueItems": true
+          },
+          "false_positive_notes": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 600
+          },
+          "source": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "licence"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "url": {
+                "type": "string",
+                "pattern": "^https://[^\\s]{1,300}$"
+              },
+              "licence": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9.+-]{1,40}$",
+                "description": "SPDX identifier, or LicenseRef-* for a bespoke licence."
+              }
+            }
+          },
+          "first_seen": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z$"
+          },
+          "last_verified": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z$"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z$"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "app_domain"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "match": {
+                  "required": [
+                    "hosts"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "model_endpoint"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "match": {
+                  "required": [
+                    "hosts",
+                    "paths"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "agent_protocol"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "match": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "paths"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "header_names"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "body_fields"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "mcp_config_path"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "match": {
+                  "required": [
+                    "config_paths"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "local_runtime"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "match": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "process_names"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "ports"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "local_app"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "match": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "bundle_ids"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "process_names"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      },
+      "maxItems": 20000
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "alg",
+        "key_id",
+        "sig"
+      ],
+      "properties": {
+        "alg": {
+          "const": "ed25519"
+        },
+        "key_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{2,64}$"
+        },
+        "sig": {
+          "type": "string",
+          "pattern": "^ed25519:[A-Za-z0-9+/]{86}==$"
+        }
+      }
+    }
+  },
+  "if": {
+    "properties": {
+      "kind": {
+        "const": "bundle"
+      }
+    }
+  },
+  "then": {
+    "required": [
+      "signature",
+      "expires_at"
+    ]
+  }
+}

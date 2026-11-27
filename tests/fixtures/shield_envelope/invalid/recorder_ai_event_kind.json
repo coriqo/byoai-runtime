@@ -1,0 +1,19 @@
+{
+  "ai_event_type": "ai.tool_call.requested",
+  "collector": "recorder",
+  "envelope_version": 1,
+  "evidence_level": "observed_requested",
+  "kind": "ai.tool_call.requested",
+  "model": {
+    "identification": "observed",
+    "name": "claude-sonnet-5-5",
+    "provider": "anthropic",
+    "source": "event_field"
+  },
+  "outcome": "not_applicable",
+  "policy_action": "none",
+  "tool": {
+    "name": "search",
+    "status": "requested"
+  }
+}

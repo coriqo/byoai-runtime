@@ -1,0 +1,12 @@
+{
+  "ai_event_type": "ai.collector.health",
+  "app": "claude",
+  "collector": "desktop_proxy",
+  "envelope_version": 1,
+  "evidence_level": "observed",
+  "kind": "desktop.health.unmatched",
+  "outcome": "not_applicable",
+  "path": "/api/x",
+  "policy_action": "none",
+  "target": "claude.ai"
+}

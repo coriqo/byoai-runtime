@@ -82,6 +82,7 @@ dev = [
     "build>=1.2",
     "cryptography>=42",
     "rfc3161ng>=2.1",
+    "jsonschema>=4.17",
 ]
 
 [project.scripts]

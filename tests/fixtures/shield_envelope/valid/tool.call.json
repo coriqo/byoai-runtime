@@ -1,0 +1,21 @@
+{
+  "ai_event_type": "ai.tool_call.requested",
+  "call_id": "0123456789ab",
+  "chars": 0,
+  "collector": "mcp_interposer",
+  "envelope_version": 1,
+  "evidence_level": "observed_requested",
+  "identity": {
+    "client_name": "coriqo-mcp"
+  },
+  "kind": "tool.call",
+  "mandate_verdict": "allowed",
+  "outcome": "allowed",
+  "payload_hash": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "policy_action": "allow",
+  "tool": {
+    "call_id": "0123456789ab",
+    "name": "read_file",
+    "status": "requested"
+  }
+}

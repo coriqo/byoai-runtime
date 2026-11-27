@@ -1,0 +1,11 @@
+{
+  "ai_event_type": "ai.app.discovered",
+  "collector": "desktop_proxy",
+  "envelope_version": 1,
+  "evidence_level": "unobservable_payload",
+  "kind": "desktop.meta",
+  "not_covered": "certificate pinned",
+  "outcome": "not_applicable",
+  "policy_action": "none",
+  "target": "chat.example.ai"
+}

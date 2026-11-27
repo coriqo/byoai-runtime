@@ -1,0 +1,13 @@
+{
+  "ai_event_type": "ai.policy.evaluated",
+  "collector": "recorder",
+  "envelope_version": 1,
+  "evidence_level": "observed",
+  "kind": "mandate_verdict",
+  "outcome": "denied",
+  "policy_action": "block",
+  "tool": {
+    "name": "delete_file",
+    "status": "requested"
+  }
+}

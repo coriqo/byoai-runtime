@@ -1,0 +1,1193 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coriqo.com/schemas/shield-event-envelope-v1.json",
+  "title": "Shield event envelope v1",
+  "description": "Additive envelope fields carried inside an existing Shield row (or, for recorder events, derived from the event and never written into its payload). Validates a row that carries the envelope; every pre-existing row field stays allowed, but message-text field names never are. See docs/shield-event-envelope.md.",
+  "type": "object",
+  "required": [
+    "kind",
+    "envelope_version",
+    "ai_event_type",
+    "evidence_level",
+    "collector",
+    "policy_action",
+    "outcome"
+  ],
+  "properties": {
+    "kind": {
+      "anyOf": [
+        {
+          "enum": [
+            "browser.chat.request",
+            "browser.chat.reply",
+            "browser.chat.status",
+            "browser.chat.attachment",
+            "browser.health.unmatched",
+            "browser.health.core_missing",
+            "desktop.chat.request",
+            "desktop.chat.response",
+            "desktop.chat.attachment",
+            "desktop.verdict.denied",
+            "desktop.meta",
+            "desktop.health.unmatched",
+            "tool.call",
+            "tool.result",
+            "tool.error",
+            "tool_use",
+            "tool_result",
+            "mandate_verdict"
+          ]
+        },
+        {
+          "pattern": "^scanner\\.[a-z_]+$"
+        }
+      ],
+      "description": "Existing row kind. For recorder events, the EventKind value (tool_use, tool_result, mandate_verdict); recorder payloads do not carry it."
+    },
+    "envelope_version": {
+      "const": 1
+    },
+    "ai_event_type": {
+      "enum": [
+        "ai.model.requested",
+        "ai.model.response",
+        "ai.tool_call.requested",
+        "ai.tool.result",
+        "ai.tool.executed",
+        "ai.data.attachment",
+        "ai.policy.enforced",
+        "ai.policy.evaluated",
+        "ai.app.discovered",
+        "ai.app.visited",
+        "ai.collector.health",
+        "ai.mcp.configured",
+        "ai.runtime.detected"
+      ]
+    },
+    "evidence_level": {
+      "enum": [
+        "observed",
+        "observed_requested",
+        "inferred",
+        "verified",
+        "unobservable_payload",
+        "unattested"
+      ]
+    },
+    "collector": {
+      "enum": [
+        "browser_extension",
+        "desktop_proxy",
+        "mcp_interposer",
+        "recorder",
+        "governed_tool",
+        "scanner"
+      ]
+    },
+    "policy_action": {
+      "enum": [
+        "none",
+        "observe",
+        "allow",
+        "flag",
+        "warn",
+        "redact",
+        "block",
+        "pending_approval"
+      ],
+      "description": "What policy decided. Not what happened."
+    },
+    "outcome": {
+      "enum": [
+        "not_applicable",
+        "unknown",
+        "sent",
+        "sent_redacted",
+        "blocked",
+        "cancelled",
+        "answered",
+        "failed",
+        "uploaded",
+        "removed",
+        "allowed",
+        "denied"
+      ],
+      "description": "What happened to the thing the row is about."
+    },
+    "app": {
+      "type": "string",
+      "pattern": "^[a-z0-9_]{1,40}$"
+    },
+    "model": {
+      "$ref": "#/$defs/model"
+    },
+    "tool": {
+      "$ref": "#/$defs/tool"
+    },
+    "agent": {
+      "$ref": "#/$defs/agent"
+    },
+    "detection": {
+      "$ref": "#/$defs/detection"
+    }
+  },
+  "propertyNames": {
+    "not": {
+      "enum": [
+        "text",
+        "message",
+        "messages",
+        "content",
+        "prompt",
+        "reply",
+        "response_text",
+        "completion",
+        "body",
+        "input",
+        "output",
+        "args",
+        "arguments",
+        "arguments_text",
+        "result_text"
+      ]
+    }
+  },
+  "additionalProperties": true,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "browser.chat.request"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "ai_event_type": {
+            "enum": [
+              "ai.model.requested",
+              "ai.app.visited"
+            ]
+          },
+          "collector": {
+            "enum": [
+              "browser_extension"
+            ]
+          },
+          "evidence_level": {
+            "enum": [
+              "observed"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "browser.chat.reply"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "ai_event_type": {
+            "enum": [
+              "ai.model.response",
+              "ai.tool_call.requested"
+            ]
+          },
+          "collector": {
+            "enum": [
+              "browser_extension"
+            ]
+          },
+          "evidence_level": {
+            "enum": [
+              "observed",
+              "observed_requested"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "browser.chat.status"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "ai_event_type": {
+            "enum": [
+              "ai.model.response"
+            ]
+          },
+          "collector": {
+            "enum": [
+              "browser_extension"
+            ]
+          },
+          "evidence_level": {
+            "enum": [
+              "observed"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "browser.chat.attachment"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "ai_event_type": {
+            "enum": [
+              "ai.data.attachment"
+            ]
+          },
+          "collector": {
+            "enum": [
+              "browser_extension"
+            ]
+          },
+          "evidence_level": {
+            "enum": [
+              "observed"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "browser.health.unmatched"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "ai_event_type": {
+            "enum": [
+              "ai.collector.health"
+            ]
+          },
+          "collector": {
+            "enum": [
+              "browser_extension"
+            ]
+          },
+          "evidence_level": {
+            "enum": [
+              "observed"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "browser.health.core_missing"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "ai_event_type": {
+            "enum": [
+              "ai.collector.health"
+            ]
+          },
+          "collector": {
+            "enum": [
+              "browser_extension"
+            ]
+          },
+          "evidence_level": {
+            "enum": [
+              "observed"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "desktop.chat.request"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "ai_event_type": {
+            "enum": [
+              "ai.model.requested",
+              "ai.app.visited"
+            ]
+          },
+          "collector": {
+            "enum": [
+              "desktop_proxy"
+            ]
+          },
+          "evidence_level": {
+            "enum": [
+              "observed"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "desktop.chat.response"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "ai_event_type": {
+            "enum": [
+              "ai.model.response",
+              "ai.tool_call.requested"
+            ]
+          },
+          "collector": {
+            "enum": [
+              "desktop_proxy"
+            ]
+          },
+          "evidence_level": {
+            "enum": [
+              "observed",
+              "observed_requested"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "desktop.chat.attachment"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "ai_event_type": {
+            "enum": [
+              "ai.data.attachment"
+            ]
+          },
+          "collector": {
+            "enum": [
+              "desktop_proxy"
+            ]
+          },
+          "evidence_level": {
+            "enum": [
+              "observed"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "desktop.verdict.denied"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "ai_event_type": {
+            "enum": [
+              "ai.policy.enforced"
+            ]
+          },
+          "collector": {
+            "enum": [
+              "desktop_proxy"
+            ]
+          },
+          "evidence_level": {
+            "enum": [
+              "observed"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "desktop.meta"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "ai_event_type": {
+            "enum": [
+              "ai.app.discovered",
+              "ai.app.visited"
+            ]
+          },
+          "collector": {
+            "enum": [
+              "desktop_proxy"
+            ]
+          },
+          "evidence_level": {
+            "enum": [
+              "unobservable_payload",
+              "observed"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "desktop.health.unmatched"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "ai_event_type": {
+            "enum": [
+              "ai.collector.health"
+            ]
+          },
+          "collector": {
+            "enum": [
+              "desktop_proxy"
+            ]
+          },
+          "evidence_level": {
+            "enum": [
+              "observed"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "tool.call"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "ai_event_type": {
+            "enum": [
+              "ai.tool_call.requested"
+            ]
+          },
+          "collector": {
+            "enum": [
+              "mcp_interposer"
+            ]
+          },
+          "evidence_level": {
+            "enum": [
+              "observed_requested"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "tool.result"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "ai_event_type": {
+            "enum": [
+              "ai.tool.result"
+            ]
+          },
+          "collector": {
+            "enum": [
+              "mcp_interposer"
+            ]
+          },
+          "evidence_level": {
+            "enum": [
+              "observed"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "tool.error"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "ai_event_type": {
+            "enum": [
+              "ai.tool.result"
+            ]
+          },
+          "collector": {
+            "enum": [
+              "mcp_interposer"
+            ]
+          },
+          "evidence_level": {
+            "enum": [
+              "observed"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "tool_use"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "ai_event_type": {
+            "enum": [
+              "ai.tool_call.requested"
+            ]
+          },
+          "collector": {
+            "enum": [
+              "recorder"
+            ]
+          },
+          "evidence_level": {
+            "enum": [
+              "observed_requested"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "tool_result"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "ai_event_type": {
+            "enum": [
+              "ai.tool.result",
+              "ai.tool.executed"
+            ]
+          },
+          "collector": {
+            "enum": [
+              "recorder",
+              "governed_tool"
+            ]
+          },
+          "evidence_level": {
+            "enum": [
+              "observed",
+              "verified"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "mandate_verdict"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "ai_event_type": {
+            "enum": [
+              "ai.policy.evaluated"
+            ]
+          },
+          "collector": {
+            "enum": [
+              "recorder"
+            ]
+          },
+          "evidence_level": {
+            "enum": [
+              "observed"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "ai_event_type": {
+            "const": "ai.tool_call.requested"
+          }
+        },
+        "required": [
+          "ai_event_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "evidence_level": {
+            "const": "observed_requested"
+          },
+          "tool": {
+            "properties": {
+              "status": {
+                "const": "requested"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          }
+        },
+        "required": [
+          "tool"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "ai_event_type": {
+            "const": "ai.tool.result"
+          }
+        },
+        "required": [
+          "ai_event_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "tool": {
+            "properties": {
+              "status": {
+                "const": "result"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          }
+        },
+        "required": [
+          "tool"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "ai_event_type": {
+            "const": "ai.tool.executed"
+          }
+        },
+        "required": [
+          "ai_event_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "collector": {
+            "const": "governed_tool"
+          },
+          "tool": {
+            "properties": {
+              "status": {
+                "const": "executed"
+              },
+              "execution_source": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "execution_source"
+            ]
+          }
+        },
+        "required": [
+          "tool"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "ai_event_type": {
+            "enum": [
+              "ai.mcp.configured",
+              "ai.runtime.detected"
+            ]
+          }
+        },
+        "required": [
+          "ai_event_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "collector": {
+            "const": "scanner"
+          },
+          "evidence_level": {
+            "const": "unattested"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "pattern": "^scanner\\."
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "collector": {
+            "const": "scanner"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "collector": {
+            "const": "scanner"
+          }
+        },
+        "required": [
+          "collector"
+        ]
+      },
+      "then": {
+        "properties": {
+          "evidence_level": {
+            "const": "unattested"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "evidence_level": {
+            "const": "unobservable_payload"
+          }
+        },
+        "required": [
+          "evidence_level"
+        ]
+      },
+      "then": {
+        "properties": {
+          "ai_event_type": {
+            "const": "ai.app.discovered"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "ai_event_type": {
+            "const": "ai.app.discovered"
+          },
+          "collector": {
+            "const": "desktop_proxy"
+          }
+        },
+        "required": [
+          "ai_event_type",
+          "collector"
+        ]
+      },
+      "then": {
+        "properties": {
+          "evidence_level": {
+            "const": "unobservable_payload"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identification"
+      ],
+      "properties": {
+        "identification": {
+          "enum": [
+            "observed",
+            "inferred",
+            "unknown"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/@+-]{0,127}$",
+          "description": "Only present when identification is observed or inferred. Never invented."
+        },
+        "provider": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]{1,40}$"
+        },
+        "source": {
+          "enum": [
+            "request_field",
+            "response_field",
+            "event_field",
+            "host_inference"
+          ],
+          "description": "Where the name came from. Required with a name."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "identification": {
+                "const": "unknown"
+              }
+            },
+            "required": [
+              "identification"
+            ]
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "name"
+                  ]
+                },
+                {
+                  "required": [
+                    "source"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "identification": {
+                "enum": [
+                  "observed",
+                  "inferred"
+                ]
+              }
+            },
+            "required": [
+              "identification"
+            ]
+          },
+          "then": {
+            "required": [
+              "name",
+              "source"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "identification": {
+                "const": "observed"
+              }
+            },
+            "required": [
+              "identification"
+            ]
+          },
+          "then": {
+            "properties": {
+              "source": {
+                "enum": [
+                  "request_field",
+                  "response_field",
+                  "event_field"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "identification": {
+                "const": "inferred"
+              }
+            },
+            "required": [
+              "identification"
+            ]
+          },
+          "then": {
+            "properties": {
+              "source": {
+                "const": "host_inference"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.:-]{1,48}$"
+        },
+        "destination": {
+          "type": "string",
+          "pattern": "^[a-z0-9._:-]{1,253}$",
+          "description": "Host or server name only."
+        },
+        "status": {
+          "enum": [
+            "requested",
+            "result",
+            "executed"
+          ]
+        },
+        "execution_source": {
+          "enum": [
+            "governed_tool",
+            "instrumented_telemetry"
+          ],
+          "description": "Required for executed; the only sources that can support it."
+        },
+        "call_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,64}$"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "executed"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "required": [
+              "execution_source"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "requested",
+                  "result"
+                ]
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "execution_source"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identification"
+      ],
+      "properties": {
+        "identification": {
+          "enum": [
+            "observed",
+            "inferred",
+            "unknown"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.:-]{1,64}$"
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_. -]{1,64}$"
+        },
+        "protocol": {
+          "enum": [
+            "mcp",
+            "a2a",
+            "openai_assistants",
+            "other"
+          ]
+        }
+      }
+    },
+    "detection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rule_id",
+        "rule_version",
+        "confidence"
+      ],
+      "properties": {
+        "rule_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_.:-]{0,63}$"
+        },
+        "rule_version": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,32}$"
+        },
+        "confidence": {
+          "enum": [
+            "confirmed",
+            "probable",
+            "possible"
+          ]
+        }
+      }
+    }
+  }
+}

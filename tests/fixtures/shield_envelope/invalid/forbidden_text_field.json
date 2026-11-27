@@ -1,0 +1,23 @@
+{
+  "ai_event_type": "ai.model.requested",
+  "app": "claude",
+  "chars": 42,
+  "collector": "browser_extension",
+  "envelope_version": 1,
+  "evidence_level": "observed",
+  "flags": [
+    "secret:aws_key"
+  ],
+  "kind": "browser.chat.request",
+  "model": {
+    "identification": "unknown"
+  },
+  "outcome": "sent_redacted",
+  "policy_action": "redact",
+  "row_id": "abcd1234efgh",
+  "send_id": "send-1234abcd",
+  "stage": "input",
+  "text": "hello world",
+  "verdict": "redacted(1)",
+  "wall_clock": "2026-11-27 10:00:00"
+}
