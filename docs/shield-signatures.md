@@ -107,6 +107,42 @@ tests must cover each line.
 
 12. **Config paths stay inside their base.** Expand `~`, `%VAR%` or `$VAR`, resolve the result (symlinks included), and reject the path if it leaves the expanded base directory. An unset variable rejects the entry. The schema's pattern is a first filter; this is the check.
 
+## Base app catalog
+
+`src/byoai/shield_catalog_apps.json` is the public base list of AI application
+hosts (1,150 entries at `file_version` 2: the model-API seeds, a ranked shadow-AI
+list, and two directories of AI tools). It is built by
+`scripts/import_shield_catalog.py`, which normalises each URL to a registrable
+host, dedupes across lists, and rejects shared infrastructure (`github.io`,
+`vercel.app`, `amazonaws.com`), generic platforms (`google.com`, `microsoft.com`)
+and parent domains of a seed host, unless the host is an exact AI subdomain such
+as `gemini.google.com`. A host is matched exactly, so a listed domain covers that
+host only.
+
+The schema is closed, so each entry's category and trust facts sit in a sidecar,
+`src/byoai/shield_catalog_apps_meta.json`, keyed by entry `id`:
+
+| Field | Values |
+|---|---|
+| `category` | `chatbot`, `meeting_transcription`, `image_video`, `writing`, `coding`, `sales_marketing`, `data_analytics`, `model_hub`, `hr_recruiting`, `productivity_agents`, `design`, `search` |
+| `nature` | `ai-native`, or `ai-enabled` (general SaaS with AI features, such as Figma, Databricks, Grammarly). Directory-only entries are all `ai-enabled`: the source does not say which are AI-first. |
+| `tier` | `listed` (the ranked shadow-AI list and the seeds) or `candidate` (directory-only). Never `approved`: nothing in the base list is trusted automatically. |
+| `origin` | `seed`, `shadow-ai`, `tio`, `autotune` |
+
+- `ai-enabled` entries and every `candidate` report at most `possible`; only a
+  `listed`, `ai-native` entry may report `probable`.
+- `source` is the vendor's own site, never a review site. `last_verified` is the
+  directory's verification date where it gives one, else the import date.
+  `expires_at` is 365 days (`listed`) or 180 days (`candidate`) after it.
+- **Overrides.** An admin approves, changes or disables one entry through the
+  policy layer, which refers to it by `id`. Ids are unique and the base file is
+  read only (loader rule 9), so no override edits it. A bundle cannot do this
+  (loader rule 7: a bundle only adds coverage), which is deliberate. The policy
+  layer itself (signed Shield policy per-app toggles, Coriqo for organisations)
+  is separate work.
+- Refresh with `python -I scripts/import_shield_catalog.py --help`. The raw
+  lists are inputs only and are not committed.
+
 ## Public and private sides
 
 | Piece | Side |

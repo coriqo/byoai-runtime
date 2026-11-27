@@ -1,0 +1,3 @@
+# True AI hosts that appear in the OpenDNS top 10k and may therefore match a catalog entry.
+# Format: host  # reason. Every other top-10k host must not match any entry.
+pixlr.com  # online photo editor whose generative fill, AI background removal and image generation are core features; listed as AI-enabled, candidate tier
