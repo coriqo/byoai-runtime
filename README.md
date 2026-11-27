@@ -698,7 +698,7 @@ matches, no ledger rows.
 agent hosts use). In Shield's Settings → Coriqo, paste it with the Coriqo
 address and press *Connect this Mac*. Shield enrols its existing device key
 (`POST /v1/enroll`) and keeps nothing secret afterwards: every send is signed
-by the Mac's key. (`POST /api/coriqo/enrol` does the same without the UI.)
+by the Mac's key. (`POST /api/coriqo/enrol` does the same without the UI; a script must send an `Origin` header naming Shield's own `127.0.0.1:<port>`, and a request with no `Origin` is refused.)
 
 **After that, nothing to do.** A background publisher
 (`byoai.integrations.shield_publish`):

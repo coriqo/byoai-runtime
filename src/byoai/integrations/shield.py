@@ -2423,6 +2423,11 @@ def request_problem(method: str, path: str, headers) -> str | None:
     # local process the keys. The Origin must name the same host:port this
     # request was addressed to — Shield's own page in production, the Vite
     # dev server proxying in dev.
+    if path.startswith("/api/coriqo/") and not origin:
+        # Enrolling sends a one-time token to a server and changes who this
+        # computer reports to, so it fails closed: Shield's own page always
+        # sends an Origin on a POST, and a client without one is refused.
+        return "Connecting to Coriqo can only be done from Shield's own page."
     if origin:
         if urlsplit(origin).netloc.lower() != (headers.get("Host") or "").strip().lower():
             return "Settings can only be changed from Shield's own page."
@@ -2913,6 +2918,7 @@ def serve(cfg: ShieldConfig, host: str = "127.0.0.1", port: int = DEFAULT_PORT,
             ``link`` is the browser extension's sign-in hand-off: the token
             was minted for the signed-in user, and the server it names must be
             one this Mac was told to trust (see :func:`link_host_problem`)."""
+            from byoai.integrations.shield_publish import WorkspacePinError
             from byoai.recorder.enroll import EnrollmentError
             n = int(self.headers.get("Content-Length", 0))
             try:
@@ -2931,8 +2937,14 @@ def serve(cfg: ShieldConfig, host: str = "127.0.0.1", port: int = DEFAULT_PORT,
                     self._send(403, json.dumps({"error": problem}).encode())
                     return
             try:
+                pin = [w.strip() for w in _os.environ.get(
+                    "BYOAI_CORIQO_LINK_WORKSPACES", "").split(",") if w.strip()]
                 status = publisher.enrol(str(payload.get("base_url") or ""),
-                                         str(payload.get("token") or ""), keep_existing=link)
+                                         str(payload.get("token") or ""), keep_existing=link,
+                                         allowed_tenants=pin or None)
+            except WorkspacePinError as exc:
+                self._send(403, json.dumps({"error": str(exc)}).encode())
+                return
             except ValueError as exc:
                 self._send(400, json.dumps({"error": str(exc)}).encode())
                 return

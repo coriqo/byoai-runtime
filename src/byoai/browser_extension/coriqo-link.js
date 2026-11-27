@@ -15,6 +15,7 @@
 ;(function (root) {
   const SCOPE = 'devices:link' // the only thing the extension asks for
   const CLIENT_ID = 'coriqo-shield-extension' // the default; the `coriqo_client_id` setting overrides it
+  const DEFAULT_BASE = 'https://app.coriqo.io'
 
   function b64url(bytes) {
     let s = ''
@@ -97,7 +98,45 @@
     // used as a whole, only when userinfo names no workspace, never mixed.
     const who = await fetchUserinfo({ fetchImpl, base, accessToken: body.access_token })
     const mine = who.tenant_slug || who.tenants.length ? who : parseIdentity(body)
-    return { access_token: body.access_token, ...mine, email: mine.email || who.email }
+    const ttl = Number(body.expires_in)
+    const expiresAt = Number.isFinite(ttl) && ttl > 0 ? Date.now() + ttl * 1000 : null
+    return { access_token: body.access_token, expires_at: expiresAt, ...mine, email: mine.email || who.email }
+  }
+
+  // Exact https origin, or null: the only form an administrator's base may take.
+  function exactHttpsOrigin(v) {
+    if (typeof v !== 'string') return null
+    try {
+      const u = new URL(v.trim())
+      return u.protocol === 'https:' && !u.username && !u.password && u.origin === v.trim().replace(/\/$/, '') ? u.origin : null
+    } catch { return null }
+  }
+
+  // What the administrator decided (chrome.storage.managed). Linking is on unless
+  // `coriqo_link` is exactly "disabled"; a bad managed base fails closed (link off).
+  function linkPolicy(raw) {
+    const m = raw && typeof raw === 'object' ? raw : {}
+    const out = { enabled: m.coriqo_link !== 'disabled', apiBase: null }
+    if (m.coriqo_api_base !== undefined) {
+      out.apiBase = exactHttpsOrigin(m.coriqo_api_base)
+      if (!out.apiBase) out.enabled = false
+    }
+    return out
+  }
+
+  // The base to talk to: the managed one, else the stored one, else the default.
+  // A store build (manifest has update_url) never uses http, even if stored.
+  function resolveBase({ policy, stored, devBuild }) {
+    if (policy?.apiBase) return policy.apiBase
+    if (!stored) return DEFAULT_BASE
+    const base = checkBase(stored)
+    if (base.startsWith('http:') && !devBuild) throw new Error('bad_base')
+    return base
+  }
+
+  // A session with an expiry in the past is no session.
+  function sessionExpired(session, now = Date.now()) {
+    return !!session && Number.isFinite(session.expires_at) && session.expires_at <= now
   }
 
   function parseIdentity(b) {
@@ -267,7 +306,7 @@
     return `Connected to Coriqo: ${t.name}${t.region ? `, ${t.region}` : ''}.${device}`
   }
 
-  const api = { CLIENT_ID, linkSummary, checkClientId, tenantLabel, detectRegion, pickTenant, checkBase, makePkce, buildAuthorizeUrl, parseRedirect, exchangeCode,
+  const api = { CLIENT_ID, DEFAULT_BASE, linkPolicy, resolveBase, sessionExpired, exactHttpsOrigin, linkSummary, checkClientId, tenantLabel, detectRegion, pickTenant, checkBase, makePkce, buildAuthorizeUrl, parseRedirect, exchangeCode,
     requestEnrolGrant, linkLocalShield, verifiedShieldKey }
   root.CoriqoLink = api
   if (typeof module !== 'undefined' && module.exports) module.exports = api

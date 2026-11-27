@@ -102,6 +102,13 @@ async function renderExtraSites() {
   } catch { /* the popup still works without this block */ }
 }
 
+let coriqoOff = false
+async function coriqoPolicy() {
+  let raw = {}
+  try { raw = (await chrome.storage.managed?.get(null)) || {} } catch { /* none */ }
+  return globalThis.CoriqoLink.linkPolicy(raw)
+}
+
 // Sign-in is optional and separate from capture; the popup only says where it stands and opens the page.
 async function renderCoriqo() {
   try {
@@ -109,6 +116,17 @@ async function renderCoriqo() {
     const L = globalThis.CoriqoLink
     const btn = el('connect-coriqo')
     const line = el('coriqo-line')
+    coriqoOff = !(await coriqoPolicy()).enabled
+    btn.disabled = coriqoOff
+    if (coriqoOff) {
+      line.textContent = 'Your organisation has turned off connecting to Coriqo.'
+      btn.textContent = 'Connect to Coriqo'
+      return
+    }
+    if (L.sessionExpired(s.coriqo_session)) { // expired is signed out
+      await chrome.storage.local.remove('coriqo_session')
+      s.coriqo_session = null
+    }
     if (s.coriqo_link && L.linkSummary(s.coriqo_link)) {
       line.textContent = L.linkSummary(s.coriqo_link)
       btn.textContent = 'Coriqo account'
@@ -356,6 +374,7 @@ function protection(appKey, mode) {
 
 function wire() {
   el('connect-coriqo').addEventListener('click', () => {
+    if (coriqoOff) return
     chrome.tabs.create({ url: chrome.runtime.getURL('login.html') })
     window.close()
   })
