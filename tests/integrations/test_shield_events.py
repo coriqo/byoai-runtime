@@ -107,6 +107,7 @@ def test_reply_tools_are_requested_not_executed():
         assert e["evidence_level"] == "observed_requested"
         assert e["tool"]["status"] == "requested"
     assert [e["tool"]["name"] for e in envs[1:]] == ["web_search", "code"]
+    assert "tools" not in envs[0]
 
 
 @pytest.mark.parametrize(("verdict", "action", "outcome"), [

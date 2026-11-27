@@ -167,7 +167,10 @@ def adapt_row(row: Mapping[str, Any],
     out = [env]
 
     if kind in ("browser.chat.reply", "desktop.chat.response"):
+        # Schema: any row with a non-empty tools[] is a tool_call.requested row,
+        # so the response envelope drops the list and the derived rows carry it.
         tools = row.get("tools")
+        env.pop("tools", None)
         for name in (tools if isinstance(tools, list) else []):
             if isinstance(name, str) and _TOOL.fullmatch(name):
                 out.append({**{k: v for k, v in env.items() if k not in ("model", "tool")},
@@ -235,5 +238,5 @@ def adapt_agent_event(event: Any, governed: bool = False) -> dict[str, Any] | No
         policy, outcome = _MANDATE.get(word, ("none", "unknown")) if isinstance(word, str) \
             else ("none", "unknown")
         env |= {"ai_event_type": "ai.policy.evaluated", "policy_action": policy,
-                "outcome": outcome, "tool": _tool(name, "requested")}
+                "outcome": outcome}  # no tool: status=requested would force observed_requested
     return env
