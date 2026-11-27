@@ -85,6 +85,7 @@ traceback. The `all` extra includes it.
 | `BYOAI_SHIELD_PORT` | shield (shell) | `17831` | Port Shield listens on when `--port` is not given. Chosen to stay clear of common dev ports (Consul 8300, the MCP demo 8800, proxies 8080). If you change it, enter the new address in the extension popup. A value that is not a port number (empty, text, outside 1–65535) is ignored with a one-line message on stderr and the default is used. |
 | `byoai-shield --install-login-item` | shield (CLI flag) | *(off)* | Starts Shield at login as you (never root), at low priority, restarting only after a failure with a 30 s back-off. macOS: launchd agent `~/Library/LaunchAgents/com.coriqo.shield.plist`. Linux: systemd user unit `~/.config/systemd/user/coriqo-shield.service`. Windows: Task Scheduler task "Coriqo Shield" (at logon, no elevation). Uses the ledger path and `--port` you pass, made absolute; with no ledger it uses `~/.byoai/shield/captures.jsonl`. `--remove-login-item` undoes it. Windows and Linux paths are generated and unit-tested but have not been run on those systems yet. |
 | `BYOAI_SHIELD_EXTENSION_IDS` | shield (shell) | *(unset = any extension)* | Comma-separated list of extension IDs `POST /api/browser` accepts. With it set, every other `chrome-extension://` origin is refused — the popup shows the id to pin (Trust only this extension → Copy id). |
+| `BYOAI_CORIQO_LINK_HOSTS` | shield (shell) | *(unset = refuse)* | Comma-separated entries, `host` or `host:port` (exact, no scheme), that the extension's *Connect this computer* hand-off (`POST /api/coriqo/link`) may link this Mac to, over https only. Unset, it refuses every address. A bare host allows only the default port; list `127.0.0.1:8000` (or `localhost:8000`) to allow a Coriqo on this machine over http (development only). It exists because the hand-off carries a one-time token to whatever address the extension names. The route answers only to a `chrome-extension://` origin (and to the ids in `BYOAI_SHIELD_EXTENSION_IDS` when set). |
 | Extension managed settings (`managed_schema.json`, next extension release after 0.10.6) | extension (browser policy) | *(unset = as before)* | Chrome policy for the extension id (`3rdparty` / ExtensionSettings `policy`, or Intune/Jamf Chrome settings). `shield_port` (integer 1024-65535): the extension talks to Shield on `http://127.0.0.1:<port>/api/browser` only, ignores the saved address and hides "change address" in the popup; a host can never be set, and the pairing check (device key pinned on first contact) still runs. `managed_by` (text, 64 characters): shown as the popup address tooltip. Wrong types or out-of-range values are ignored. No new permission. Pair it with `BYOAI_SHIELD_PORT` on the Shield side. |
 | `CHROMIUM_PATH`, `BYOAI_EXT_TEST_DOWNLOAD`, `BYOAI_PYTHON` | extension tests (`web`, shell) | *(unset)* | The two real-browser tests in `web/tests/extension/` need a Chromium that still honours `--load-extension` (branded Chrome 137+ does not). Point `CHROMIUM_PATH` at one, or set `BYOAI_EXT_TEST_DOWNLOAD=1` to fetch one into `~/.cache/byoai-ext-test`; with neither, the two tests are skipped with a reason, not failed. `BYOAI_PYTHON` names the interpreter with byoai installed (default: `.venv`, then `python3`). |
 | `SHIELD_URL` | dev server (shell) | `http://127.0.0.1:17831` | Where the Vite dev proxy finds the shield; also the Origin the proxy claims on its forwarded writes, so Shield's same-origin policy rule holds in dev without extra config. |
@@ -2280,3 +2281,37 @@ the relevant group; `factory(config_dict)` returns the built instance.
   `ByoAIError` from the cache layer. This is a correctness invariant, not a
   policy choice: a cache outage degrading to "no cache" is always the right
   behavior, never a per-deployment decision.
+
+
+### Extension sign-in and device linking (client contract)
+
+The extension's login page (`login.html`) can sign in with OAuth and link the
+computer's Shield to a Coriqo account. The client is in `coriqo-link.js`; the
+server side (OAuth client, tenants, device entitlement, billing) is Coriqo's
+and is not in this repository. The API address is the `coriqo_api_base`
+extension setting (default `http://localhost:8000`; https is required for any
+other host). The extension needs the `identity` permission for the sign-in
+window.
+
+1. **Sign-in:** OAuth 2.0 authorization code with PKCE (S256, no client
+   secret), client id `coriqo-shield-extension`, redirect
+   `https://<extension id>.chromiumapp.org/`. `GET /oauth/authorize`, then
+   `POST /oauth/token` (form fields `grant_type`, `client_id`, `redirect_uri`,
+   `code`, `code_verifier`), answering `{access_token, email, tenant_slug,
+   tenants: [...]}`. A redirect with the wrong `state`, another address or no
+   code is refused.
+2. **Device grant:** `POST /v1/enroll/self` with `Authorization: Bearer
+   <access_token>`, `X-Tenant-Slug`, and `{device_public_key, device_label,
+   platform, extension_version}`; `device_public_key` is the Shield's device
+   public key, checked against the key the extension paired with by a signed
+   nonce first. Success: `{token, device_index, device_limit, billing_state}`,
+   where `token` is a one-time enrolment token. Over the device count: HTTP 402
+   (or 409) with `{error: "device_limit_reached", limit, count, upgrade_url}`
+   (also accepted inside `detail`); the popup shows the limit and, for an
+   https `upgrade_url`, a link. 401/403 means signed out.
+3. **Enrol:** the extension passes `token` and the Coriqo address to the local
+   Shield (`POST /api/coriqo/link`), which redeems it on the unchanged
+   `POST /v1/enroll`. The device key never leaves the Shield. Counting the same
+   device twice is Coriqo's to avoid (the key is stable).
+
+A magic-link session (the older sign-in) cannot link a computer.

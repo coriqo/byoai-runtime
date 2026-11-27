@@ -2408,9 +2408,9 @@ def request_problem(method: str, path: str, headers) -> str | None:
     if ctype != "application/json":
         return "Send JSON with Content-Type: application/json."
     origin = (headers.get("Origin") or "").strip()
-    if path == "/api/browser":
+    if path in ("/api/browser", "/api/coriqo/link"):
         if not origin.startswith(EXTENSION_SCHEMES):
-            return "Only the Shield browser extension can send browser rows."
+            return "Only the Shield browser extension can use this."
         pinned = [x.strip() for x in os.environ.get(
             "BYOAI_SHIELD_EXTENSION_IDS", "").split(",") if x.strip()]
         if pinned and origin.split("://", 1)[1].rstrip("/") not in pinned:
@@ -2427,6 +2427,35 @@ def request_problem(method: str, path: str, headers) -> str | None:
         if urlsplit(origin).netloc.lower() != (headers.get("Host") or "").strip().lower():
             return "Settings can only be changed from Shield's own page."
     return None
+
+
+def link_host_problem(base_url: str, env: dict | None = None) -> str | None:
+    """Why the extension may not link this Mac to ``base_url``, or None.
+
+    The sign-in hand-off carries a token to whatever address the caller names,
+    and any extension can call it unless one is pinned. So the host must be on
+    the Mac's own list (``BYOAI_CORIQO_LINK_HOSTS``, exact host names,
+    comma-separated, ``host`` or ``host:port``) over https; ``localhost`` or
+    ``127.0.0.1`` with a port may be listed to allow http for development. An
+    empty list refuses everything."""
+    import os
+    from urllib.parse import urlsplit
+    env = os.environ if env is None else env
+    parts = urlsplit(base_url.strip())
+    try:
+        host = (parts.hostname or "").lower()
+        port = parts.port
+    except ValueError:
+        return "That is not a valid Coriqo address."
+    allowed = {h.strip().lower() for h in env.get("BYOAI_CORIQO_LINK_HOSTS", "").split(",") if h.strip()}
+    # An entry is "host" (the scheme's default port only) or "host:port"; a bare host never
+    # opens other ports, which may be another service on the same machine.
+    key = host if port is None else f"{host}:{port}"
+    local = host in ("localhost", "127.0.0.1", "::1")
+    if host and key in allowed and (parts.scheme == "https" or (parts.scheme == "http" and local)):
+        return None
+    return ("This Mac is not set to link to that Coriqo address. "
+            "Set BYOAI_CORIQO_LINK_HOSTS to its host name and restart Shield.")
 
 
 # What a browser row may say about which rules fired: known rule names only,
@@ -2783,6 +2812,9 @@ def serve(cfg: ShieldConfig, host: str = "127.0.0.1", port: int = DEFAULT_PORT,
             if self.path.split("?")[0] == "/api/coriqo/enrol":
                 self._enrol()
                 return
+            if self.path.split("?")[0] == "/api/coriqo/link":
+                self._enrol(link=True)
+                return
             if self.path.split("?")[0] == "/api/publish":
                 self._publish_now()
                 return
@@ -2874,9 +2906,13 @@ def serve(cfg: ShieldConfig, host: str = "127.0.0.1", port: int = DEFAULT_PORT,
             self._send(200, json.dumps(
                 {"accepted": accepted, "sealed_total": feed.seals.total}).encode())
 
-        def _enrol(self) -> None:
+        def _enrol(self, link: bool = False) -> None:
             """One-time setup: exchange a Coriqo enrolment token for this
-            Mac's device identity. The token is used once and not kept."""
+            Mac's device identity. The token is used once and not kept.
+
+            ``link`` is the browser extension's sign-in hand-off: the token
+            was minted for the signed-in user, and the server it names must be
+            one this Mac was told to trust (see :func:`link_host_problem`)."""
             from byoai.recorder.enroll import EnrollmentError
             n = int(self.headers.get("Content-Length", 0))
             try:
@@ -2884,6 +2920,14 @@ def serve(cfg: ShieldConfig, host: str = "127.0.0.1", port: int = DEFAULT_PORT,
             except ValueError:
                 self._send(400, b'{"error":"invalid json"}')
                 return
+            if not isinstance(payload, dict):
+                self._send(400, b'{"error":"invalid json"}')
+                return
+            if link:
+                problem = link_host_problem(str(payload.get("base_url") or ""))
+                if problem:
+                    self._send(403, json.dumps({"error": problem}).encode())
+                    return
             try:
                 status = publisher.enrol(str(payload.get("base_url") or ""),
                                          str(payload.get("token") or ""))
