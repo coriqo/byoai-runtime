@@ -31,7 +31,7 @@ class StubCoriqo:
         stub = self
 
         class H(BaseHTTPRequestHandler):
-            def log_message(self, *a):
+            def log_message(self, format, *args):  # noqa: A002
                 pass
 
             def _json(self, code, body):
