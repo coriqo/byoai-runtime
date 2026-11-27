@@ -1,0 +1,115 @@
+# Shield signature file format and loader contract
+
+A signature file tells Shield what to look for: which hosts are AI apps, which
+endpoints are model APIs, which files configure MCP servers, which local
+programs run models. This page fixes the file format and the rules every loader
+must follow. It is the interface for the base list (public, in this repo) and
+for a signed bundle (private, published by Coriqo).
+
+- Schema: [`src/byoai/shield_signatures.schema.json`](https://github.com/coriqo/byoai-runtime/blob/main/src/byoai/shield_signatures.schema.json) (JSON Schema 2020-12)
+- Sample: `tests/fixtures/shield_signatures/sample.json` (base) and `sample_bundle.json` (bundle shape)
+- Negative fixtures: `tests/fixtures/shield_signatures/invalid/`
+- Test: `tests/integrations/test_shield_signatures_schema.py`
+
+This page specifies a format. **No loader or matcher exists yet** (Wave 1). The
+sample is illustrative, not a catalog. Signature evidence feeds the
+[event envelope](shield-event-envelope.md) through `detection`
+(`rule_id`, `rule_version`, `confidence`).
+
+## File
+
+| Field | Notes |
+|---|---|
+| `schema_version` | `1`. A loader that does not know the value rejects the file. |
+| `format` | `"coriqo.shield.signatures"` |
+| `kind` | `base` (public list in the repo) or `bundle` (extra signatures, private, signed) |
+| `file_version` | Integer, monotonic per publisher and kind |
+| `generated_at` | UTC timestamp `YYYY-MM-DDTHH:MM:SSZ` |
+| `expires_at` | UTC timestamp. Required for a bundle, optional for a base list |
+| `publisher` | Free text name |
+| `signatures` | The entries |
+| `signature` | The detached-signature slot. Required for a bundle, absent in a base list |
+
+### Signature slot
+
+```json
+"signature": {"alg": "ed25519", "key_id": "coriqo-sig-2026", "sig": "ed25519:<base64>"}
+```
+
+- **Signed bytes** are `C(document without "signature")`, where `C` is the canonical encoding of [`seal-format.md` section 3](seal-format.md#3-canonical-encoding) (RFC 8785, `canonical.canonicalize`). This is the same rule as a checkpoint (`C(checkpoint without "sig")`).
+- **Encoding** is `"ed25519:" + base64(sig)` as in [`seal-format.md` section 6.2](seal-format.md#62-signature-encoding). No new byte format is introduced.
+- **Which key** is chosen by `key_id` from public keys **pinned in the shipped package**. A key inside the bundle, or one fetched at run time, is never trusted. A package may pin several keys so one can be rotated out.
+- The slot is "detached" in the sense that it is not part of the signed bytes; a publisher may also ship the same object as a sidecar `<file>.sig`, and a loader treats the two the same.
+
+## Entry
+
+| Field | Notes |
+|---|---|
+| `id` | Unique. Lowercase letters, digits, `.`, `_`, `-`. Convention `<type-prefix>.<vendor>.<thing>`. Unique within a file and across base plus bundle. |
+| `type` | `app_domain`, `model_endpoint`, `agent_protocol`, `mcp_config_path`, `local_runtime`, `local_app` |
+| `match` | Match conditions (below). At least one, and the ones the type requires. |
+| `vendor`, `technology` | Names for display and reports. |
+| `confidence` | `confirmed`, `probable`, `possible`. The **most** a match may report, and only when every `evidence_required` item was observed. If fewer are observed the loader reports `possible` at most. |
+| `evidence_required` | Non-empty list from `host_match`, `path_match`, `header_present`, `body_field_present`, `process_running`, `bundle_installed`, `config_file_present`, `config_entry_present`, `port_listening`. |
+| `false_positive_notes` | Required, non-empty. What looks like this but is not. |
+| `source` | `name`, optional `url` (https), and `licence` (SPDX id or `LicenseRef-*`). |
+| `first_seen`, `last_verified` | UTC timestamps. |
+| `version` | Integer, at least 1, bumped when the entry changes. |
+| `expires_at` | UTC timestamp. Required. An entry nobody re-verified stops matching. |
+
+### Match conditions
+
+Names and patterns only. A signature never holds a header value, a body value, a
+credential or a message.
+
+| Key | Content | Rules |
+|---|---|---|
+| `hosts` | Host patterns | Lowercase. Exact (`api.openai.com`) or a single leftmost wildcard label (`*.openai.azure.com`). No regex. |
+| `paths` | Path patterns | Start with `/`. `*` matches one segment. Query strings are not matched. |
+| `header_names` | Header **names** | Lowercase. Presence only. |
+| `body_fields` | JSON field **names** | Presence only; the value is never read into a row (a model name may be read only under the envelope's model rules). |
+| `process_names` | Process names | |
+| `bundle_ids` | macOS bundle or Windows package ids | |
+| `ports` | Local TCP ports | |
+| `config_paths` | `{darwin, linux, windows}` lists | Start with `~/`, `%VAR%/` or `$VAR/`. No `..` segment. No absolute paths. |
+
+Required match keys by type:
+
+| Type | Needs |
+|---|---|
+| `app_domain` | `hosts` |
+| `model_endpoint` | `hosts` and `paths` |
+| `agent_protocol` | one of `paths`, `header_names`, `body_fields` |
+| `mcp_config_path` | `config_paths` |
+| `local_runtime` | `process_names` or `ports` |
+| `local_app` | `bundle_ids` or `process_names` |
+
+## Loader contract
+
+A loader reads one base list and zero or one bundle. It must follow these rules.
+The schema checks structure; everything below is the loader's job and Wave 1's
+tests must cover each line.
+
+1. **Validate first.** Parse and validate the whole file against the schema before using any entry. Parse integers without loss (see `seal-format.md` section 3).
+2. **Unknown field: reject the file.** The schema is closed (`additionalProperties: false`) at file, entry, match and source level. A new field needs a new `schema_version`; a loader never skips an unknown field and keeps the rest.
+   - Bundle: discard the bundle, keep the base list.
+   - Base list: refuse it and report a collector-health fact (`ai.collector.health`). Do not guess.
+3. **Bad signature: fail closed on the bundle.** A bundle with a missing slot, an unknown `key_id`, a malformed or wrong signature, or a failed verification is discarded **whole**. No entry of it is used. Verification is offline against pinned keys. The base list stays in force and the loader reports the failure as health, not as a silent fallback.
+4. **Expired file.** A bundle past its `expires_at` is treated as invalid and discarded whole. An expired base list is still used, since it ships with the package, but each of its entries is still held to rule 5, and the loader reports that the list is stale.
+5. **Expired entry: skip that entry only.** An entry past its `expires_at` never matches. It is reported as a coverage gap, never as "not AI".
+6. **Rollback.** A bundle whose `file_version` is lower than the highest one this loader has accepted is discarded. The loader keeps that number in its own state.
+7. **Merging.** Duplicate `id` inside one file rejects the file. Across base and bundle, the entry with the higher `version` wins. A bundle cannot delete a base entry.
+8. **No regex.** Patterns are the literal forms above. A loader must not compile a signature field as a regular expression.
+9. **Read only.** Loading and matching never write to a signature file.
+10. **Never auto-promote.** A domain or process seen in traffic that matches no signature (the existing `health.unmatched` canary, a `desktop.meta` `not_covered` row, a scanner sighting) is **never** added to any signature list automatically, by the loader, the proxy, the extension or Coriqo. It is reported as an unmatched sighting (`unattested` or `unobservable_payload`) and enters a list only through a reviewed change to the base list or a newly signed bundle.
+11. **Evidence honesty.** A match from a signature sets `evidence_level` per the envelope rules. A host-only match of a model API is at most `inferred` for the provider and says nothing about the model; a model name is never produced from a signature.
+
+## Public and private sides
+
+| Piece | Side |
+|---|---|
+| Format, schema, loader, base list | Public (this repo) |
+| Signed bundle of extra signatures | Private (Coriqo). The public scanner verifies it offline and falls back to the base list when it cannot. |
+
+No private data enters the public repo. A bundle's entries use the same format,
+so a customer can read what a bundle contains once it is verified.

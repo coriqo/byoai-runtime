@@ -1,0 +1,21 @@
+{
+  "ai_event_type": "ai.model.response",
+  "app": "deepseek",
+  "chars": 300,
+  "collector": "desktop_proxy",
+  "envelope_version": 1,
+  "evidence_level": "observed",
+  "flags": [],
+  "kind": "desktop.chat.response",
+  "model": {
+    "identification": "inferred",
+    "name": "deepseek-chat",
+    "provider": "deepseek",
+    "source": "host_inference"
+  },
+  "outcome": "answered",
+  "policy_action": "none",
+  "status": 200,
+  "target": "api.deepseek.com",
+  "text_hmac": null
+}

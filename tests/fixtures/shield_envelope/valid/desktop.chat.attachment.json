@@ -1,0 +1,18 @@
+{
+  "ai_event_type": "ai.data.attachment",
+  "app": "claude",
+  "bytes": 2048,
+  "collector": "desktop_proxy",
+  "envelope_version": 1,
+  "evidence_level": "observed",
+  "flags": [
+    "secret:private_key"
+  ],
+  "kind": "desktop.chat.attachment",
+  "outcome": "blocked",
+  "policy_action": "block",
+  "scanned": true,
+  "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "target": "claude.ai",
+  "verdict": "blocked"
+}

@@ -1,0 +1,19 @@
+{
+  "ai_event_type": "ai.tool_call.requested",
+  "app": "chatgpt",
+  "collector": "browser_extension",
+  "envelope_version": 1,
+  "evidence_level": "observed",
+  "kind": "browser.chat.reply",
+  "outcome": "not_applicable",
+  "policy_action": "none",
+  "send_id": "send-1234abcd",
+  "tool": {
+    "name": "web_search",
+    "status": "requested"
+  },
+  "tools": [
+    "web_search"
+  ],
+  "wall_clock": "2026-11-27 10:00:02"
+}

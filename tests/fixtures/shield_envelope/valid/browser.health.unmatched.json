@@ -1,0 +1,11 @@
+{
+  "ai_event_type": "ai.collector.health",
+  "app": "claude",
+  "collector": "browser_extension",
+  "envelope_version": 1,
+  "evidence_level": "observed",
+  "kind": "browser.health.unmatched",
+  "outcome": "not_applicable",
+  "path": "/api/unknown",
+  "policy_action": "none"
+}

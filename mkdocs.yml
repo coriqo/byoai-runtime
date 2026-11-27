@@ -68,6 +68,8 @@ nav:
   - Shield zero-touch deployment (MDM): msp-zero-touch.md
   - Shield Sync protocol: shield-sync-protocol.md
   - Recorder seal format: seal-format.md
+  - Shield event envelope: shield-event-envelope.md
+  - Shield signature files: shield-signatures.md
   - API Reference: reference/api.md
   - Configuration Reference: https://github.com/coriqo/byoai-runtime/blob/main/CONFIGURATION.md
   - Changelog: https://github.com/coriqo/byoai-runtime/blob/main/CHANGELOG.md

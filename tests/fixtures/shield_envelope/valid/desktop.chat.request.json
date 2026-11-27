@@ -1,0 +1,26 @@
+{
+  "action": "warn",
+  "ai_event_type": "ai.model.requested",
+  "app": "mistral",
+  "chars": 80,
+  "collector": "desktop_proxy",
+  "envelope_version": 1,
+  "evidence_level": "observed",
+  "flags": [
+    "pii:email"
+  ],
+  "kind": "desktop.chat.request",
+  "model": {
+    "identification": "observed",
+    "name": "mistral-large-latest",
+    "source": "request_field"
+  },
+  "outcome": "sent_redacted",
+  "policy_action": "warn",
+  "redactions": [
+    "email"
+  ],
+  "target": "api.mistral.ai",
+  "text_hmac": "hmac-sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "verdict": "redacted(1)"
+}

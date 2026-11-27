@@ -1,0 +1,16 @@
+{
+  "ai_event_type": "ai.model.requested",
+  "app": "claude",
+  "bytes": 1024,
+  "collector": "browser_extension",
+  "envelope_version": 1,
+  "evidence_level": "observed",
+  "kind": "browser.chat.attachment",
+  "mime": "application/pdf",
+  "name_hash": "hmac-sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "outcome": "uploaded",
+  "policy_action": "allow",
+  "scanned": false,
+  "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "verdict": "allowed"
+}

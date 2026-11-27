@@ -1,0 +1,17 @@
+{
+  "ai_event_type": "ai.tool.executed",
+  "call_id": "0123456789ab",
+  "collector": "mcp_interposer",
+  "envelope_version": 1,
+  "evidence_level": "observed",
+  "identity": {
+    "client_name": "coriqo-mcp"
+  },
+  "kind": "tool.result",
+  "outcome": "allowed",
+  "policy_action": "allow",
+  "tool": {
+    "name": "read_file",
+    "status": "executed"
+  }
+}

@@ -1,0 +1,188 @@
+{
+  "schema_version": 1,
+  "format": "coriqo.shield.signatures",
+  "kind": "base",
+  "file_version": 1,
+  "generated_at": "2026-11-27T00:00:00Z",
+  "publisher": "byoai-runtime",
+  "signatures": [
+    {
+      "id": "app.claude-ai.web",
+      "type": "app_domain",
+      "match": {
+        "hosts": [
+          "claude.ai"
+        ]
+      },
+      "vendor": "Anthropic",
+      "technology": "Claude web app",
+      "confidence": "confirmed",
+      "evidence_required": [],
+      "false_positive_notes": "A link to claude.ai in a document is not use of the app; the proxy and extension only count a navigation or a chat request.",
+      "source": {
+        "name": "Sample fixture (illustrative, not a catalog entry)",
+        "url": "https://claude.ai",
+        "licence": "CC0-1.0"
+      },
+      "first_seen": "2026-11-01T00:00:00Z",
+      "last_verified": "2026-11-20T00:00:00Z",
+      "version": 1,
+      "expires_at": "2027-05-20T00:00:00Z"
+    },
+    {
+      "id": "model.openai.chat-completions",
+      "type": "model_endpoint",
+      "match": {
+        "hosts": [
+          "api.openai.com"
+        ],
+        "paths": [
+          "/v1/chat/completions",
+          "/v1/responses"
+        ],
+        "body_fields": [
+          "model",
+          "messages"
+        ]
+      },
+      "vendor": "OpenAI",
+      "technology": "OpenAI chat API",
+      "confidence": "probable",
+      "evidence_required": [
+        "host_match",
+        "path_match"
+      ],
+      "false_positive_notes": "An OpenAI-compatible gateway can answer on these paths on another host; this entry only matches api.openai.com. A request without a model field leaves the model unknown.",
+      "source": {
+        "name": "Sample fixture (illustrative, not a catalog entry)",
+        "url": "https://platform.openai.com/docs/api-reference",
+        "licence": "CC0-1.0"
+      },
+      "first_seen": "2026-11-01T00:00:00Z",
+      "last_verified": "2026-11-20T00:00:00Z",
+      "version": 1,
+      "expires_at": "2027-05-20T00:00:00Z"
+    },
+    {
+      "id": "agent.mcp.streamable-http",
+      "type": "agent_protocol",
+      "match": {
+        "paths": [
+          "/mcp"
+        ],
+        "header_names": [
+          "mcp-session-id"
+        ],
+        "body_fields": [
+          "jsonrpc",
+          "method"
+        ]
+      },
+      "vendor": "Model Context Protocol",
+      "technology": "MCP over HTTP",
+      "confidence": "possible",
+      "evidence_required": [
+        "path_match",
+        "header_present"
+      ],
+      "false_positive_notes": "/mcp is a common path for unrelated services; the session header or a JSON-RPC body is needed to call it probable.",
+      "source": {
+        "name": "Sample fixture (illustrative, not a catalog entry)",
+        "url": "https://modelcontextprotocol.io",
+        "licence": "CC0-1.0"
+      },
+      "first_seen": "2026-11-01T00:00:00Z",
+      "last_verified": "2026-11-20T00:00:00Z",
+      "version": 1,
+      "expires_at": "2027-05-20T00:00:00Z"
+    },
+    {
+      "id": "mcp.claude-desktop.config",
+      "type": "mcp_config_path",
+      "match": {
+        "config_paths": {
+          "darwin": [
+            "~/Library/Application Support/Claude/claude_desktop_config.json"
+          ],
+          "windows": [
+            "%APPDATA%/Claude/claude_desktop_config.json"
+          ],
+          "linux": [
+            "~/.config/Claude/claude_desktop_config.json"
+          ]
+        }
+      },
+      "vendor": "Anthropic",
+      "technology": "Claude Desktop MCP config",
+      "confidence": "confirmed",
+      "evidence_required": [
+        "config_file_present",
+        "config_entry_present"
+      ],
+      "false_positive_notes": "The file can exist with no servers listed; only an mcpServers entry counts as a configured server. Report names, never values.",
+      "source": {
+        "name": "Sample fixture (illustrative, not a catalog entry)",
+        "url": "https://modelcontextprotocol.io/quickstart/user",
+        "licence": "CC0-1.0"
+      },
+      "first_seen": "2026-11-01T00:00:00Z",
+      "last_verified": "2026-11-20T00:00:00Z",
+      "version": 1,
+      "expires_at": "2027-05-20T00:00:00Z"
+    },
+    {
+      "id": "runtime.ollama",
+      "type": "local_runtime",
+      "match": {
+        "process_names": [
+          "ollama"
+        ],
+        "ports": [
+          11434
+        ]
+      },
+      "vendor": "Ollama",
+      "technology": "Ollama local model runtime",
+      "confidence": "probable",
+      "evidence_required": [
+        "process_running",
+        "port_listening"
+      ],
+      "false_positive_notes": "Port 11434 can be used by another program; the process name alone does not show a model is loaded.",
+      "source": {
+        "name": "Sample fixture (illustrative, not a catalog entry)",
+        "url": "https://ollama.com",
+        "licence": "CC0-1.0"
+      },
+      "first_seen": "2026-11-01T00:00:00Z",
+      "last_verified": "2026-11-20T00:00:00Z",
+      "version": 1,
+      "expires_at": "2027-05-20T00:00:00Z"
+    },
+    {
+      "id": "app.claude-desktop.macos",
+      "type": "local_app",
+      "match": {
+        "bundle_ids": [
+          "com.anthropic.claudefordesktop"
+        ]
+      },
+      "vendor": "Anthropic",
+      "technology": "Claude Desktop (macOS)",
+      "confidence": "confirmed",
+      "evidence_required": [
+        "bundle_installed"
+      ],
+      "false_positive_notes": "Installed is not used: report as installed, not as in use.",
+      "source": {
+        "name": "Sample fixture (illustrative, not a catalog entry)",
+        "url": "https://claude.ai/download",
+        "licence": "CC0-1.0"
+      },
+      "first_seen": "2026-11-01T00:00:00Z",
+      "last_verified": "2026-11-20T00:00:00Z",
+      "version": 1,
+      "expires_at": "2027-05-20T00:00:00Z"
+    }
+  ]
+}

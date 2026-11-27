@@ -1,0 +1,14 @@
+{
+  "ai_event_type": "ai.tool.executed",
+  "collector": "recorder",
+  "envelope_version": 1,
+  "evidence_level": "observed",
+  "kind": "tool_result",
+  "outcome": "not_applicable",
+  "policy_action": "none",
+  "tool": {
+    "execution_source": "governed_tool",
+    "name": "x",
+    "status": "executed"
+  }
+}

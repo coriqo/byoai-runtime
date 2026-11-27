@@ -1,0 +1,16 @@
+{
+  "ai_event_type": "ai.policy.enforced",
+  "app": "claude",
+  "chars": 120,
+  "collector": "desktop_proxy",
+  "envelope_version": 1,
+  "evidence_level": "observed",
+  "flags": [
+    "secret:aws_key"
+  ],
+  "kind": "desktop.verdict.denied",
+  "outcome": "blocked",
+  "policy_action": "block",
+  "target": "claude.ai",
+  "verdict": "blocked"
+}
