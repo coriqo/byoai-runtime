@@ -26,15 +26,14 @@ dev proxy, so one build works in dev and standalone.
 
 from __future__ import annotations
 
-import contextlib as _contextlib
-import hashlib
-import json
-
 # Shield's own port. Not 8300 (Consul), 8800 (the MCP demo gateway), 8080
 # (the proxy) or any other number a dev stack likes; the browser extension
 # ships the same default (browser_extension/background.js). Override with
 # BYOAI_SHIELD_PORT and enter the same port in the extension popup.
 import base64
+import contextlib as _contextlib
+import hashlib
+import json
 import os as _os
 import re
 import sys as _sys
