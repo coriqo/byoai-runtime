@@ -227,6 +227,14 @@ None of this contains message text, and none of it leaves your computer.
   each agent tool call. Receipts of chat messages are never sent, and a row
   holding a message preview stays on this computer.
 
+## If you sign in to Coriqo
+
+Signing in is optional and separate from capture. Choosing *Connect this
+computer* sends Coriqo your sign-in token, the workspace you chose, this
+computer's Shield public key (the half that is not secret), a label such as
+`MacIntel`, and the extension version, so Coriqo can count devices. Signing out
+removes the saved token from the extension.
+
 ## The record Shield keeps
 
 Shield seals each entry into a Merkle chain signed with a key that stays on your
