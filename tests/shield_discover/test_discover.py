@@ -130,3 +130,9 @@ def test_out_resets_mode_of_an_existing_file(tmp_path):
     assert sd.run_discover(["--no-probe", "--out", str(target)], err=io.StringIO(), platform="darwin",
                            home=tmp_path, env={}) == 0
     assert oct(target.stat().st_mode & 0o777) == "0o600"
+
+
+def test_program_name_drops_anything_not_shaped_like_a_file_name():
+    for cmd in ("API_KEY=sk-live-SECRET node", "user:pass@host", "sk-live-SECRET/..", "a\u202eb", "x" * 81):
+        assert sd.describe_server("x", {"command": cmd})["program"] is None
+    assert sd.describe_server("x", {"command": "/opt/bin/mcp-server_1.2+x"})["program"] == "mcp-server_1.2+x"

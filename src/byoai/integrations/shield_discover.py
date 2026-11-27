@@ -29,6 +29,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import socket
 import sys
 import time
@@ -39,6 +40,7 @@ from urllib.parse import urlsplit
 
 SCHEMA = "byoai.shield.discovery/1"
 SIGNATURES_PATH = Path(__file__).with_name("shield_discovery_signatures.json")
+_PROGRAM_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,79}")
 MAX_CONFIG_BYTES = 1_048_576   # a config larger than this is skipped, not parsed
 MAX_SERVERS_PER_FILE = 200
 MAX_MODELS = 50
@@ -109,7 +111,9 @@ def _program_name(command: object) -> str | None:
         return None
     # First word only, then its file name: an argument may contain "/" and a secret.
     word = command.strip().split()[0].strip("\"'").replace("\\", "/")
-    return word.split("/")[-1][:80] or None
+    name = word.split("/")[-1]
+    # Only something shaped like a file name is kept: "KEY=value", "user:pass@host" or random text is not.
+    return name if _PROGRAM_RE.fullmatch(name) else None
 
 
 def _url_host(url: object) -> str | None:
