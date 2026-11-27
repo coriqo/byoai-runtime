@@ -12,6 +12,20 @@
       "title": "Managed by",
       "description": "The name of the organisation that manages this computer, shown in the extension window so the person knows who set it up.",
       "type": "string"
+    },
+    "coriqo_link": {
+      "title": "Connect to Coriqo",
+      "description": "\"disabled\" turns off signing in to Coriqo and linking this computer from the extension; the Connect to Coriqo buttons then say the organisation turned it off. Default enabled.",
+      "type": "string",
+      "enum": [
+        "enabled",
+        "disabled"
+      ]
+    },
+    "coriqo_api_base": {
+      "title": "Coriqo address",
+      "description": "The exact https origin of the Coriqo server, such as https://app.coriqo.io. When set it overrides the person's setting and cannot be changed. Any other value turns linking off.",
+      "type": "string"
     }
   }
 }

@@ -234,8 +234,10 @@ None of this contains message text, and none of it leaves your computer.
 Signing in is optional and separate from capture. Choosing *Connect this
 computer* sends Coriqo your sign-in token, the workspace you chose, this
 computer's Shield public key (the half that is not secret), a label such as
-`MacIntel`, and the extension version, so Coriqo can count devices. Signing out
-removes the saved token from the extension; it does not remove this computer from
+`MacIntel`, and the extension version, so Coriqo can count devices. Once the
+computer is connected, the extension deletes the sign-in token and keeps only
+your email and workspace name for display; an expired OAuth sign-in is deleted too (a magic-link sign-in has no expiry the extension can read; it is removed on sign-out).
+Signing out removes the saved token from the extension; it does not remove this computer from
 your Coriqo workspace, which your Coriqo admin does.
 
 ## The record Shield keeps

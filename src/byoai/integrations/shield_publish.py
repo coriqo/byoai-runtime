@@ -57,7 +57,7 @@ import httpx
 
 from byoai.integrations.shield_sync import aggregate_daily, build_event, sync_level
 from byoai.recorder.canonical import canonicalize
-from byoai.recorder.enroll import EnrollmentError, enroll, load_enrollment_state
+from byoai.recorder.enroll import ENROLLMENT_FILENAME, EnrollmentError, enroll, load_enrollment_state
 from byoai.recorder.keys import atomic_write_bytes
 from byoai.recorder.shipper import ShipError, post_signed_batch
 
@@ -137,6 +137,10 @@ def _public_key_hex(entry: dict) -> str | None:
                 return None
         return key.hex() if len(key) == 32 else None
     return None
+
+
+class WorkspacePinError(PermissionError):
+    """The workspace is outside BYOAI_CORIQO_LINK_WORKSPACES (not an operating-system permission error)."""
 
 
 @dataclass
@@ -258,7 +262,8 @@ class Publisher:
         except EnrollmentError:
             return None
 
-    def enrol(self, base_url: str, token: str, *, keep_existing: bool = False) -> dict:
+    def enrol(self, base_url: str, token: str, *, keep_existing: bool = False,
+              allowed_tenants: list[str] | None = None) -> dict:
         """Exchange a one-time Coriqo enrolment token for this Mac's device
         identity. Uses the Mac's existing Shield key; nothing secret is kept
         afterwards. Re-enrolling replaces the old identity."""
@@ -272,6 +277,17 @@ class Publisher:
             raise ValueError("Enter the Coriqo address, starting with https://")
         if not token.strip():
             raise ValueError("Paste the enrolment token from Coriqo")
+        refusal = ("That Coriqo workspace is not one this computer may join "
+                   "(BYOAI_CORIQO_LINK_WORKSPACES). It has not been connected.")
+        if allowed_tenants is not None:
+            allowed_tenants = [t.strip().lower() for t in allowed_tenants]  # slugs are case-insensitive
+            # The one-time token names its workspace (cik_live_<slug>.<secret>), so a
+            # token for another workspace is refused before anything is sent to Coriqo.
+            # An unreadable token is refused too: with a pin set, unknown is not allowed.
+            head = token.strip().split(".", 1)[0]
+            slug = head[len("cik_live_"):] if head.startswith("cik_live_") else None
+            if slug is None or slug.lower() not in allowed_tenants:
+                raise WorkspacePinError(refusal)
         with self._lock:
             if keep_existing:
                 # Checked under the lock, with the write, so two requests cannot both pass it.
@@ -282,9 +298,27 @@ class Publisher:
                     existing = True
                 if existing is not None:
                     raise EnrollmentError("already enrolled")
+            enrol_path = Path(self.key_dir) / ENROLLMENT_FILENAME
+            try:
+                previous = enrol_path.read_bytes()
+            except OSError:
+                previous = None
             with self._client_factory() as client:
                 enroll(coriqo_base_url=base_url, token=token.strip(),
                        key_dir=self.key_dir, force=True, http_client=client)
+            if allowed_tenants is not None:
+                try:
+                    state = load_enrollment_state(self.key_dir)
+                except EnrollmentError:
+                    state = None  # unreadable counts as outside the pin
+                if state is None or (state.tenant_slug or "").lower() not in allowed_tenants:
+                    # The server named a workspace other than the token's: put back exactly
+                    # what was enrolled before (or nothing), so the refusal changes nothing.
+                    if previous is None:
+                        enrol_path.unlink(missing_ok=True)
+                    else:
+                        atomic_write_bytes(enrol_path, previous, mode=0o600, prefix=".enrollment-")
+                    raise WorkspacePinError(refusal)
             # A new identity starts clean (its own numbering, empty outbox):
             # the current seal goes out straight away.
             self.state = PublishState()

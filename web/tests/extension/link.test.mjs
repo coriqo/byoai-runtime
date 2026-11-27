@@ -126,7 +126,7 @@ describe.skipIf(SKIP)('extension sign-in and link (real browser)', () => {
     await welcome.goto(`chrome-extension://${EXT_ID}/welcome.html`)
     await opensLogin(welcome, '#connect-coriqo')
     await welcome.close()
-    expect(await popup.$eval('#coriqo-line', (n) => n.textContent)).toMatch(/Optional: link this computer/)
+    await popup.waitForFunction(() => /Optional: link this computer/.test(document.getElementById('coriqo-line').textContent), { timeout: 10_000, polling: 100 }) // a background tab: no rAF
     await opensLogin(popup, '#connect-coriqo')
 
     // A saved client id that is not valid must say so, not hang the sign-in.
@@ -163,9 +163,32 @@ describe.skipIf(SKIP)('extension sign-in and link (real browser)', () => {
     expect(clients).toEqual(['https://coriqo.test/shield-client.json']) // the configured client id is what Coriqo is sent
     expect(seen.filter((s) => s === 'POST /v1/enroll').length).toBe(1)
 
-    // A second press: this Mac is enrolled, so Shield keeps its identity and says so.
+    // The token is dropped after the link: email and workspace stay for display, and expiry is kept.
+    const kept = await worker.evaluate(() => chrome.storage.local.get('coriqo_session').then((v) => v.coriqo_session))
+    expect(kept.access_token).toBeUndefined()
+    expect(kept.email).toBe('a@b.test')
+    expect(kept.expires_at).toBeGreaterThan(Date.now())
+
+    // A second press asks for a fresh sign-in; after it, Shield keeps its identity and says so.
+    await page.click('#connect')
+    await page.waitForFunction(() => /Sign in again/.test(document.getElementById('request-msg').textContent), { timeout: 10_000 })
+    await page.click('#oauth-start')
+    await page.waitForFunction(() => document.getElementById('step-done').classList.contains('active'), { timeout: 30_000 })
+    await page.bringToFront() // the sign-in window took focus; clicks do not reach a background tab
     await page.click('#connect')
     await page.waitForFunction(() => /already connected/i.test(document.getElementById('connect-msg').textContent), { timeout: 30_000 })
+      .catch(async (e) => { throw new Error(`${e.message}; the page said: "${await page.$eval('#connect-msg', (n) => n.textContent)}" / "${await page.$eval('#request-msg', (n) => n.textContent)}"; Coriqo saw ${seen.join(', ')}`) })
     expect(seen.filter((s) => s === 'POST /v1/enroll').length).toBe(1)
+  })
+
+  it('an expired session is signed out and removed', { timeout: 30_000 }, async () => {
+    const worker = await (await browser.waitForTarget((t) => t.type() === 'service_worker', { timeout: 15_000 })).worker()
+    await worker.evaluate(() => chrome.storage.local.set({ coriqo_session: { email: 'a@b.test', tenant_slug: 'x',
+      tenants: ['x'], via: 'oauth', access_token: 'old', expires_at: 1 } }))
+    const page = await browser.newPage()
+    await page.goto(`chrome-extension://${EXT_ID}/login.html`)
+    await page.waitForFunction(() => document.getElementById('step-request').classList.contains('active'), { timeout: 10_000 })
+    expect(await worker.evaluate(() => chrome.storage.local.get('coriqo_session').then((v) => v.coriqo_session ?? null))).toBeNull()
+    await page.close()
   })
 })

@@ -24,16 +24,27 @@
 const API_BASE_KEY = 'coriqo_api_base'
 const SESSION_KEY = 'coriqo_session'
 const CLIENT_ID_KEY = 'coriqo_client_id'
-// Dev default. Production base is configured once Coriqo's real host is
-// decided — deliberately not hardcoded to a guessed production URL.
-const DEFAULT_API_BASE = 'http://localhost:8000'
+// No default here: CoriqoLink.resolveBase falls back to https://app.coriqo.io.
+// http to this computer is allowed only in an unpacked build (no update_url).
+const isDevBuild = () => !chrome.runtime.getManifest().update_url
 
 const el = (id) => document.getElementById(id)
 
-function getApiBase() {
-  return new Promise((resolve) =>
-    chrome.storage.local.get(API_BASE_KEY, (v) => resolve(v[API_BASE_KEY] || DEFAULT_API_BASE)))
+// The administrator's decision (managed storage), read the way shield_port is.
+async function getPolicy() {
+  let raw = {}
+  try { raw = (await chrome.storage.managed?.get(['coriqo_link', 'coriqo_api_base'])) || {} } catch { /* none */ }
+  return globalThis.CoriqoLink.linkPolicy(raw)
 }
+
+async function getApiBase() {
+  const policy = await getPolicy()
+  const v = await new Promise((resolve) => chrome.storage.local.get(API_BASE_KEY, resolve))
+  return globalThis.CoriqoLink.resolveBase({ policy, stored: v[API_BASE_KEY], devBuild: isDevBuild() })
+}
+
+const BAD_BASE_TEXT = 'The saved Coriqo address is not allowed in this build (it must be https://). Remove the saved address to use the default.'
+const OFF_TEXT = 'Your organisation has turned off connecting to Coriqo on this computer.'
 
 function getClientId() {
   // Validate after the callback, inside the promise: a throw in the callback itself would
@@ -47,9 +58,14 @@ function getClientId() {
   }))
 }
 
+// An expired session counts as signed out and is removed.
 function getSession() {
   return new Promise((resolve) =>
-    chrome.storage.local.get(SESSION_KEY, (v) => resolve(v[SESSION_KEY] || null)))
+    chrome.storage.local.get(SESSION_KEY, (v) => {
+      const s = v[SESSION_KEY] || null
+      if (globalThis.CoriqoLink.sessionExpired(s)) { chrome.storage.local.remove(SESSION_KEY, () => resolve(null)); return }
+      resolve(s)
+    }))
 }
 
 function setSession(session) {
@@ -68,6 +84,7 @@ function sendBg(msg) {
 }
 
 async function onOAuth() {
+  if (!(await getPolicy()).enabled) return setMsg('request-msg', OFF_TEXT, 'bad')
   el('oauth-start').disabled = true
   setMsg('request-msg', 'Opening Coriqo…')
   try {
@@ -85,7 +102,7 @@ async function onOAuth() {
       timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }), t.tenant_slug)
     if (!tenant) throw new Error('no_tenant')
     await setSession({ access_token: t.access_token, email: t.email || '', tenant_slug: tenant,
-      tenants: list, at: Date.now(), via: 'oauth' })
+      tenants: list, at: Date.now(), expires_at: t.expires_at, via: 'oauth' })
     setMsg('request-msg', '')
     await showDone()
   } catch (err) {
@@ -142,6 +159,7 @@ async function onConnect() {
   btn.disabled = true
   el('limit-help').hidden = true
   const fail = (text) => { setMsg('connect-msg', text, 'bad'); btn.disabled = false }
+  if (!(await getPolicy()).enabled) return fail(OFF_TEXT)
   try {
     setMsg('connect-msg', 'Checking Shield on this computer…')
     const check = await sendBg({ type: 'agent.checkServer' })
@@ -158,6 +176,13 @@ async function onConnect() {
     }
 
     const session = await getSession()
+    if (!session?.access_token) {
+      // The token is dropped after a link; linking again needs a fresh sign-in.
+      await clearSession()
+      btn.disabled = false
+      showStep('request')
+      return setMsg('request-msg', 'Sign in again to connect this computer.', 'bad')
+    }
     const base = await getApiBase()
     const tenant = document.querySelector('#tenants input[name=tenant]:checked')?.value || session.tenant_slug
     setMsg('connect-msg', 'Asking Coriqo…')
@@ -183,11 +208,15 @@ async function onConnect() {
     await L.linkLocalShield({ fetchImpl: fetch, endpoint: check.endpoint, base, token: grant.token })
     await new Promise((r) => chrome.storage.local.set({ [LINK_KEY]: {
       tenant, device_index: grant.deviceIndex, device_limit: grant.deviceLimit, at: Date.now() } }, r))
+    // The token has done its job: keep only what the pages show.
+    const { access_token: _drop, ...kept } = session
+    await setSession(kept)
     setMsg('connect-msg', L.linkSummary({ tenant, device_index: grant.deviceIndex, device_limit: grant.deviceLimit }), 'ok')
     btn.disabled = false
   } catch (err) {
     const m = err?.message || ''
-    fail(m.startsWith('shield:') ? m.slice(7) : "Couldn't connect. Check your connection and try again.")
+    fail(m === 'bad_base' ? BAD_BASE_TEXT
+      : m.startsWith('shield:') ? m.slice(7) : "Couldn't connect. Check your connection and try again.")
   }
 }
 
@@ -225,12 +254,6 @@ let pendingWorkspace = ''
 async function init() {
   el('oauth-start').addEventListener('click', onOAuth)
   el('connect').addEventListener('click', onConnect)
-  const session = await getSession()
-  if (session) {
-    await showDone()
-  } else {
-    showStep('request')
-  }
 
   el('email').addEventListener('input', updateSendEnabled)
   el('workspace').addEventListener('input', updateSendEnabled)
@@ -261,6 +284,18 @@ async function init() {
     ev.preventDefault()
     chrome.tabs.create({ url: chrome.runtime.getURL('PRIVACY.md') })
   })
+  if (!(await getPolicy()).enabled) {
+    el('oauth-start').disabled = true
+    showStep('request')
+    setMsg('request-msg', OFF_TEXT, 'bad')
+    return
+  }
+  const session = await getSession()
+  if (session) {
+    await showDone()
+  } else {
+    showStep('request')
+  }
 }
 
 function updateSendEnabled() {
@@ -268,6 +303,7 @@ function updateSendEnabled() {
 }
 
 async function onSend() {
+  if (!(await getPolicy()).enabled) return setMsg('request-msg', OFF_TEXT, 'bad')
   const email = el('email').value.trim()
   const workspace = el('workspace').value.trim()
   el('send').disabled = true
@@ -295,9 +331,10 @@ async function onSend() {
     const httpStatus = /^http:(\d+)$/.exec(err?.message || '')?.[1]
     setMsg(
       'request-msg',
-      httpStatus
-        ? `Coriqo had a problem (${httpStatus}). Try again shortly.`
-        : "Couldn't reach Coriqo. Check your connection and try again.",
+      err?.message === 'bad_base' ? BAD_BASE_TEXT
+        : httpStatus
+          ? `Coriqo had a problem (${httpStatus}). Try again shortly.`
+          : "Couldn't reach Coriqo. Check your connection and try again.",
       'bad',
     )
     el('send').disabled = false
@@ -305,6 +342,7 @@ async function onSend() {
 }
 
 async function onConsume() {
+  if (!(await getPolicy()).enabled) return setMsg('consume-msg', OFF_TEXT, 'bad')
   const token = extractToken(el('token').value)
   el('consume').disabled = true
   setMsg('consume-msg', 'Signing in…')
@@ -331,7 +369,8 @@ async function onConsume() {
     showStep('done')
   } catch (err) {
     const httpStatus = /^http:(\d+)$/.exec(err?.message || '')?.[1]
-    const msg = err?.message === 'expired'
+    const msg = err?.message === 'bad_base' ? BAD_BASE_TEXT
+      : err?.message === 'expired'
       ? 'This sign-in link expired. Go back and send a new one.'
       : err?.message === 'invalid'
         ? "That link or code didn't match — check you copied all of it."

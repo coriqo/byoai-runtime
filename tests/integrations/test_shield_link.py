@@ -251,7 +251,8 @@ def test_the_enrol_route_follows_the_list_only_when_one_is_set(tmp_path, coriqo,
     def enrol(url):
         req = urllib.request.Request(base + "/api/coriqo/enrol", method="POST",
                                      data=json.dumps({"base_url": url, "token": "t"}).encode(),
-                                     headers={"Content-Type": "application/json"})
+                                     headers={"Content-Type": "application/json",
+                                              "Origin": base.split("/shield")[0].rstrip("/")})
         try:
             return urllib.request.urlopen(req, timeout=5).status
         except urllib.error.HTTPError as e:
@@ -353,3 +354,72 @@ const run=async(tok,ui)=>{try{return await L.exchangeCode({base:'https://c.test'
     assert g["fallback"]["tenant_slug"] == "old" and g["fallback"]["email"] == "a@b"
     assert g["mixed"]["tenant_slug"] == "new" and g["mixed"]["tenants"] == []
     assert (g["e401"], g["badjson"]) == ("http:401", "bad_userinfo")
+
+
+def _run_link_js(code):
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed")
+    done = subprocess.run([node, "-e", code, str(Path(__file__).parents[2] / "src/byoai/browser_extension/coriqo-link.js")],
+                          capture_output=True, text=True, timeout=20)
+    return json.loads(done.stdout or "null"), done.stderr
+
+
+def test_default_base_is_https_and_a_store_build_never_uses_http():
+    g, err = _run_link_js(r"""
+const L=require(process.argv[1]);const t=(f)=>{try{return f()}catch(e){return e.message}};
+const P=L.linkPolicy({});
+console.log(JSON.stringify({
+ dflt:t(()=>L.resolveBase({policy:P,stored:undefined,devBuild:false})),
+ dfltDev:t(()=>L.resolveBase({policy:P,stored:undefined,devBuild:true})),
+ storeHttp:t(()=>L.resolveBase({policy:P,stored:'http://localhost:8000',devBuild:false})),
+ devHttp:t(()=>L.resolveBase({policy:P,stored:'http://localhost:8000',devBuild:true})),
+ devRemoteHttp:t(()=>L.resolveBase({policy:P,stored:'http://evil.test',devBuild:true})),
+ storeHttps:t(()=>L.resolveBase({policy:P,stored:'https://c.test/x',devBuild:false}))}))
+""")
+    assert g == {"dflt": "https://app.coriqo.io", "dfltDev": "https://app.coriqo.io",
+                 "storeHttp": "bad_base", "devHttp": "http://localhost:8000",
+                 "devRemoteHttp": "bad_base", "storeHttps": "https://c.test"}, err
+
+
+def test_managed_policy_disables_linking_and_pins_the_base():
+    g, err = _run_link_js(r"""
+const L=require(process.argv[1]);
+const r=(m,stored)=>{const p=L.linkPolicy(m);let b;try{b=L.resolveBase({policy:p,stored,devBuild:true})}catch(e){b=e.message};return [p.enabled,b]};
+console.log(JSON.stringify({
+ none:r(undefined,undefined), off:r({coriqo_link:'disabled'}),
+ on:r({coriqo_link:'enabled'}),
+ pinned:r({coriqo_api_base:'https://co.test'},'http://localhost:8000'),
+ httpBase:r({coriqo_api_base:'http://co.test'}), pathBase:r({coriqo_api_base:'https://co.test/a'}),
+ userBase:r({coriqo_api_base:'https://u:p@co.test'}), numBase:r({coriqo_api_base:5})}))
+""")
+    assert g["none"] == [True, "https://app.coriqo.io"] and g["off"][0] is False and g["on"][0] is True
+    assert g["pinned"] == [True, "https://co.test"]   # managed wins over storage
+    for k in ("httpBase", "pathBase", "userBase", "numBase"):
+        assert g[k][0] is False, (k, err)              # a bad managed base fails closed
+
+
+def test_token_expiry_is_stored_and_an_expired_session_is_signed_out():
+    g, err = _run_link_js(r"""
+const L=require(process.argv[1]);
+const f=(tok)=>async(u)=>u.endsWith('/oauth/token')?{ok:true,json:async()=>tok}:{ok:true,json:async()=>({tenants:['x']})};
+(async()=>{const a=Date.now();
+const t=await L.exchangeCode({base:'https://c.test',redirectUri:'https://x.chromiumapp.org/',code:'c',verifier:'v',fetchImpl:f({access_token:'t',expires_in:600})});
+const n=await L.exchangeCode({base:'https://c.test',redirectUri:'https://x.chromiumapp.org/',code:'c',verifier:'v',fetchImpl:f({access_token:'t'})});
+console.log(JSON.stringify({ok:t.expires_at>=a+600000&&t.expires_at<=Date.now()+600000, none:n.expires_at,
+ past:L.sessionExpired({expires_at:1}), future:L.sessionExpired({expires_at:Date.now()+1e6}),
+ noexp:L.sessionExpired({email:'a'}), nul:L.sessionExpired(null)}))})()
+""")
+    assert g == {"ok": True, "none": None, "past": True, "future": False, "noexp": False, "nul": False}, err
+
+
+def test_extension_pages_drop_the_token_after_link_and_honour_the_policy():
+    ext = Path(__file__).parents[2] / "src/byoai/browser_extension"
+    login = (ext / "login.js").read_text()
+    popup = (ext / "popup.js").read_text()
+    assert "localhost:8000" not in login
+    assert "access_token: _drop" in login and "expires_at: t.expires_at" in login
+    assert "chrome.storage.managed" in login and "chrome.storage.managed" in popup
+    assert "if (coriqoOff) return" in popup
+    schema = json.loads((ext / "managed_schema.json").read_text())["properties"]
+    assert schema["coriqo_link"]["enum"] == ["enabled", "disabled"] and "coriqo_api_base" in schema
