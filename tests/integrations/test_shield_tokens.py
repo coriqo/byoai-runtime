@@ -48,8 +48,7 @@ def test_the_popup_privacy_line_says_the_words_are_checked_and_never_stored():
 def test_the_toolbar_icons_are_the_seal_on_the_navy_tile_at_four_sizes():
     import json
 
-    pytest.importorskip("PIL", reason="Pillow draws and reads the icons")
-    from PIL import Image
+    Image = pytest.importorskip("PIL.Image", reason="Pillow draws and reads the icons")
 
     manifest = json.loads((EXT / "manifest.json").read_text())
     assert manifest["action"]["default_icon"] == {

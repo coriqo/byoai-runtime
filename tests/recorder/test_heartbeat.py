@@ -280,7 +280,8 @@ def _ledger_with_window(tmp_path, *, down_for: int):
     _emitter(led, clock).start()  # seq 1
     clock.advance(INTERVAL)
     hb = _emitter(led, clock)
-    hb.tick() or hb.start()  # seq 2
+    if not hb.tick():
+        hb.start()  # seq 2
     led.append(make_event("dev_hb"))  # seq 3
     clock.advance(down_for)
     hb2 = _emitter(led, clock)

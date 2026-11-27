@@ -33,7 +33,7 @@ import random
 import stat
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -59,7 +59,7 @@ class ManagedEnrolment:
     source: str                     # where it came from, for the one-line report
 
 
-def managed_file_path(platform: str, env: dict) -> Path:
+def managed_file_path(platform: str, env: Mapping[str, str]) -> Path:
     if platform == "win32":
         return Path(env.get("ProgramData", r"C:\ProgramData")) / "Coriqo" / "Shield" / "enrol.json"
     if platform == "darwin":
@@ -73,8 +73,10 @@ def managed_plist_path() -> Path:
 
 def _read_registry() -> dict:
     """HKLM only: a standard user cannot write there. Missing key means {}."""
+    if sys.platform != "win32":
+        return {}
     try:
-        import winreg  # type: ignore[import-not-found]
+        import winreg
     except ImportError:
         return {}
     out: dict = {}
@@ -110,7 +112,7 @@ def _clean(value: object) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
-def read_managed(*, platform: str | None = None, env: dict | None = None,
+def read_managed(*, platform: str | None = None, env: Mapping[str, str] | None = None,
                  registry: Callable[[], dict] | None = None,
                  plist_path: Path | None = None, file_path: Path | None = None,
                  uid: int | None = None) -> ManagedEnrolment | None:
@@ -259,6 +261,7 @@ def run_enrol(argv: list[str], *, key_dir: Path | None = None,
     finally:
         if owns:
             client.close()
+    state = state  # pyright: ignore[reportPossiblyUnboundVariable]
     print(f"Enrolled with {state.coriqo_base_url} (tenant {state.tenant_slug or 'unknown'}, "
           f"device {state.device_id}); token read from {source}.", file=out)
     return 0

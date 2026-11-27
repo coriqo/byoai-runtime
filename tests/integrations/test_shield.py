@@ -1524,7 +1524,8 @@ def _chat_row(i):
 
 def test_poll_reads_only_appended_rows_and_matches_a_full_read(tmp_path):
     inc, full = tmp_path / "inc", tmp_path / "full"
-    inc.mkdir(), full.mkdir()
+    inc.mkdir()
+    full.mkdir()
     cfg = make_cfg(inc)
     cfg.ledger.write_text("".join(json.dumps(_chat_row(i)) + "\n" for i in range(3)))
     feed = Feed(cfg)

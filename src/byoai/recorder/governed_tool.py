@@ -336,7 +336,7 @@ def governed_tool(
 
 
 def governed_tool(
-    fn: F | None = None,
+    fn: F | None = None,  # pyright: ignore[reportInvalidTypeVarUse]
     *,
     name: str | None = None,
     gate: GateSource = None,
