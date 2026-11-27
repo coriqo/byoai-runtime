@@ -205,7 +205,42 @@ Home-directory paths are written as `~/...`. The detection list is `src/byoai/in
 
 The output is marked `"attestation": "unattested"`: it is a claim from an unauthenticated scan, not evidence. It is
 never written to Shield's signed ledger and the command makes no network call. Nothing leaves the computer unless
-you or your admin's tool moves the file.
+you or your admin's tool moves the file, or you add `--send` (next).
+
+**Uploading the report (`--send`).** Off unless given. After scanning, the report is POSTed to
+`<server>/api/v1/discovery/endpoint-reports` with `Authorization: Bearer <discovery key>`. Only the scanner's own
+report is sent: no hostname, user name or device id. Coriqo needs the Endpoint discovery add-on and stores it as an
+unverified sighting.
+
+```bash
+byoai-shield discover --send --key-file ~/k --server https://coriqo.example.com
+byoai-shield discover --send            # key and address from the managed location
+```
+
+The key (`cik_disc_<workspace>.<secret>`) and address come from `--key` / `--server`, then `--key-file`, then the
+managed location (same trust rules as `enrol`: not writable by group or other, owned by root or the user; https
+only): Windows registry `HKLM\SOFTWARE\Policies\Coriqo\Shield` values `DiscoveryKey` and `ServerUrl`; macOS
+`/Library/Managed Preferences/com.coriqo.shield.plist` (same keys); or JSON `{"key": ..., "server_url": ...}` at
+`/etc/coriqo/shield/discover.json`, `/Library/Application Support/Coriqo/Shield/discover.json` or
+`%ProgramData%\Coriqo\Shield\discover.json`. `--no-managed` skips these; `--jitter-seconds N` waits a random
+0..N seconds first (max 900). `--key` shows in the process list: prefer the file or managed route. With `--send`
+the report goes to the server, not stdout (add `--out` to also keep a copy). The key is never printed, logged or
+put in an error, and server text is never echoed. Transient answers (502/503/504, 409, a 429 with a Retry-After
+of 60 s or less, network errors) are retried up to 3 times with jitter.
+
+| Exit | Meaning |
+|---|---|
+| 0 | sent (a repeat of the same report also counts) |
+| 1 | network failure or unexpected answer after retries |
+| 2 | no key or address, untrusted managed source, address not https |
+| 10 | 403: Endpoint discovery is not enabled for the workspace |
+| 11 | 401: key unknown, revoked or mistyped |
+| 12 | 429: rate limited |
+| 13 | report over 256 KiB |
+| 14 | 400/415/422: server does not accept the report; update byoai-shield |
+| 15 | 423: workspace in read-only lockdown |
+
+Ready-made Jamf, Intune and cron examples: `examples/shield_discover_mdm/`.
 
 ### Shield enrolment by device-management tool (`byoai-shield enrol`)
 

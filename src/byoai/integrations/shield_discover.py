@@ -303,7 +303,7 @@ def planned_paths(sigs: dict, platform: str, home: Path, env: Mapping[str, str])
     return out
 
 
-def run_discover(argv: list[str], *, out=None, err=None, **kw) -> int:
+def run_discover(argv: list[str], *, out=None, err=None, send_kw: dict | None = None, **kw) -> int:
     out = out or sys.stdout
     err = err or sys.stderr
     ap = argparse.ArgumentParser(
@@ -313,6 +313,15 @@ def run_discover(argv: list[str], *, out=None, err=None, **kw) -> int:
     ap.add_argument("--out", type=Path, help="write the JSON here (mode 0600) instead of stdout")
     ap.add_argument("--no-probe", action="store_true", help="do not connect to default runtime ports on 127.0.0.1")
     ap.add_argument("--dry-run", action="store_true", help="print the config files it would read, then stop")
+    ap.add_argument("--send", action="store_true",
+                    help="after scanning, upload the report to Coriqo with a discovery key (off unless given)")
+    ap.add_argument("--key-file", type=Path, help="with --send: file holding only the discovery key")
+    ap.add_argument("--key", help="with --send: the key (visible in the process list; prefer --key-file or a managed setting)")
+    ap.add_argument("--server", help="with --send: server address, https://... (default: the managed ServerUrl)")
+    ap.add_argument("--no-managed", action="store_true",
+                    help="with --send: ignore the registry, managed preference and managed file")
+    ap.add_argument("--jitter-seconds", type=float, default=0.0,
+                    help="with --send: wait a random 0..N seconds before uploading, so many computers do not arrive at once")
     args = ap.parse_args(argv)
 
     if args.dry_run:
@@ -327,7 +336,9 @@ def run_discover(argv: list[str], *, out=None, err=None, **kw) -> int:
           file=err)
     report = discover(probe=not args.no_probe, **kw)
     text = json.dumps(report, indent=2, sort_keys=True) + "\n"
-    if args.out:
+    if args.send and not args.out:
+        pass  # the report goes to the server, not stdout
+    elif args.out:
         try:
             fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -339,6 +350,9 @@ def run_discover(argv: list[str], *, out=None, err=None, **kw) -> int:
         print(f"Wrote {len(report['items'])} item(s) to {args.out}.", file=err)
     else:
         out.write(text)
+    if args.send:
+        from byoai.integrations.shield_discover_send import run_send
+        return run_send(text, args, err=err, out=out, **(send_kw or {}))
     return 0
 
 
