@@ -4,7 +4,8 @@ This extension records *that* you sent a message to an AI chat, never *what you
 said*. On claude.ai, chatgpt.com, gemini.google.com and Microsoft Copilot it also
 replaces personal details in the message box before you send, when your
 Shield's policy says to; on claude.ai and chatgpt.com it also does so in the
-network request itself. There is no account and no sign-in.
+network request itself. No account is needed. Signing in to Coriqo is optional,
+your choice, and separate from all of this (see "If you sign in to Coriqo").
 It does nothing until you agree on the welcome page it opens when you install
 it, and you can turn it off again at any time from its popup.
 
@@ -148,7 +149,8 @@ message box, it leaves it alone and the popup says so. Other sends that don't go
 page's `fetch` are noted, not rewritten. Attachments are read only as described
 under "File hashing" and "What the input gate reads".
 
-No account, device or user identifier is attached to rows. There is no
+No account, device or user identifier is attached to rows, and nothing is sent
+to Coriqo unless you choose to sign in (see "If you sign in to Coriqo"). There is no
 analytics, no telemetry, no advertising and no third-party request. The data is
 never sold, and is not used or transferred for anything other than the single
 purpose above (noting that a message was sent, on this computer).
@@ -233,7 +235,8 @@ Signing in is optional and separate from capture. Choosing *Connect this
 computer* sends Coriqo your sign-in token, the workspace you chose, this
 computer's Shield public key (the half that is not secret), a label such as
 `MacIntel`, and the extension version, so Coriqo can count devices. Signing out
-removes the saved token from the extension.
+removes the saved token from the extension; it does not remove this computer from
+your Coriqo workspace, which your Coriqo admin does.
 
 ## The record Shield keeps
 

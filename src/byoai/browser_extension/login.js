@@ -132,7 +132,7 @@ async function showDone() {
   // device-enrolment right, so the card is not offered.
   el('connect-card').hidden = session.via !== 'oauth'
   const linked = await new Promise((r) => chrome.storage.local.get(LINK_KEY, (v) => r(v[LINK_KEY] || null)))
-  if (linked) setMsg('connect-msg', `Connected: device ${linked.device_index ?? '?'}${linked.device_limit ? ` of ${linked.device_limit}` : ''} in ${linked.tenant}.`, 'ok')
+  if (linked && L.linkSummary(linked)) setMsg('connect-msg', L.linkSummary(linked), 'ok')
   showStep('done')
 }
 
@@ -183,7 +183,7 @@ async function onConnect() {
     await L.linkLocalShield({ fetchImpl: fetch, endpoint: check.endpoint, base, token: grant.token })
     await new Promise((r) => chrome.storage.local.set({ [LINK_KEY]: {
       tenant, device_index: grant.deviceIndex, device_limit: grant.deviceLimit, at: Date.now() } }, r))
-    setMsg('connect-msg', `Connected: device ${grant.deviceIndex ?? '?'}${grant.deviceLimit ? ` of ${grant.deviceLimit}` : ''} in ${tenant}.`, 'ok')
+    setMsg('connect-msg', L.linkSummary({ tenant, device_index: grant.deviceIndex, device_limit: grant.deviceLimit }), 'ok')
     btn.disabled = false
   } catch (err) {
     const m = err?.message || ''
@@ -254,6 +254,10 @@ async function init() {
     showStep('request')
   })
   el('open-privacy').addEventListener('click', (ev) => {
+    ev.preventDefault()
+    chrome.tabs.create({ url: chrome.runtime.getURL('PRIVACY.md') })
+  })
+  el('open-privacy-2').addEventListener('click', (ev) => {
     ev.preventDefault()
     chrome.tabs.create({ url: chrome.runtime.getURL('PRIVACY.md') })
   })

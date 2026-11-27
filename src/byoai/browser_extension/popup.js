@@ -102,7 +102,28 @@ async function renderExtraSites() {
   } catch { /* the popup still works without this block */ }
 }
 
+// Sign-in is optional and separate from capture; the popup only says where it stands and opens the page.
+async function renderCoriqo() {
+  try {
+    const s = await chrome.storage.local.get(['coriqo_session', 'coriqo_link'])
+    const L = globalThis.CoriqoLink
+    const btn = el('connect-coriqo')
+    const line = el('coriqo-line')
+    if (s.coriqo_link && L.linkSummary(s.coriqo_link)) {
+      line.textContent = L.linkSummary(s.coriqo_link)
+      btn.textContent = 'Coriqo account'
+    } else if (s.coriqo_session) {
+      line.textContent = `Signed in${s.coriqo_session.email ? ` as ${s.coriqo_session.email}` : ''}. This computer isn't connected yet.`
+      btn.textContent = 'Connect this computer'
+    } else {
+      line.textContent = 'Optional: link this computer to your Coriqo account.'
+      btn.textContent = 'Connect to Coriqo'
+    }
+  } catch { /* the popup works without it */ }
+}
+
 async function refresh() {
+  renderCoriqo()
   renderExtraSites()
   // A cold worker can miss the timeout; fall back to what is stored rather than
   // showing "off" for someone whose capture is running.
@@ -334,6 +355,10 @@ function protection(appKey, mode) {
 }
 
 function wire() {
+  el('connect-coriqo').addEventListener('click', () => {
+    chrome.tabs.create({ url: chrome.runtime.getURL('login.html') })
+    window.close()
+  })
   el('open-shield').addEventListener('click', async (ev) => {
     if (ev.currentTarget.dataset.welcome) {
       chrome.tabs.create({ url: chrome.runtime.getURL('welcome.html') })

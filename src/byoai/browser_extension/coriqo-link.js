@@ -236,7 +236,17 @@
     return (region && list.find((t) => splitTenant(t).region === region)) || list[0] || null
   }
 
-  const api = { CLIENT_ID, checkClientId, tenantLabel, detectRegion, pickTenant, checkBase, makePkce, buildAuthorizeUrl, parseRedirect, exchangeCode,
+  // One sentence on where a linked computer stands, for the popup and the sign-in page alike.
+  // Parts Coriqo did not give are left out, never shown as a placeholder.
+  function linkSummary(link) {
+    if (!link || !link.tenant) return ''
+    const t = tenantLabel(link.tenant)
+    const device = Number.isInteger(link.device_index)
+      ? ` Device ${link.device_index}${Number.isInteger(link.device_limit) ? ` of ${link.device_limit}` : ''}.` : ''
+    return `Connected to Coriqo: ${t.name}${t.region ? `, ${t.region}` : ''}.${device}`
+  }
+
+  const api = { CLIENT_ID, linkSummary, checkClientId, tenantLabel, detectRegion, pickTenant, checkBase, makePkce, buildAuthorizeUrl, parseRedirect, exchangeCode,
     requestEnrolGrant, linkLocalShield, verifiedShieldKey }
   root.CoriqoLink = api
   if (typeof module !== 'undefined' && module.exports) module.exports = api

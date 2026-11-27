@@ -59,6 +59,10 @@
     .card p:last-child { margin-bottom: 0; }
     .signed-in { display: flex; align-items: center; gap: var(--space-md); }
     .signed-in .dot { width: var(--space-sm); height: var(--space-sm); border-radius: var(--radius-pill); background: var(--validated); flex: none; }
+    details.sees { margin: var(--space-md) 0 0; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper-2); font-size: var(--text-xs); }
+    details.sees summary { cursor: pointer; padding: var(--space-sm) var(--space-md); font-weight: var(--weight-medium); color: var(--ink); }
+    details.sees p { margin: 0 var(--space-md) var(--space-sm); font-size: var(--text-xs); color: var(--ink-soft); }
+    details.sees p b { color: var(--ink); }
     .fine { color: var(--ink-soft); font-size: var(--text-xs); margin-top: var(--space-xl); text-wrap: pretty; }
     .fine a, .card a { color: var(--azure-soft); }
     .step { display: none; }
@@ -122,6 +126,16 @@
     <div class="card" id="connect-card">
       <p><b>Track this computer.</b> Links the Shield running on this Mac to your
         Coriqo account. More than one computer may be billed.</p>
+      <details class="sees">
+        <summary>What Coriqo will see</summary>
+        <p><b>Sent when you connect:</b> your sign-in, the workspace you chose, this computer's public Shield key, a
+          label such as the platform name, and the extension version.</p>
+        <p><b>Never sent:</b> what you type or what an AI replies, file contents, or your browsing. Protection in the
+          page works the same with or without Coriqo.</p>
+        <p><b>Afterwards:</b> only what your Shield is set to share, never message text. Signing out removes the sign-in from
+          this browser; it does not remove this computer from your Coriqo workspace, which your Coriqo admin does.
+          <a id="open-privacy-2" href="#">Read exactly what is recorded</a></p>
+      </details>
       <fieldset class="tenants" id="tenant-field" hidden>
         <legend>Workspace</legend>
         <div id="tenants" role="radiogroup" aria-label="Workspace"></div>

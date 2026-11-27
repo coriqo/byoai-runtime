@@ -109,6 +109,21 @@ describe.skipIf(SKIP)('extension sign-in and link (real browser)', () => {
     await popup.goto(`chrome-extension://${EXT_ID}/popup.html`)
     await popup.waitForFunction(() => document.getElementById('state-title').textContent !== 'Checking Shield', { timeout: 10_000 })
 
+    // The way in: a fresh install offers sign-in on the welcome page and in the popup, on a click.
+    const opensLogin = async (from, selector) => {
+      const before = (await browser.pages()).filter((p) => p.url().endsWith('/login.html')).length
+      await from.bringToFront() // clicks do not reach a background tab
+      from.click(selector).catch(() => {}) // the popup closes itself after opening the page, so the click may never settle
+      await until(async () => (await browser.pages()).filter((p) => p.url().endsWith('/login.html')).length > before,
+        10_000, 'the sign-in page to open').catch(async (e) => { throw new Error(`${e.message} after clicking ${selector}; pages: ${(await browser.pages()).map((p) => p.url()).join(' | ')}`) })
+    }
+    const welcome = await browser.newPage()
+    await welcome.goto(`chrome-extension://${EXT_ID}/welcome.html`)
+    await opensLogin(welcome, '#connect-coriqo')
+    await welcome.close()
+    expect(await popup.$eval('#coriqo-line', (n) => n.textContent)).toMatch(/Optional: link this computer/)
+    await opensLogin(popup, '#connect-coriqo')
+
     // A saved client id that is not valid must say so, not hang the sign-in.
     const bad = await browser.newPage()
     await worker.evaluate(() => chrome.storage.local.set({ coriqo_client_id: 'not valid' }))
@@ -131,7 +146,7 @@ describe.skipIf(SKIP)('extension sign-in and link (real browser)', () => {
     expect(await page.$eval('#tenants input:checked', (n) => n.value)).toBe('coriqo_msp_usa') // Coriqo named none; the pinned time zone is US
 
     await page.click('#connect')
-    await page.waitForFunction(() => /^Connected: device 1 of 1/.test(document.getElementById('connect-msg').textContent), { timeout: 30_000 })
+    await page.waitForFunction(() => /^Connected to Coriqo: Coriqo MSP, United States\. Device 1 of 1\./.test(document.getElementById('connect-msg').textContent), { timeout: 30_000 })
       .catch(async (e) => {
         throw new Error(`${e.message}; the page said: "${await page.$eval('#connect-msg', (n) => n.textContent)}"; Coriqo saw ${seen.join(', ')}`)
       })
