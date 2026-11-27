@@ -161,6 +161,18 @@ writable by group or other, at `/etc/coriqo/shield/enrol.json` (Linux),
 The server address must start with `https://`. The full list of locations is in
 `CONFIGURATION.md`, "Shield enrolment by device-management tool".
 
+### Finding computers that are not enrolled (`discover --send`)
+
+For machines that never enrol, `byoai-shield discover --send` uploads a name-only report of the AI tools found
+there. It needs the Endpoint discovery add-on and a **discovery key** (Coriqo, Settings, Endpoint discovery; shown
+once). The key is separate from the enrolment key, is accepted by the report upload only, and can be rotated or
+revoked there. Deploy it the same way as the enrolment key but under the names `DiscoveryKey` and `ServerUrl`
+(registry or managed preference) or the file `discover.json` with `{"key": ..., "server_url": ...}`, root-owned and
+not writable by group or other. Then schedule `byoai-shield discover --send --jitter-seconds 600` as the signed-in
+user, daily is plenty. Reports are unverified sightings: they show as ungoverned until someone matches them.
+Ready scripts: `examples/shield_discover_mdm/` (`jamf.sh`, `intune.ps1`, `linux-cron.md`). Exit codes are in
+`CONFIGURATION.md`.
+
 ## Limits and what to do when it fails
 
 `byoai-shield enrol` tries up to three times. It retries only a response of

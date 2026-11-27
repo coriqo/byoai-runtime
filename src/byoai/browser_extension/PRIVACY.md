@@ -251,8 +251,16 @@ run it. It reads the config files of known AI tools in your home folder and
 lists MCP server names, the program's file name, a URL's host and the names
 (not values) of environment variables and headers; installed AI apps; and local
 model runtimes. It records no file contents, command arguments, secrets or user
-name, makes no network call, and writes to the screen or a file you choose, not
-to Shield's sealed record.
+name, makes no network call by default, and writes to the screen or a file you
+choose, not to Shield's sealed record.
+
+Only if you (or your administrator's scheduled job) add `--send` does it upload
+that same report, and nothing else, to the Coriqo address your administrator
+configured (https only), using a discovery key that is accepted by that one
+upload route and nothing else. No computer name, user name or device
+identifier is added; Coriqo learns which workspace it came from from the key.
+The key is never printed or logged. Coriqo stores the report as an unverified
+sighting, not as evidence. Without `--send`, nothing leaves the computer.
 
 ## The record Shield keeps
 
