@@ -66,10 +66,12 @@ async function onOAuth() {
     const returned = await chrome.identity.launchWebAuthFlow({ url, interactive: true })
     const code = L.parseRedirect(returned, { redirectUri, state: pkce.state })
     const t = await L.exchangeCode({ fetchImpl: fetch, base, redirectUri, code, verifier: pkce.verifier })
-    const tenant = t.tenant_slug || t.tenants[0]
+    const list = t.tenants.length ? t.tenants : (t.tenant_slug ? [t.tenant_slug] : [])
+    const tenant = L.pickTenant(list, L.detectRegion({ language: navigator.language,
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }), t.tenant_slug)
     if (!tenant) throw new Error('no_tenant')
     await setSession({ access_token: t.access_token, email: t.email || '', tenant_slug: tenant,
-      tenants: t.tenants.length ? t.tenants : [tenant], at: Date.now(), via: 'oauth' })
+      tenants: list, at: Date.now(), via: 'oauth' })
     setMsg('request-msg', '')
     await showDone()
   } catch (err) {
@@ -88,12 +90,29 @@ async function onOAuth() {
 async function showDone() {
   const session = await getSession()
   el('done-email').textContent = session.email || ''
-  el('done-workspace').textContent = session.tenant_slug
-  const sel = el('tenant')
+  const L = globalThis.CoriqoLink
   const tenants = session.tenants || []
-  sel.replaceChildren(...tenants.map((t) => Object.assign(document.createElement('option'),
-    { value: t, textContent: t, selected: t === session.tenant_slug })))
-  sel.hidden = el('tenant-label').hidden = tenants.length < 2
+  const region = L.detectRegion({ language: navigator.language, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone })
+  const picked = L.pickTenant(tenants, region, session.tenant_slug)
+  const wrap = el('tenants')
+  wrap.replaceChildren(...tenants.map((slug) => {
+    const lab = L.tenantLabel(slug)
+    const row = document.createElement('label')
+    row.className = 'choice'
+    const radio = Object.assign(document.createElement('input'), { type: 'radio', name: 'tenant', value: slug, checked: slug === picked })
+    const text = document.createElement('span')
+    const name = Object.assign(document.createElement('span'), { className: 'name', textContent: lab.name })
+    text.append(name)
+    if (lab.region) text.append(Object.assign(document.createElement('span'), { className: 'region', textContent: lab.region }))
+    row.append(radio, text)
+    if (lab.regionKey && lab.regionKey === region && tenants.length > 1) {
+      row.append(Object.assign(document.createElement('span'), { className: 'tag', textContent: 'Near you' }))
+    }
+    return row
+  }))
+  el('tenant-field').hidden = tenants.length < 2
+  const shown = L.tenantLabel(picked || session.tenant_slug)
+  el('done-workspace').textContent = shown.region ? `${shown.name}, ${shown.region}` : shown.name
   // OAuth sessions can connect a computer; a magic-link session has no
   // device-enrolment right, so the card is not offered.
   el('connect-card').hidden = session.via !== 'oauth'
@@ -125,7 +144,7 @@ async function onConnect() {
 
     const session = await getSession()
     const base = await getApiBase()
-    const tenant = el('tenant').hidden ? session.tenant_slug : el('tenant').value
+    const tenant = document.querySelector('#tenants input[name=tenant]:checked')?.value || session.tenant_slug
     setMsg('connect-msg', 'Asking Coriqo…')
     const grant = await L.requestEnrolGrant({
       fetchImpl: fetch, base, accessToken: session.access_token, tenant,
