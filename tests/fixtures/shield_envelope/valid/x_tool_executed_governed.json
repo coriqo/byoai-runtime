@@ -1,0 +1,14 @@
+{
+  "ai_event_type": "ai.tool.executed",
+  "collector": "governed_tool",
+  "envelope_version": 1,
+  "evidence_level": "verified",
+  "kind": "tool_result",
+  "outcome": "not_applicable",
+  "policy_action": "none",
+  "tool": {
+    "execution_source": "governed_tool",
+    "name": "refund",
+    "status": "executed"
+  }
+}

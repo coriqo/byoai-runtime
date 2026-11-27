@@ -1,0 +1,10 @@
+{
+  "ai_event_type": "ai.collector.health",
+  "app": "gemini",
+  "collector": "browser_extension",
+  "envelope_version": 1,
+  "evidence_level": "observed",
+  "kind": "browser.health.core_missing",
+  "outcome": "not_applicable",
+  "policy_action": "none"
+}

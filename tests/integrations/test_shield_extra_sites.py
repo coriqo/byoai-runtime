@@ -165,3 +165,20 @@ def test_sign_in_is_offered_but_never_started_by_the_extension_itself():
     notice = (EXT / "PRIVACY.md").read_text()
     assert "There is no account and no sign-in" not in notice
     assert "If you sign in to Coriqo" in notice and "optional" in notice
+
+
+def test_skip_never_calls_coriqo_or_stores_a_token():
+    js = (EXT / "login.js").read_text()
+    body = js[js.index("async function onSkip"):js.index("async function init")]
+    for word in ("fetch(", "access_token", "SESSION_KEY", "LINK_KEY", "getApiBase", "launchWebAuthFlow"):
+        assert word not in body, word
+    assert "Escape" in js and 'id="skip"' in (EXT / "login.html").read_text()
+
+
+def test_skip_is_ignored_while_a_sign_in_is_under_way_and_any_sign_in_clears_it():
+    js = (EXT / "login.js").read_text()
+    body = js[js.index("async function onSkip"):js.index("async function init")]
+    assert "if (busy) return" in body
+    for handler in ("onOAuth", "onConnect", "onSend", "onConsume"):
+        assert f"working({handler})" in js, handler
+    assert "remove(SKIP_KEY" in js[js.index("function setSession"):js.index("function clearSession")]

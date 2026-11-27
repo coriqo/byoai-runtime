@@ -1,0 +1,16 @@
+{
+  "ai_event_type": "ai.tool.result",
+  "call_id": "0123456789ac",
+  "collector": "mcp_interposer",
+  "envelope_version": 1,
+  "error_type": "mandate_blocked",
+  "evidence_level": "observed",
+  "kind": "tool.error",
+  "outcome": "denied",
+  "policy_action": "block",
+  "tool": {
+    "call_id": "0123456789ac",
+    "name": "delete_file",
+    "status": "result"
+  }
+}

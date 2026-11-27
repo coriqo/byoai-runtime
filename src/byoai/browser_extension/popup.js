@@ -112,7 +112,7 @@ async function coriqoPolicy() {
 // Sign-in is optional and separate from capture; the popup only says where it stands and opens the page.
 async function renderCoriqo() {
   try {
-    const s = await chrome.storage.local.get(['coriqo_session', 'coriqo_link'])
+    const s = await chrome.storage.local.get(['coriqo_session', 'coriqo_link', 'coriqo_skipped'])
     const L = globalThis.CoriqoLink
     const btn = el('connect-coriqo')
     const line = el('coriqo-line')
@@ -133,6 +133,9 @@ async function renderCoriqo() {
     } else if (s.coriqo_session) {
       line.textContent = `Signed in${s.coriqo_session.email ? ` as ${s.coriqo_session.email}` : ''}. This computer isn't connected yet.`
       btn.textContent = 'Connect this computer'
+    } else if (s.coriqo_skipped) {
+      line.textContent = 'Not signed in. Shield works on this computer without it.'
+      btn.textContent = 'Sign in'
     } else {
       line.textContent = 'Optional: link this computer to your Coriqo account.'
       btn.textContent = 'Connect to Coriqo'

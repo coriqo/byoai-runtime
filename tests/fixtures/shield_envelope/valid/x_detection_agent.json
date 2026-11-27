@@ -1,0 +1,20 @@
+{
+  "agent": {
+    "identification": "inferred",
+    "name": "cursor-agent",
+    "protocol": "mcp"
+  },
+  "ai_event_type": "ai.model.response",
+  "app": "claude",
+  "collector": "browser_extension",
+  "detection": {
+    "confidence": "possible",
+    "rule_id": "agent.ua.cursor",
+    "rule_version": "1"
+  },
+  "envelope_version": 1,
+  "evidence_level": "observed",
+  "kind": "browser.chat.reply",
+  "outcome": "not_applicable",
+  "policy_action": "none"
+}

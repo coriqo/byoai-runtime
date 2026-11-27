@@ -210,4 +210,52 @@ describe.skipIf(SKIP)('extension sign-in and link (real browser)', () => {
     expect(await worker.evaluate(() => chrome.storage.local.get('coriqo_session').then((v) => v.coriqo_session ?? null))).toBeNull()
     await page.close()
   })
+  it('skipping sign-in sends nothing, stores no token, and leaves a quiet Sign in entry', { timeout: 90_000 }, async () => {
+    const seen = []
+    const stub = stubCoriqo(seen, [])
+    await new Promise((r) => stub.listen(0, '127.0.0.1', r))
+    const skipBrowser = await puppeteer.launch({
+      executablePath: chromiumPath(), headless: false,
+      args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
+        '--user-data-dir=' + path.join(os.tmpdir(), `skip-profile-${Date.now()}`), '--no-first-run'],
+    })
+    try {
+      const worker = await (await skipBrowser.waitForTarget((t) => t.type() === 'service_worker', { timeout: 15_000 })).worker()
+      await worker.evaluate((b) => chrome.storage.local.set({ coriqo_api_base: b }), `http://127.0.0.1:${stub.address().port}`)
+      const stored = () => worker.evaluate(() => chrome.storage.local.get(['coriqo_session', 'coriqo_link', 'coriqo_skipped']))
+
+      // Esc skips
+      const page = await skipBrowser.newPage()
+      await page.goto(`chrome-extension://${EXT_ID}/login.html`)
+      await page.bringToFront()
+      await page.waitForSelector('#skip')
+      page.keyboard.press('Escape').catch(() => {}) // the page closes itself
+      await until(async () => (await stored()).coriqo_skipped, 10_000, 'the skip to be remembered')
+      let v = await stored()
+      expect(v.coriqo_session).toBeUndefined()
+      expect(v.coriqo_link).toBeUndefined()
+      expect(seen).toEqual([]) // no call to Coriqo of any kind
+
+      // the button skips too (the page may close itself)
+      await worker.evaluate(() => chrome.storage.local.remove('coriqo_skipped'))
+      const page2 = await skipBrowser.newPage()
+      await page2.goto(`chrome-extension://${EXT_ID}/login.html`)
+      await page2.bringToFront()
+      page2.click('#skip').catch(() => {})
+      await until(async () => (await stored()).coriqo_skipped, 10_000, 'the Skip button to be remembered')
+      expect(seen).toEqual([])
+
+      // the popup now offers a quiet Sign in, never an automatic one
+      const popup = await skipBrowser.newPage()
+      await popup.goto(`chrome-extension://${EXT_ID}/popup.html`)
+      await popup.waitForFunction(() => document.getElementById('connect-coriqo').textContent === 'Sign in', { timeout: 10_000, polling: 100 })
+      expect(await popup.$eval('#coriqo-line', (n) => n.textContent)).toMatch(/Not signed in/)
+      v = await stored()
+      expect(v.coriqo_session).toBeUndefined()
+      expect(seen).toEqual([])
+    } finally {
+      await skipBrowser.close()
+      stub.close()
+    }
+  })
 })

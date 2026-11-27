@@ -1,0 +1,13 @@
+{
+  "ai_event_type": "ai.model.response",
+  "app": "claude",
+  "collector": "browser_extension",
+  "envelope_version": 1,
+  "evidence_level": "observed",
+  "kind": "browser.chat.status",
+  "ok": false,
+  "outcome": "failed",
+  "policy_action": "none",
+  "status": 429,
+  "wall_clock": "2026-11-27 10:00:03"
+}

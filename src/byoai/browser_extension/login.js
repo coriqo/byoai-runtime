@@ -69,14 +69,15 @@ function getSession() {
 }
 
 function setSession(session) {
-  return new Promise((resolve) => chrome.storage.local.set({ [SESSION_KEY]: session }, resolve))
+  return new Promise((resolve) => chrome.storage.local.set({ [SESSION_KEY]: session }, () => chrome.storage.local.remove(SKIP_KEY, resolve)))
 }
 
 function clearSession() {
-  return new Promise((resolve) => chrome.storage.local.remove(SESSION_KEY, resolve))
+  return new Promise((resolve) => chrome.storage.local.remove([SESSION_KEY, SKIP_KEY], resolve))
 }
 
 const LINK_KEY = 'coriqo_link'
+const SKIP_KEY = 'coriqo_skipped'
 const PIN_KEY = 'pinned_shield' // background.js pins the paired Shield's key here
 
 function sendBg(msg) {
@@ -85,6 +86,7 @@ function sendBg(msg) {
 
 async function onOAuth() {
   if (!(await getPolicy()).enabled) return setMsg('request-msg', OFF_TEXT, 'bad')
+  chrome.storage.local.remove(SKIP_KEY)
   el('oauth-start').disabled = true
   setMsg('request-msg', 'Opening Coriqo…')
   try {
@@ -267,9 +269,32 @@ function extractToken(pasted) {
 let pendingEmail = ''
 let pendingWorkspace = ''
 
+// True while a sign-in, a link or an email request is under way: Skip and Esc then do nothing,
+// so a skip can never close the page in the middle of one.
+let busy = false
+const working = (fn) => async (...args) => {
+  busy = true
+  try { return await fn(...args) } finally { busy = false }
+}
+
+// Skip for now: remember the choice and close. Nothing is sent anywhere, no token is
+// stored, and no enrolment is attempted; the popup keeps a quiet Sign in entry.
+async function onSkip() {
+  if (busy) return
+  await new Promise((resolve) => chrome.storage.local.set({ [SKIP_KEY]: { at: Date.now() } }, resolve))
+  setMsg('request-msg', 'Skipped. Shield keeps working on this computer. You can sign in later from the popup.', 'ok')
+  el('skip').disabled = true
+  try { window.close() } catch { /* a tab opened by hand stays; the message above is the answer */ }
+}
+
 async function init() {
-  el('oauth-start').addEventListener('click', onOAuth)
-  el('connect').addEventListener('click', onConnect)
+  el('skip').addEventListener('click', onSkip)
+  document.addEventListener('keydown', (e) => {
+    // Esc skips, but never while a sign-in is under way or on the later steps.
+    if (e.key === 'Escape' && el('step-request').classList.contains('active') && !el('skip').disabled) onSkip()
+  })
+  el('oauth-start').addEventListener('click', working(onOAuth))
+  el('connect').addEventListener('click', working(onConnect))
 
   el('email').addEventListener('input', updateSendEnabled)
   el('workspace').addEventListener('input', updateSendEnabled)
@@ -277,8 +302,8 @@ async function init() {
     el('consume').disabled = el('token').value.trim().length === 0
   })
 
-  el('send').addEventListener('click', onSend)
-  el('consume').addEventListener('click', onConsume)
+  el('send').addEventListener('click', working(onSend))
+  el('consume').addEventListener('click', working(onConsume))
   el('back').addEventListener('click', () => {
     setMsg('consume-msg', '')
     showStep('request')

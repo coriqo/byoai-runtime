@@ -1,0 +1,10 @@
+{
+  "ai_event_type": "ai.mcp.configured",
+  "app": "cursor",
+  "collector": "scanner",
+  "envelope_version": 1,
+  "evidence_level": "unattested",
+  "kind": "scanner.mcp_config",
+  "outcome": "not_applicable",
+  "policy_action": "none"
+}

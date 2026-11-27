@@ -11,6 +11,8 @@ When you connect this computer, Coriqo may also ask Shield to sign a one-time co
 It does nothing until you agree on the welcome page it opens when you install
 it, and you can turn it off again at any time from its popup.
 
+The sign-in page has a *Skip for now* button (also Esc). Skipping sends nothing, stores no token and enrols nothing; it only remembers, on this computer, that you skipped, so the popup shows a quiet *Sign in* entry instead of the usual offer. Signing in later clears that note.
+
 ## What it does
 
 When you send a message on claude.ai, chatgpt.com (and chat.openai.com),
@@ -241,6 +243,16 @@ computer is connected, the extension deletes the sign-in token and keeps only
 your email and workspace name for display; an expired OAuth sign-in is deleted too (a magic-link sign-in has no expiry the extension can read; it is removed on sign-out).
 Signing out removes the saved token from the extension; it does not remove this computer from
 your Coriqo workspace, which your Coriqo admin does.
+
+## The optional `discover` command
+
+`byoai-shield discover` is separate from the extension and runs only when you
+run it. It reads the config files of known AI tools in your home folder and
+lists MCP server names, the program's file name, a URL's host and the names
+(not values) of environment variables and headers; installed AI apps; and local
+model runtimes. It records no file contents, command arguments, secrets or user
+name, makes no network call, and writes to the screen or a file you choose, not
+to Shield's sealed record.
 
 ## The record Shield keeps
 

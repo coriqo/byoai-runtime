@@ -1,0 +1,13 @@
+{
+  "ai_event_type": "ai.model.requested",
+  "app": "claude",
+  "collector": "desktop_proxy",
+  "envelope_version": 1,
+  "evidence_level": "observed",
+  "kind": "desktop.chat.request",
+  "model": {
+    "identification": "unknown"
+  },
+  "outcome": "sent",
+  "policy_action": "none"
+}

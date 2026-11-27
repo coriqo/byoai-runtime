@@ -3100,6 +3100,11 @@ def main() -> None:  # console-script entrypoint: byoai-shield
         from byoai.integrations import shield_enrol
         raise SystemExit(shield_enrol.run_enrol(_sys.argv[2:]))
 
+    if len(_sys.argv) > 1 and _sys.argv[1] == "discover":
+        # `byoai-shield discover`: read-only list of AI tooling on this computer, then exit.
+        from byoai.integrations import shield_discover
+        raise SystemExit(shield_discover.run_discover(_sys.argv[2:]))
+
     ap = argparse.ArgumentParser(prog="byoai-shield", description=__doc__)
     ap.add_argument("ledger", nargs="?",
                     default=str(DATA_DIR / "captures.jsonl"),

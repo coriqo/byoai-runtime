@@ -1,0 +1,13 @@
+{
+  "ai_event_type": "ai.tool.result",
+  "collector": "recorder",
+  "envelope_version": 1,
+  "evidence_level": "observed",
+  "kind": "tool_result",
+  "outcome": "not_applicable",
+  "policy_action": "none",
+  "tool": {
+    "name": "search",
+    "status": "result"
+  }
+}

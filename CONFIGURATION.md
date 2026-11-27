@@ -186,6 +186,27 @@ With the guard on, every body-carrying request is checked, not only chat paths: 
 
 A blocked request gets `403` with `type: coriqo_shield_blocked`, `rules` and `labels` (Anthropic: `{"type":"error","error":{...}}`; OpenAI: `{"error":{"message","type","code":"shield_blocked",...}}`). The secret tier blocks by default, so a policy with `mode: observe` never stops anything. Recorder rows are kind `shield_guard`: `guard_mode`, `provider`, `path`, `action`, `forwarded`, `redacted`, `rules`, `chars`, `text_hmac`, `rules_version`. The Python middleware is `byoai.shield_guard.fastapi.ShieldGuardMiddleware(app, *, paths=, policy=, mode=, on_warn=, max_body=, key_path=, app_name=)`; a body over `max_body` (8 MB) is refused.
 
+### Finding AI tooling on a computer (`byoai-shield discover`)
+
+```bash
+byoai-shield discover --dry-run          # list the config files it would read, then stop
+byoai-shield discover                    # JSON on stdout
+byoai-shield discover --out found.json   # written with mode 0600
+byoai-shield discover --no-probe         # skip the loopback check of default runtime ports
+```
+
+Read-only and offline. It lists MCP servers configured for Claude Desktop, Cursor, VS Code, Claude Code and
+Windsurf, installed AI desktop apps, and local model runtimes (Ollama, LM Studio, llama.cpp, Jan: whether
+something listens on the default port on `127.0.0.1`, and the names of installed models). For an MCP server it
+records the name, the transport, the program's file name (no arguments), the host of a URL (no path, query or
+user info) and the *names* of environment variables and headers, never their values. A config that is larger
+than 1 MiB, not valid JSON, or a symlink that leaves the home directory is skipped and listed under `skipped`.
+Home-directory paths are written as `~/...`. The detection list is `src/byoai/integrations/shield_discovery_signatures.json`.
+
+The output is marked `"attestation": "unattested"`: it is a claim from an unauthenticated scan, not evidence. It is
+never written to Shield's signed ledger and the command makes no network call. Nothing leaves the computer unless
+you or your admin's tool moves the file.
+
 ### Shield enrolment by device-management tool (`byoai-shield enrol`)
 
 `byoai-shield enrol` enrols this computer without opening the Shield window, so
@@ -2349,6 +2370,8 @@ The Shield-side gate `BYOAI_CORIQO_LINK_HOSTS` still applies on top of these.
    `POST /v1/enroll`. A Mac that is already enrolled answers 409 and keeps its
    identity; changing it goes through Shield's settings or `byoai-shield enrol --force`. The device key never leaves the Shield. Counting the same
    device twice is Coriqo's to avoid (the key is stable).
+
+The login page also has *Skip for now* (and Esc): it stores only `coriqo_skipped` (a timestamp, local), makes no request and keeps no token or enrolment; the popup then shows *Sign in* with "Not signed in" until a sign-in starts.
 
 When `tenants` has more than one slug the login page shows a workspace picker.
 A slug is read as `<who>_<region>` (`coriqo_msp_usa` shows as "Coriqo MSP,
