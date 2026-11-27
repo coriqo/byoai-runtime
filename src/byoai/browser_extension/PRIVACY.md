@@ -6,6 +6,8 @@ replaces personal details in the message box before you send, when your
 Shield's policy says to; on claude.ai and chatgpt.com it also does so in the
 network request itself. No account is needed. Signing in to Coriqo is optional,
 your choice, and separate from all of this (see "If you sign in to Coriqo").
+
+When you connect this computer, Coriqo may also ask Shield to sign a one-time code with this computer's device key, to show the key really is on this computer. The signature covers only that code, the workspace name and the public key; nothing else is signed, and the private key never leaves Shield.
 It does nothing until you agree on the welcome page it opens when you install
 it, and you can turn it off again at any time from its popup.
 

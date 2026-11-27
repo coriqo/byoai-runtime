@@ -162,7 +162,7 @@
   // Ask Coriqo for a one-time enrolment token for this device. A refusal for
   // the device count is a normal answer, not an error: it comes back as
   // `{ ok: false, reason: 'device_limit_reached', ... }` and is never retried.
-  async function requestEnrolGrant({ fetchImpl, base, accessToken, tenant, device }) {
+  async function requestEnrolGrant({ fetchImpl, base, accessToken, tenant, device, proof }) {
     const res = await fetchImpl(new URL('/v1/enroll/self', checkBase(base)).toString(), {
       method: 'POST',
       headers: {
@@ -175,8 +175,15 @@
         device_label: String(device.label || '').slice(0, 80),
         platform: String(device.platform || '').slice(0, 40),
         extension_version: String(device.extensionVersion || '').slice(0, 20),
+        ...(proof ? { device_nonce: proof.nonce, device_proof: proof.signature } : {}),
       }),
     })
+    if (res.status === 400) {
+      let b = {}
+      try { b = await res.json() } catch { /* generic below */ }
+      const d = b?.detail && typeof b.detail === 'object' ? b.detail : b
+      if (d?.error === 'device_proof_invalid' || d?.error === 'device_proof_required') return { ok: false, reason: d.error }
+    }
     if (res.status === 401 || res.status === 403) return { ok: false, reason: 'signed_out' }
     if (res.status === 402 || res.status === 409) {
       let body = {}
@@ -204,6 +211,37 @@
       deviceLimit: Number.isInteger(body.device_limit) ? body.device_limit : null,
       billingState: typeof body.billing_state === 'string' ? body.billing_state : null,
     }
+  }
+
+  // Coriqo's one-time nonce for the device proof. Older servers do not have it:
+  // 404/405 means "no proof asked for", anything else wrong is a refusal to continue.
+  async function requestProofNonce({ fetchImpl, base, accessToken, tenant }) {
+    const res = await fetchImpl(new URL('/v1/enroll/self/nonce', checkBase(base)).toString(), {
+      method: 'POST', headers: { authorization: `Bearer ${accessToken}`, 'x-tenant-slug': tenant },
+    })
+    if (res.status === 404 || res.status === 405) return null
+    if (res.status === 401 || res.status === 403) throw new Error('signed_out')
+    if (!res.ok) throw new Error(`http:${res.status}`)
+    const b = await res.json()
+    if (typeof b?.nonce !== 'string' || !b.nonce) throw new Error('bad_nonce')
+    return b.nonce
+  }
+
+  // The local Shield signs the nonce with the device key (only the exact bytes in
+  // LINK_PROOF_PREFIX). The key it answers with must be the one this extension paired
+  // with, so a different program on the port cannot supply a proof for another key.
+  async function requestDeviceProof({ fetchImpl, endpoint, nonce, tenant, pinned }) {
+    const res = await fetchImpl(`${shieldBase(endpoint)}/api/coriqo/proof`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ nonce, tenant_slug: tenant }),
+    })
+    let b = {}
+    try { b = await res.json() } catch { /* generic below */ }
+    if (!res.ok) throw new Error(`shield:${typeof b.error === 'string' ? b.error : res.status}`)
+    const hex = String(b.public_key_hex || '')
+    const want = Array.from(b64bytes(pinned), (x) => x.toString(16).padStart(2, '0')).join('')
+    if (hex !== want || typeof b.signature !== 'string') throw new Error('key_mismatch')
+    return { nonce, signature: b.signature }
   }
 
   const shieldBase = (endpoint) => String(endpoint).replace(/\/api\/browser$/, '').replace(/\/$/, '')
@@ -307,7 +345,7 @@
   }
 
   const api = { CLIENT_ID, DEFAULT_BASE, linkPolicy, resolveBase, sessionExpired, exactHttpsOrigin, linkSummary, checkClientId, tenantLabel, detectRegion, pickTenant, checkBase, makePkce, buildAuthorizeUrl, parseRedirect, exchangeCode,
-    requestEnrolGrant, linkLocalShield, verifiedShieldKey }
+    requestEnrolGrant, requestProofNonce, requestDeviceProof, linkLocalShield, verifiedShieldKey }
   root.CoriqoLink = api
   if (typeof module !== 'undefined' && module.exports) module.exports = api
 })(typeof globalThis !== 'undefined' ? globalThis : this)

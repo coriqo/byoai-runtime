@@ -186,16 +186,26 @@ async function onConnect() {
     const base = await getApiBase()
     const tenant = document.querySelector('#tenants input[name=tenant]:checked')?.value || session.tenant_slug
     setMsg('connect-msg', 'Asking Coriqo…')
-    const grant = await L.requestEnrolGrant({
-      fetchImpl: fetch, base, accessToken: session.access_token, tenant,
-      device: { publicKey: pinned, label: `${navigator.platform || 'computer'}`, platform: navigator.platform,
-        extensionVersion: chrome.runtime.getManifest().version },
-    })
+    const device = { publicKey: pinned, label: `${navigator.platform || 'computer'}`, platform: navigator.platform,
+      extensionVersion: chrome.runtime.getManifest().version }
+    // Prove the Shield holds the key: Coriqo gives a one-time nonce, the Shield signs it. A server
+    // that does not ask for a proof (older) is asked without one. An expired or used nonce is
+    // fetched again once.
+    let grant
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const nonce = await L.requestProofNonce({ fetchImpl: fetch, base, accessToken: session.access_token, tenant })
+      const proof = nonce ? await L.requestDeviceProof({ fetchImpl: fetch, endpoint: check.endpoint, nonce, tenant, pinned }) : null
+      grant = await L.requestEnrolGrant({ fetchImpl: fetch, base, accessToken: session.access_token, tenant, device, proof })
+      if (grant.reason !== 'device_proof_invalid' || attempt === 1) break
+    }
     if (!grant.ok) {
       if (grant.reason === 'device_limit_reached') {
         const of = grant.limit != null ? ` (${grant.count ?? grant.limit} of ${grant.limit} in use)` : ''
         if (grant.upgradeUrl) { el('upgrade').href = grant.upgradeUrl; el('limit-help').hidden = false }
         return fail(`Your plan's device limit is reached${of}. Nothing was connected.`)
+      }
+      if (grant.reason === 'device_proof_invalid' || grant.reason === 'device_proof_required') {
+        return fail("Coriqo couldn't confirm this computer's key. Reopen the popup, pair again, and retry. Nothing was connected.")
       }
       if (grant.reason === 'signed_out') {
         await clearSession()
@@ -215,6 +225,12 @@ async function onConnect() {
     btn.disabled = false
   } catch (err) {
     const m = err?.message || ''
+    if (m === 'signed_out') { // an expired token: forget it, and send the person back to sign in
+      await clearSession()
+      btn.disabled = false
+      showStep('request')
+      return setMsg('request-msg', 'Your sign-in expired. Sign in again.', 'bad')
+    }
     fail(m === 'bad_base' ? BAD_BASE_TEXT
       : m.startsWith('shield:') ? m.slice(7) : "Couldn't connect. Check your connection and try again.")
   }
