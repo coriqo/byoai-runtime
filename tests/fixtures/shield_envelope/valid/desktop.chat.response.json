@@ -9,9 +9,7 @@
   "kind": "desktop.chat.response",
   "model": {
     "identification": "inferred",
-    "name": "deepseek-chat",
-    "provider": "deepseek",
-    "source": "host_inference"
+    "provider": "deepseek"
   },
   "outcome": "answered",
   "policy_action": "none",

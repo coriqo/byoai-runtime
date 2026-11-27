@@ -115,8 +115,15 @@
       "description": "What happened to the thing the row is about."
     },
     "app": {
-      "type": "string",
-      "pattern": "^[a-z0-9_]{1,40}$"
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[a-z0-9_]{1,40}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "model": {
       "$ref": "#/$defs/model"
@@ -131,29 +138,218 @@
       "$ref": "#/$defs/detection"
     }
   },
-  "propertyNames": {
-    "not": {
-      "enum": [
-        "text",
-        "message",
-        "messages",
-        "content",
-        "prompt",
-        "reply",
-        "response_text",
-        "completion",
-        "body",
-        "input",
-        "output",
-        "args",
-        "arguments",
-        "arguments_text",
-        "result_text"
-      ]
-    }
-  },
-  "additionalProperties": true,
   "allOf": [
+    {
+      "$ref": "#/$defs/legacy_fields"
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "pattern": "^browser\\."
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "propertyNames": {
+          "enum": [
+            "kind",
+            "envelope_version",
+            "ai_event_type",
+            "evidence_level",
+            "collector",
+            "policy_action",
+            "outcome",
+            "app",
+            "model",
+            "tool",
+            "agent",
+            "detection",
+            "wall_clock",
+            "chars",
+            "wire",
+            "sent_at",
+            "row_id",
+            "send_id",
+            "gate_id",
+            "stage",
+            "reason",
+            "flags",
+            "redactions",
+            "verdict",
+            "tools",
+            "sources",
+            "mime",
+            "bytes",
+            "sha256",
+            "name_hash",
+            "scanned",
+            "rules_version",
+            "path",
+            "ok",
+            "status"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "pattern": "^desktop\\."
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "propertyNames": {
+          "enum": [
+            "kind",
+            "envelope_version",
+            "ai_event_type",
+            "evidence_level",
+            "collector",
+            "policy_action",
+            "outcome",
+            "app",
+            "model",
+            "tool",
+            "agent",
+            "detection",
+            "wall_clock",
+            "target",
+            "action",
+            "not_covered",
+            "text_hmac",
+            "chars",
+            "flags",
+            "redactions",
+            "verdict",
+            "status",
+            "path",
+            "bytes",
+            "sha256",
+            "scanned",
+            "mime",
+            "rules_version",
+            "preview",
+            "name_hash"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "tool.call",
+              "tool.result",
+              "tool.error"
+            ]
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "propertyNames": {
+          "enum": [
+            "kind",
+            "envelope_version",
+            "ai_event_type",
+            "evidence_level",
+            "collector",
+            "policy_action",
+            "outcome",
+            "app",
+            "model",
+            "tool",
+            "agent",
+            "detection",
+            "wall_clock",
+            "call_id",
+            "chars",
+            "payload_hash",
+            "mandate_verdict",
+            "error_type",
+            "identity"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "tool_use",
+              "tool_result",
+              "mandate_verdict"
+            ]
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "propertyNames": {
+          "enum": [
+            "kind",
+            "envelope_version",
+            "ai_event_type",
+            "evidence_level",
+            "collector",
+            "policy_action",
+            "outcome",
+            "app",
+            "model",
+            "tool",
+            "agent",
+            "detection",
+            "wall_clock"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "pattern": "^scanner\\."
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "propertyNames": {
+          "enum": [
+            "kind",
+            "envelope_version",
+            "ai_event_type",
+            "evidence_level",
+            "collector",
+            "policy_action",
+            "outcome",
+            "app",
+            "model",
+            "tool",
+            "agent",
+            "detection",
+            "wall_clock"
+          ]
+        }
+      }
+    },
     {
       "if": {
         "properties": {
@@ -924,6 +1120,156 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "tool": {
+            "properties": {
+              "status": {
+                "const": "executed"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          }
+        },
+        "required": [
+          "tool"
+        ]
+      },
+      "then": {
+        "properties": {
+          "ai_event_type": {
+            "const": "ai.tool.executed"
+          },
+          "collector": {
+            "const": "governed_tool"
+          }
+        },
+        "required": [
+          "ai_event_type",
+          "collector"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "tool": {
+            "properties": {
+              "status": {
+                "const": "requested"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          }
+        },
+        "required": [
+          "tool"
+        ]
+      },
+      "then": {
+        "properties": {
+          "evidence_level": {
+            "const": "observed_requested"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "evidence_level": {
+            "const": "verified"
+          }
+        },
+        "required": [
+          "evidence_level"
+        ]
+      },
+      "then": {
+        "properties": {
+          "collector": {
+            "const": "governed_tool"
+          },
+          "ai_event_type": {
+            "const": "ai.tool.executed"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "tools": {
+            "minItems": 1
+          }
+        },
+        "required": [
+          "tools"
+        ]
+      },
+      "then": {
+        "properties": {
+          "ai_event_type": {
+            "const": "ai.tool_call.requested"
+          },
+          "evidence_level": {
+            "const": "observed_requested"
+          }
+        },
+        "required": [
+          "ai_event_type",
+          "evidence_level"
+        ]
+      }
+    },
+    {
+      "if": {
+        "anyOf": [
+          {
+            "properties": {
+              "collector": {
+                "const": "scanner"
+              }
+            },
+            "required": [
+              "collector"
+            ]
+          },
+          {
+            "properties": {
+              "evidence_level": {
+                "enum": [
+                  "unattested",
+                  "inferred"
+                ]
+              }
+            },
+            "required": [
+              "evidence_level"
+            ]
+          }
+        ]
+      },
+      "then": {
+        "properties": {
+          "detection": {
+            "properties": {
+              "confidence": {
+                "enum": [
+                  "probable",
+                  "possible"
+                ]
+              }
+            }
+          }
+        }
+      }
     }
   ],
   "$defs": {
@@ -944,7 +1290,7 @@
         "name": {
           "type": "string",
           "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/@+-]{0,127}$",
-          "description": "Only present when identification is observed or inferred. Never invented."
+          "description": "Only present when identification is observed. Never invented, never inferred."
         },
         "provider": {
           "type": "string",
@@ -954,10 +1300,9 @@
           "enum": [
             "request_field",
             "response_field",
-            "event_field",
-            "host_inference"
+            "event_field"
           ],
-          "description": "Where the name came from. Required with a name."
+          "description": "Where the name came from. Required with a name. There is no host-based source: a host never yields a model name."
         }
       },
       "allOf": [
@@ -993,10 +1338,7 @@
           "if": {
             "properties": {
               "identification": {
-                "enum": [
-                  "observed",
-                  "inferred"
-                ]
+                "const": "observed"
               }
             },
             "required": [
@@ -1014,29 +1356,6 @@
           "if": {
             "properties": {
               "identification": {
-                "const": "observed"
-              }
-            },
-            "required": [
-              "identification"
-            ]
-          },
-          "then": {
-            "properties": {
-              "source": {
-                "enum": [
-                  "request_field",
-                  "response_field",
-                  "event_field"
-                ]
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "identification": {
                 "const": "inferred"
               }
             },
@@ -1045,10 +1364,22 @@
             ]
           },
           "then": {
-            "properties": {
-              "source": {
-                "const": "host_inference"
-              }
+            "required": [
+              "provider"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "name"
+                  ]
+                },
+                {
+                  "required": [
+                    "source"
+                  ]
+                }
+              ]
             }
           }
         }
@@ -1151,7 +1482,8 @@
         },
         "name": {
           "type": "string",
-          "pattern": "^[A-Za-z0-9_. -]{1,64}$"
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+          "description": "A product or agent label with no spaces; never a person's name or free text. Absent when identification is unknown."
         },
         "protocol": {
           "enum": [
@@ -1161,7 +1493,37 @@
             "other"
           ]
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "identification": {
+                "const": "unknown"
+              }
+            },
+            "required": [
+              "identification"
+            ]
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "id"
+                  ]
+                },
+                {
+                  "required": [
+                    "name"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
     },
     "detection": {
       "type": "object",
@@ -1188,6 +1550,207 @@
           ]
         }
       }
+    },
+    "legacy_fields": {
+      "description": "Closed allowlist of the pre-existing row fields (browser: clean_browser_row in integrations/shield.py; desktop: shield_proxy.desktop._log callers and inspect_text; interposer: ReceiptSink.note). Every string is bounded. A name not listed here is not allowed on any row.",
+      "type": "object",
+      "properties": {
+        "wall_clock": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}$",
+          "maxLength": 19
+        },
+        "chars": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9999999
+        },
+        "wire": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "sent_at": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "row_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_-]{8,64}$"
+        },
+        "send_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9-]{8,64}$"
+        },
+        "gate_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9-]{8,64}$"
+        },
+        "stage": {
+          "enum": [
+            "input",
+            "network"
+          ]
+        },
+        "reason": {
+          "enum": [
+            "rewrite_failed",
+            "send_retry_needed"
+          ]
+        },
+        "flags": {
+          "type": "array",
+          "maxItems": 60,
+          "items": {
+            "type": "string",
+            "pattern": "^(secret|pii|flag):[a-z0-9_]{1,40}$"
+          }
+        },
+        "redactions": {
+          "type": "array",
+          "maxItems": 60,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9_]{1,40}$"
+          }
+        },
+        "verdict": {
+          "type": "string",
+          "maxLength": 40,
+          "pattern": "^(observe|redact|block|blocked|allowed|cancelled|redacted\\(\\d{1,2}\\)|warned(→|->)(sent|redacted|cancelled|uploaded|removed))$"
+        },
+        "tools": {
+          "type": "array",
+          "maxItems": 12,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.:-]{1,48}$"
+          }
+        },
+        "sources": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        },
+        "mime": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9!#$&^_.+-]{1,60}/[A-Za-z0-9!#$&^_.+-]{1,80}$",
+              "maxLength": 141
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1099511627775
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "name_hash": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^hmac-sha256:[0-9a-f]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scanned": {
+          "type": "boolean"
+        },
+        "rules_version": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{12}$"
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9/_.:?-]{0,120}$",
+          "maxLength": 120
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "status": {
+          "type": "integer",
+          "minimum": -1,
+          "maximum": 999
+        },
+        "target": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._:-]{0,253}$",
+          "maxLength": 253
+        },
+        "action": {
+          "const": "warn"
+        },
+        "not_covered": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_ .:-]{1,60}$",
+          "maxLength": 60
+        },
+        "text_hmac": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^hmac-sha256:[0-9a-f]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "call_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,64}$"
+        },
+        "payload_hash": {
+          "type": "string",
+          "pattern": "^(sha256:)?[0-9a-f]{64}$"
+        },
+        "mandate_verdict": {
+          "enum": [
+            "allowed",
+            "flagged",
+            "blocked",
+            "pending_approval"
+          ]
+        },
+        "error_type": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]{1,40}$",
+          "maxLength": 40
+        },
+        "identity": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "client_name": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.:-]{1,64}$"
+            },
+            "user_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.:@-]{1,128}$"
+            }
+          }
+        },
+        "preview": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "The admin opt-in (keep_text) redacted preview inspect_text may add to a desktop row; at most 200 characters."
+        }
+      }
     }
-  }
+  },
+  "unevaluatedProperties": false
 }

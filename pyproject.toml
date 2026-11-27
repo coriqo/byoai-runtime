@@ -83,6 +83,7 @@ dev = [
     "cryptography>=42",
     "rfc3161ng>=2.1",
     "jsonschema>=4.17",
+    "rfc3339-validator>=0.1.4",
 ]
 
 [project.scripts]
