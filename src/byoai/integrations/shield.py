@@ -2923,7 +2923,9 @@ def serve(cfg: ShieldConfig, host: str = "127.0.0.1", port: int = DEFAULT_PORT,
             if not isinstance(payload, dict):
                 self._send(400, b'{"error":"invalid json"}')
                 return
-            if link:
+            # The extension route always needs the list; the UI/script route keeps working
+            # for any https Coriqo unless the Mac's owner set the list, which then binds it too.
+            if link or _os.environ.get("BYOAI_CORIQO_LINK_HOSTS", "").strip():
                 problem = link_host_problem(str(payload.get("base_url") or ""))
                 if problem:
                     self._send(403, json.dumps({"error": problem}).encode())

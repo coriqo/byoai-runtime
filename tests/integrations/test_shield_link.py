@@ -10,6 +10,7 @@ import json
 import shutil
 import subprocess
 import threading
+import time as _time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs
@@ -221,12 +222,90 @@ def test_two_simultaneous_links_enrol_once(tmp_path, coriqo, monkeypatch):
         req = urllib.request.Request(base + "/api/coriqo/link", method="POST",
                                      data=json.dumps({"base_url": coriqo.base, "token": f"cik_live_x.{i}"}).encode(),
                                      headers={"Content-Type": "application/json", "Origin": "chrome-extension://x"})
-        try:
-            return urllib.request.urlopen(req, timeout=10).status
-        except urllib.error.HTTPError as e:
-            return e.code
+        for _ in range(5):                       # a refused or reset connect is the test client's, not the route's
+            try:
+                return urllib.request.urlopen(req, timeout=10).status
+            except urllib.error.HTTPError as e:
+                return e.code
+            except OSError:
+                _time.sleep(0.1)
+        raise AssertionError("could not reach Shield")
     # the stub only redeems a token minted for the caller's key; make it accept any
     coriqo.accept_any = True
     with ThreadPoolExecutor(8) as ex:
         codes = sorted(ex.map(link, range(8)))
     assert codes.count(200) == 1 and codes.count(409) == 7
+
+
+def test_the_enrol_route_follows_the_list_only_when_one_is_set(tmp_path, coriqo, monkeypatch):
+    import urllib.error
+    import urllib.request
+    base = _serve(make_cfg(tmp_path))
+
+    def enrol(url):
+        req = urllib.request.Request(base + "/api/coriqo/enrol", method="POST",
+                                     data=json.dumps({"base_url": url, "token": "t"}).encode(),
+                                     headers={"Content-Type": "application/json"})
+        try:
+            return urllib.request.urlopen(req, timeout=5).status
+        except urllib.error.HTTPError as e:
+            return e.code
+    # no list: unchanged (the stub refuses the token, which is a 400 from Coriqo, not a 403 from the list)
+    assert enrol(coriqo.base) == 400
+    monkeypatch.setenv("BYOAI_CORIQO_LINK_HOSTS", "good.example")
+    assert enrol(coriqo.base) == 403
+    assert coriqo.calls == ["/v1/enroll"]          # only the first call reached any server
+
+
+def test_workspace_names_and_region_suggestion():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed")
+    code = r"""
+const L=require(process.argv[1]);
+const d=(language,timeZone)=>L.detectRegion({language,timeZone});
+console.log(JSON.stringify({
+ label:L.tenantLabel('coriqo_msp_usa'), uk:L.tenantLabel('coriqo_msp_uk'), plain:L.tenantLabel('acme-bank'), odd:L.tenantLabel('x'),
+ us:d('en-US','America/New_York'), gb:d('en-GB',''), de:d('de-DE',''), fr:d('fr',  'Europe/Paris'), tzLondon:d('en','Europe/London'),
+ tzUS:d('en','America/Chicago'), brazil:d('pt-BR','America/Sao_Paulo'), none:d('',''),
+ berlinEnUS:d('en-US','Europe/Berlin'), toronto:d('en','America/Toronto'), torontoEnUS:d('en-US','America/Toronto'), zurich:d('en','Europe/Zurich'),
+ pickRegion:L.pickTenant(['coriqo_msp_usa','coriqo_msp_uk'],'uk','coriqo_msp_usa'), pickNoneNamed:L.pickTenant(['coriqo_msp_usa','coriqo_msp_uk'],'uk',null),
+ pickNoMatch:L.pickTenant(['coriqo_msp_usa','coriqo_msp_uk'],'eu','coriqo_msp_uk'),
+ pickPreferred:L.pickTenant(['a','b'],null,'b'), pickFirst:L.pickTenant(['a','b'],null,'zzz'), pickEmpty:L.pickTenant([],'usa','x')}))
+"""
+    done = subprocess.run([node, "-e", code, str(Path(__file__).parents[2] / "src/byoai/browser_extension/coriqo-link.js")],
+                          capture_output=True, text=True, timeout=20)
+    g = json.loads(done.stdout)
+    assert g["label"] == {"name": "Coriqo MSP", "region": "United States", "regionKey": "usa"}
+    assert g["uk"]["region"] == "United Kingdom" and g["plain"] == {"name": "Acme Bank", "region": None, "regionKey": None}
+    assert g["odd"]["name"] == "X"
+    assert (g["us"], g["gb"], g["de"], g["fr"], g["tzLondon"], g["tzUS"]) == ("usa", "uk", "eu", "eu", "uk", "usa")
+    assert g["brazil"] is None and g["none"] is None
+    # time zone beats the browser's default language; Canada is not the US; non-EU Europe is no guess
+    assert (g["berlinEnUS"], g["toronto"], g["torontoEnUS"], g["zurich"]) == ("eu", "ca", "ca", None)
+    # Coriqo's own workspace always wins over the region guess; the guess only fills a gap
+    assert (g["pickRegion"], g["pickNoneNamed"], g["pickNoMatch"], g["pickPreferred"], g["pickFirst"], g["pickEmpty"]) == (
+        "coriqo_msp_usa", "coriqo_msp_uk", "coriqo_msp_uk", "b", "a", None)
+
+
+def test_the_oauth_client_id_is_configurable_and_validated():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed")
+    code = r"""
+const L=require(process.argv[1]);
+const ok=(v)=>{try{return L.checkClientId(v)}catch(e){return e.message}};
+const q=(id)=>new URL(L.buildAuthorizeUrl({base:'https://c.test',clientId:id,redirectUri:'https://x.chromiumapp.org/',challenge:'c',state:'s'})).searchParams.get('client_id');
+console.log(JSON.stringify({
+ name:ok('my-client'), meta:ok('https://c.test/.well-known/shield-client.json'),
+ http:ok('http://c.test/m.json'), space:ok('a b'), js:ok('javascript:alert(1)'), empty:ok(''), long:ok('a'.repeat(200)),
+ userinfo:ok('https://u:p@c.test/m'), dflt:q(undefined), custom:q('https://c.test/m.json'),
+ builderBad:(()=>{try{q('a b');return 'accepted'}catch(e){return e.message}})()}))
+"""
+    done = subprocess.run([node, "-e", code, str(Path(__file__).parents[2] / "src/byoai/browser_extension/coriqo-link.js")],
+                          capture_output=True, text=True, timeout=20)
+    g = json.loads(done.stdout)
+    assert g["name"] == "my-client" and g["meta"] == "https://c.test/.well-known/shield-client.json"
+    assert {g[k] for k in ("http", "space", "js", "empty", "long", "userinfo")} == {"bad_client_id"}
+    assert g["dflt"] == "coriqo-shield-extension" and g["custom"] == "https://c.test/m.json"
+    assert g["builderBad"] == "bad_client_id"      # the builders check it themselves, not only the caller

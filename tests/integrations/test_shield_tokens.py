@@ -24,11 +24,20 @@ def test_the_extension_token_copy_matches_the_web_tokens():
     assert mod.main(["--check"]) == 0
 
 
-def test_popup_and_welcome_link_the_tokens_before_their_own_rules():
-    for page in ("popup.html", "welcome.html"):
+def test_every_extension_page_links_the_tokens_before_its_own_rules():
+    for page in ("popup.html", "welcome.html", "login.html"):
         html = (EXT / page).read_text()
         link = html.index('href="shield-tokens.css"')
         assert link < html.index("<style>"), page
+
+
+def test_the_login_page_names_tokens_and_has_no_colour_literals():
+    import re
+    html = (EXT / "login.html").read_text()
+    style = html[html.index("<style>"):html.index("</style>")]
+    assert not re.search(r"#[0-9a-fA-F]{3,8}\b|rgba?\(", style), "use a token from shield-tokens.css"
+    for token in re.findall(r"var\((--[a-z0-9-]+)\)", style):
+        assert f"{token}:" in (EXT / "shield-tokens.css").read_text(), f"{token} is not a token"
 
 
 def test_the_store_package_ships_the_tokens_file(tmp_path):
