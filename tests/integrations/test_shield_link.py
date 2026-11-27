@@ -69,7 +69,8 @@ class StubCoriqo:
                                             "device_limit": stub.limit, "billing_state": "included"})
                 if self.path == "/v1/enroll":
                     body = json.loads(raw)
-                    if stub.minted.pop(body["token"], None) != body["public_key"]:
+                    owner = stub.minted.pop(body["token"], "missing")
+                    if owner == "missing" or (owner != body["public_key"] and not getattr(stub, "accept_any", False)):
                         return self._json(404, {"detail": "invalid"})
                     return self._json(200, {"device_id": "dev_" + body["public_key"][:6], "tenant_slug": "coriqo_msp_usa"})
                 self._json(404, {})
@@ -116,8 +117,9 @@ def test_sign_in_links_the_first_computer_and_refuses_the_second(tmp_path, coriq
     assert "linked" not in second
     assert load_enrollment_state(tmp_path / "b" / "keys") is None
 
-    again = _run(coriqo.base, one)             # the same device again is not a new device
-    assert again["linked"] is True and len(coriqo.keys) == 1
+    again = _run(coriqo.base, one)             # already linked: the extension cannot replace the identity
+    assert again["linked"] is False and "already connected" in again["linkError"]
+    assert len(coriqo.keys) == 1 and state == load_enrollment_state(tmp_path / "a" / "keys")
 
 
 def test_the_hand_off_refuses_a_page_and_an_unlisted_server(tmp_path, coriqo, monkeypatch):
@@ -193,3 +195,38 @@ console.log(JSON.stringify({same:want===p.challenge,len:p.verifier.length,
     assert got["ok"] == "accepted" and got["wrongState"] == "bad_state" and got["noState"] == "bad_state"
     assert got["otherHost"] == got["otherPath"] == got["junk"] == got["noCode"] == "bad_redirect"
     assert got["denied"] == "denied" and got["plain"] == "bad_base"
+
+
+def test_link_refuses_when_the_enrolment_file_exists_but_cannot_be_read(tmp_path, coriqo, monkeypatch):
+    monkeypatch.setenv("BYOAI_CORIQO_LINK_HOSTS", coriqo.base.removeprefix("http://"))
+    base = _serve(make_cfg(tmp_path))
+    keys = tmp_path / "keys"
+    keys.mkdir(exist_ok=True)
+    (keys / "enrollment.json").write_text("{not json")
+    first = _run(coriqo.base, base)
+    assert first["linked"] is False and "already connected" in first["linkError"]
+    assert (keys / "enrollment.json").read_text() == "{not json"   # untouched
+
+
+def test_two_simultaneous_links_enrol_once(tmp_path, coriqo, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    monkeypatch.setenv("BYOAI_CORIQO_LINK_HOSTS", coriqo.base.removeprefix("http://"))
+    cfg = make_cfg(tmp_path)
+    base = _serve(cfg)
+    import urllib.error
+    import urllib.request
+
+    def link(i):
+        coriqo.minted[f"cik_live_x.{i}"] = None  # tokens the stub will accept for any key
+        req = urllib.request.Request(base + "/api/coriqo/link", method="POST",
+                                     data=json.dumps({"base_url": coriqo.base, "token": f"cik_live_x.{i}"}).encode(),
+                                     headers={"Content-Type": "application/json", "Origin": "chrome-extension://x"})
+        try:
+            return urllib.request.urlopen(req, timeout=10).status
+        except urllib.error.HTTPError as e:
+            return e.code
+    # the stub only redeems a token minted for the caller's key; make it accept any
+    coriqo.accept_any = True
+    with ThreadPoolExecutor(8) as ex:
+        codes = sorted(ex.map(link, range(8)))
+    assert codes.count(200) == 1 and codes.count(409) == 7

@@ -2930,12 +2930,18 @@ def serve(cfg: ShieldConfig, host: str = "127.0.0.1", port: int = DEFAULT_PORT,
                     return
             try:
                 status = publisher.enrol(str(payload.get("base_url") or ""),
-                                         str(payload.get("token") or ""))
+                                         str(payload.get("token") or ""), keep_existing=link)
             except ValueError as exc:
                 self._send(400, json.dumps({"error": str(exc)}).encode())
                 return
             except EnrollmentError as exc:
                 msg = str(exc)
+                if link and "already enrolled" in msg:
+                    # Changing who this Mac reports to is not the extension's call: it goes
+                    # through Shield's own page or `byoai-shield enrol --force`.
+                    self._send(409, json.dumps({"error": "This Mac is already connected to Coriqo. "
+                                                "Change it from Shield's settings or with byoai-shield enrol --force."}).encode())
+                    return
                 if "already enrolled" in msg or "HTTP 409" in msg:
                     hint = ("This Mac is already connected to Coriqo with its current key, "
                             "so it doesn't need a new token. The token hasn't been used.")

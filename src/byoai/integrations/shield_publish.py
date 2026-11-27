@@ -258,7 +258,7 @@ class Publisher:
         except EnrollmentError:
             return None
 
-    def enrol(self, base_url: str, token: str) -> dict:
+    def enrol(self, base_url: str, token: str, *, keep_existing: bool = False) -> dict:
         """Exchange a one-time Coriqo enrolment token for this Mac's device
         identity. Uses the Mac's existing Shield key; nothing secret is kept
         afterwards. Re-enrolling replaces the old identity."""
@@ -273,6 +273,15 @@ class Publisher:
         if not token.strip():
             raise ValueError("Paste the enrolment token from Coriqo")
         with self._lock:
+            if keep_existing:
+                # Checked under the lock, with the write, so two requests cannot both pass it.
+                # State that exists but cannot be read counts as enrolled: refusing is the safe side.
+                try:
+                    existing = load_enrollment_state(self.key_dir)
+                except EnrollmentError:
+                    existing = True
+                if existing is not None:
+                    raise EnrollmentError("already enrolled")
             with self._client_factory() as client:
                 enroll(coriqo_base_url=base_url, token=token.strip(),
                        key_dir=self.key_dir, force=True, http_client=client)

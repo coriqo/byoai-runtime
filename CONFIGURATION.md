@@ -2311,7 +2311,8 @@ window.
    https `upgrade_url`, a link. 401/403 means signed out.
 3. **Enrol:** the extension passes `token` and the Coriqo address to the local
    Shield (`POST /api/coriqo/link`), which redeems it on the unchanged
-   `POST /v1/enroll`. The device key never leaves the Shield. Counting the same
+   `POST /v1/enroll`. A Mac that is already enrolled answers 409 and keeps its
+   identity; changing it goes through Shield's settings or `byoai-shield enrol --force`. The device key never leaves the Shield. Counting the same
    device twice is Coriqo's to avoid (the key is stable).
 
 A magic-link session (the older sign-in) cannot link a computer.
