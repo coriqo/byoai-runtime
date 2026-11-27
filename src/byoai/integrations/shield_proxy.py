@@ -305,7 +305,9 @@ class ShieldProxy:
         from byoai.recorder.keys import atomic_write_bytes
         port = None
         try:
-            from mitmproxy import ctx  # pyright: ignore[reportMissingImports]  # optional dependency, not installed in CI
+            from mitmproxy import (  # pyright: ignore[reportMissingImports]  # optional dependency, not installed in CI
+                ctx,
+            )
             port = int(ctx.options.listen_port or 8080)
         except Exception:  # noqa: BLE001 - outside mitmproxy, or no port option
             pass
@@ -513,7 +515,9 @@ class ShieldProxy:
 
 def _refuse(flow, message: str) -> None:
     """Answer the app locally; the request never leaves the machine."""
-    from mitmproxy import http  # pyright: ignore[reportMissingImports]  # optional dependency, not installed in CI
+    from mitmproxy import (  # pyright: ignore[reportMissingImports]  # optional dependency, not installed in CI
+        http,
+    )
 
     flow.response = http.Response.make(
         403,

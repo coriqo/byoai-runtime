@@ -5,10 +5,13 @@ import json
 import urllib.error
 import urllib.request
 
+from tests.integrations.test_shield import _serve, make_cfg
+from tests.integrations.test_shield_link import (
+    coriqo,  # noqa: F401  # pyright: ignore[reportUnusedImport]
+)
+
 from byoai.integrations.shield import request_problem
 from byoai.recorder.enroll import load_enrollment_state
-from tests.integrations.test_shield import _serve, make_cfg
-from tests.integrations.test_shield_link import coriqo  # noqa: F401  # pyright: ignore[reportUnusedImport]
 
 JSON = {"Content-Type": "application/json"}
 
@@ -50,7 +53,7 @@ def test_no_origin_enrol_never_reaches_a_server(tmp_path, coriqo):  # noqa: F811
     assert code == 403 and coriqo.calls == []
 
 
-def _pinned(tmp_path, coriqo, monkeypatch, pin):
+def _pinned(tmp_path, coriqo, monkeypatch, pin):  # noqa: F811
     monkeypatch.setenv("BYOAI_CORIQO_LINK_HOSTS", coriqo.base.removeprefix("http://"))
     monkeypatch.setenv("BYOAI_CORIQO_LINK_WORKSPACES", pin)
     coriqo.accept_any = True
