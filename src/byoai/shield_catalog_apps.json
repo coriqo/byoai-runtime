@@ -1,0 +1,336 @@
+{
+  "schema_version": 1,
+  "format": "coriqo.shield.signatures",
+  "kind": "base",
+  "file_version": 1,
+  "generated_at": "2026-11-27T00:00:00Z",
+  "publisher": "byoai-runtime",
+  "signatures": [
+    {
+      "id": "app.openai.chatgpt-web",
+      "type": "app_domain",
+      "match": {
+        "hosts": ["chatgpt.com", "chat.openai.com"]
+      },
+      "vendor": "OpenAI",
+      "technology": "ChatGPT web app",
+      "confidence": "probable",
+      "evidence_required": ["host_match"],
+      "false_positive_notes": "A link to chatgpt.com in a document, search result or help article is not use of the app. The host also serves OpenAI help and marketing pages. Count only a navigation to the app or a chat request.",
+      "source": {
+        "name": "ChatGPT (OpenAI)",
+        "url": "https://chatgpt.com",
+        "licence": "LicenseRef-Vendor-Public-Info"
+      },
+      "first_seen": "2026-11-27T00:00:00Z",
+      "last_verified": "2026-11-27T00:00:00Z",
+      "version": 1,
+      "expires_at": "2027-05-27T00:00:00Z"
+    },
+    {
+      "id": "app.anthropic.claude-web",
+      "type": "app_domain",
+      "match": {
+        "hosts": ["claude.ai"]
+      },
+      "vendor": "Anthropic",
+      "technology": "Claude web app",
+      "confidence": "probable",
+      "evidence_required": ["host_match"],
+      "false_positive_notes": "A link to claude.ai in a document or ticket is not use of the app. The host also serves Anthropic account and help pages. Count only a navigation to the app or a chat request.",
+      "source": {
+        "name": "Claude (Anthropic)",
+        "url": "https://claude.ai",
+        "licence": "LicenseRef-Vendor-Public-Info"
+      },
+      "first_seen": "2026-11-27T00:00:00Z",
+      "last_verified": "2026-11-27T00:00:00Z",
+      "version": 1,
+      "expires_at": "2027-05-27T00:00:00Z"
+    },
+    {
+      "id": "app.google.gemini-web",
+      "type": "app_domain",
+      "match": {
+        "hosts": ["gemini.google.com"]
+      },
+      "vendor": "Google",
+      "technology": "Gemini web app",
+      "confidence": "probable",
+      "evidence_required": ["host_match"],
+      "false_positive_notes": "Only gemini.google.com is the Gemini app. google.com, docs.google.com, accounts.google.com and Google search results are not Gemini use. The host also serves Gemini help pages.",
+      "source": {
+        "name": "Gemini app (Google)",
+        "url": "https://gemini.google.com",
+        "licence": "LicenseRef-Vendor-Public-Info"
+      },
+      "first_seen": "2026-11-27T00:00:00Z",
+      "last_verified": "2026-11-27T00:00:00Z",
+      "version": 1,
+      "expires_at": "2027-05-27T00:00:00Z"
+    },
+    {
+      "id": "app.microsoft.copilot-web",
+      "type": "app_domain",
+      "match": {
+        "hosts": ["copilot.microsoft.com"]
+      },
+      "vendor": "Microsoft",
+      "technology": "Microsoft Copilot consumer web app",
+      "confidence": "probable",
+      "evidence_required": ["host_match"],
+      "false_positive_notes": "Only the consumer Copilot host is listed. Microsoft 365 Copilot, Edge and Bing use other hosts and are not matched here. github.com/copilot and GitHub Copilot API traffic are not this entry.",
+      "source": {
+        "name": "Microsoft Copilot (consumer)",
+        "url": "https://copilot.microsoft.com",
+        "licence": "LicenseRef-Vendor-Public-Info"
+      },
+      "first_seen": "2026-11-27T00:00:00Z",
+      "last_verified": "2026-11-27T00:00:00Z",
+      "version": 1,
+      "expires_at": "2027-05-27T00:00:00Z"
+    },
+    {
+      "id": "app.perplexity.web",
+      "type": "app_domain",
+      "match": {
+        "hosts": ["perplexity.ai", "www.perplexity.ai"]
+      },
+      "vendor": "Perplexity",
+      "technology": "Perplexity web app",
+      "confidence": "probable",
+      "evidence_required": ["host_match"],
+      "false_positive_notes": "A search result or citation that links to perplexity.ai is not use of the app. Count only a navigation to the app or a query submitted to it.",
+      "source": {
+        "name": "Perplexity (docs and app)",
+        "url": "https://docs.perplexity.ai/docs/getting-started/quickstart",
+        "licence": "LicenseRef-Vendor-Public-Info"
+      },
+      "first_seen": "2026-11-27T00:00:00Z",
+      "last_verified": "2026-11-27T00:00:00Z",
+      "version": 1,
+      "expires_at": "2027-05-27T00:00:00Z"
+    },
+    {
+      "id": "app.perplexity.api-host",
+      "type": "app_domain",
+      "match": {
+        "hosts": ["api.perplexity.ai"]
+      },
+      "vendor": "Perplexity",
+      "technology": "Perplexity API host",
+      "confidence": "probable",
+      "evidence_required": ["host_match"],
+      "false_positive_notes": "Any request to this host is Perplexity API traffic, but the path is not matched here, so the host alone does not show which product or model was called. A model name is never read from this entry.",
+      "source": {
+        "name": "Perplexity API changelog",
+        "url": "https://docs.perplexity.ai/docs/resources/changelog",
+        "licence": "LicenseRef-Vendor-Public-Info"
+      },
+      "first_seen": "2026-11-27T00:00:00Z",
+      "last_verified": "2026-11-27T00:00:00Z",
+      "version": 1,
+      "expires_at": "2027-05-27T00:00:00Z"
+    },
+    {
+      "id": "app.mistral.le-chat-web",
+      "type": "app_domain",
+      "match": {
+        "hosts": ["chat.mistral.ai"]
+      },
+      "vendor": "Mistral AI",
+      "technology": "Le Chat web app",
+      "confidence": "probable",
+      "evidence_required": ["host_match"],
+      "false_positive_notes": "Only the chat host is listed. The API host api.mistral.ai is a separate entry. A link to chat.mistral.ai in an article is not use.",
+      "source": {
+        "name": "Mistral AI documentation",
+        "url": "https://docs.mistral.ai/getting-started/quickstarts/developer/first-api-request",
+        "licence": "LicenseRef-Vendor-Public-Info"
+      },
+      "first_seen": "2026-11-27T00:00:00Z",
+      "last_verified": "2026-11-27T00:00:00Z",
+      "version": 1,
+      "expires_at": "2027-05-27T00:00:00Z"
+    },
+    {
+      "id": "app.deepseek.chat-web",
+      "type": "app_domain",
+      "match": {
+        "hosts": ["chat.deepseek.com"]
+      },
+      "vendor": "DeepSeek",
+      "technology": "DeepSeek chat web app",
+      "confidence": "probable",
+      "evidence_required": ["host_match"],
+      "false_positive_notes": "Only the chat host is listed. The API host api.deepseek.com is a separate entry. A link to chat.deepseek.com in a news article is not use of the app.",
+      "source": {
+        "name": "DeepSeek API documentation",
+        "url": "https://api-docs.deepseek.com/",
+        "licence": "LicenseRef-Vendor-Public-Info"
+      },
+      "first_seen": "2026-11-27T00:00:00Z",
+      "last_verified": "2026-11-27T00:00:00Z",
+      "version": 1,
+      "expires_at": "2027-05-27T00:00:00Z"
+    },
+    {
+      "id": "app.huggingface.hub",
+      "type": "app_domain",
+      "match": {
+        "hosts": ["huggingface.co"]
+      },
+      "vendor": "Hugging Face",
+      "technology": "Hugging Face Hub web site",
+      "confidence": "probable",
+      "evidence_required": ["host_match"],
+      "false_positive_notes": "The Hub serves model and dataset downloads, package-manager fetches and CI traffic as well as chat pages. A download of a model file is not use of the Hub's chat app. Count only a navigation to a chat page or a request the Hub's inference route receives.",
+      "source": {
+        "name": "Hugging Face Inference Providers documentation",
+        "url": "https://huggingface.co/docs/inference-providers",
+        "licence": "LicenseRef-Vendor-Public-Info"
+      },
+      "first_seen": "2026-11-27T00:00:00Z",
+      "last_verified": "2026-11-27T00:00:00Z",
+      "version": 1,
+      "expires_at": "2027-05-27T00:00:00Z"
+    },
+    {
+      "id": "model.openai.chat-completions",
+      "type": "model_endpoint",
+      "match": {
+        "hosts": ["api.openai.com"],
+        "paths": ["/v1/chat/completions", "/v1/responses"]
+      },
+      "vendor": "OpenAI",
+      "technology": "OpenAI chat and responses API",
+      "confidence": "probable",
+      "evidence_required": ["host_match", "path_match"],
+      "false_positive_notes": "An OpenAI-compatible gateway or a self-hosted server can answer on the same paths on another host; this entry matches only api.openai.com. /v1/models and /v1/files are not model calls and are not matched.",
+      "source": {
+        "name": "OpenAI API reference (Chat)",
+        "url": "https://developers.openai.com/api/reference/resources/chat",
+        "licence": "LicenseRef-Vendor-Public-Info"
+      },
+      "first_seen": "2026-11-27T00:00:00Z",
+      "last_verified": "2026-11-27T00:00:00Z",
+      "version": 1,
+      "expires_at": "2027-05-27T00:00:00Z"
+    },
+    {
+      "id": "model.anthropic.messages",
+      "type": "model_endpoint",
+      "match": {
+        "hosts": ["api.anthropic.com"],
+        "paths": ["/v1/messages"]
+      },
+      "vendor": "Anthropic",
+      "technology": "Anthropic Messages API",
+      "confidence": "probable",
+      "evidence_required": ["host_match", "path_match"],
+      "false_positive_notes": "Anthropic-compatible gateways on other hosts use the same path and are not matched. /v1/messages/count_tokens is a token-count call, not a generation, and is not matched by this exact path.",
+      "source": {
+        "name": "Claude API reference (Messages)",
+        "url": "https://platform.claude.com/docs/en/api/messages/create",
+        "licence": "LicenseRef-Vendor-Public-Info"
+      },
+      "first_seen": "2026-11-27T00:00:00Z",
+      "last_verified": "2026-11-27T00:00:00Z",
+      "version": 1,
+      "expires_at": "2027-05-27T00:00:00Z"
+    },
+    {
+      "id": "model.google.gemini-generate-content",
+      "type": "model_endpoint",
+      "match": {
+        "hosts": ["generativelanguage.googleapis.com"],
+        "paths": [
+          "/v1beta/models/*:generateContent",
+          "/v1beta/models/*:streamGenerateContent",
+          "/v1/models/*:generateContent",
+          "/v1/models/*:streamGenerateContent"
+        ]
+      },
+      "vendor": "Google",
+      "technology": "Gemini API generateContent",
+      "confidence": "probable",
+      "evidence_required": ["host_match", "path_match"],
+      "false_positive_notes": "Other Google Cloud APIs, including Vertex AI on aiplatform.googleapis.com, use other hosts and are not matched. A model listing on the same host is not a generation and is not matched.",
+      "source": {
+        "name": "Gemini API reference",
+        "url": "https://ai.google.dev/api/rest",
+        "licence": "LicenseRef-Vendor-Public-Info"
+      },
+      "first_seen": "2026-11-27T00:00:00Z",
+      "last_verified": "2026-11-27T00:00:00Z",
+      "version": 1,
+      "expires_at": "2027-05-27T00:00:00Z"
+    },
+    {
+      "id": "model.mistral.chat-completions",
+      "type": "model_endpoint",
+      "match": {
+        "hosts": ["api.mistral.ai"],
+        "paths": ["/v1/chat/completions"]
+      },
+      "vendor": "Mistral AI",
+      "technology": "Mistral chat completions API",
+      "confidence": "probable",
+      "evidence_required": ["host_match", "path_match"],
+      "false_positive_notes": "Gateways that proxy Mistral models on other hosts are not matched. The chat app at chat.mistral.ai is a separate entry.",
+      "source": {
+        "name": "Mistral AI quickstart: first API request",
+        "url": "https://docs.mistral.ai/getting-started/quickstarts/developer/first-api-request",
+        "licence": "LicenseRef-Vendor-Public-Info"
+      },
+      "first_seen": "2026-11-27T00:00:00Z",
+      "last_verified": "2026-11-27T00:00:00Z",
+      "version": 1,
+      "expires_at": "2027-05-27T00:00:00Z"
+    },
+    {
+      "id": "model.deepseek.chat-completions",
+      "type": "model_endpoint",
+      "match": {
+        "hosts": ["api.deepseek.com"],
+        "paths": ["/chat/completions", "/v1/chat/completions"]
+      },
+      "vendor": "DeepSeek",
+      "technology": "DeepSeek chat completions API (OpenAI-compatible)",
+      "confidence": "probable",
+      "evidence_required": ["host_match", "path_match"],
+      "false_positive_notes": "The /v1 prefix in DeepSeek's docs is an OpenAI-compatibility alias, not a model version. The Anthropic-compatible route under /anthropic is a different path and is not matched here.",
+      "source": {
+        "name": "DeepSeek API reference (Chat Completions)",
+        "url": "https://api-docs.deepseek.com/api/create-chat-completion",
+        "licence": "LicenseRef-Vendor-Public-Info"
+      },
+      "first_seen": "2026-11-27T00:00:00Z",
+      "last_verified": "2026-11-27T00:00:00Z",
+      "version": 1,
+      "expires_at": "2027-05-27T00:00:00Z"
+    },
+    {
+      "id": "model.huggingface.router-chat-completions",
+      "type": "model_endpoint",
+      "match": {
+        "hosts": ["router.huggingface.co"],
+        "paths": ["/v1/chat/completions"]
+      },
+      "vendor": "Hugging Face",
+      "technology": "Hugging Face Inference Providers router (chat completions)",
+      "confidence": "probable",
+      "evidence_required": ["host_match", "path_match"],
+      "false_positive_notes": "The router forwards to third-party providers; a request here is Hugging Face routing traffic, not proof of which provider served it. Provider-specific router paths such as /novita/... are not matched by this entry.",
+      "source": {
+        "name": "Hugging Face Inference Providers: chat completion",
+        "url": "https://huggingface.co/docs/inference-providers/en/tasks/chat-completion",
+        "licence": "LicenseRef-Vendor-Public-Info"
+      },
+      "first_seen": "2026-11-27T00:00:00Z",
+      "last_verified": "2026-11-27T00:00:00Z",
+      "version": 1,
+      "expires_at": "2027-05-27T00:00:00Z"
+    }
+  ]
+}

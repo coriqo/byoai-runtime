@@ -1,0 +1,21 @@
+# Ordinary non-AI hosts that must never match a base-catalog entry.
+# One host per line. Lines starting with # are comments.
+github.com
+api.github.com
+google.com
+www.google.com
+docs.google.com
+accounts.google.com
+googleapis.com
+slack.com
+app.slack.com
+notion.so
+microsoft.com
+login.microsoftonline.com
+zoom.us
+example.com
+# Suffix and prefix tricks: a catalog host must match exactly, not as a substring.
+chatgpt.com.example.net
+evilclaude.ai
+claude.ai.example.net
+gemini.google.com.example.net
