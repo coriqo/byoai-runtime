@@ -6,7 +6,10 @@
   // tests/recorder/test_mandate_file.py); it must not be edited to satisfy the
   // type checker. Decimal.as_tuple().exponent is `int | Literal['n','N','F']`
   // and the reader compares it to an int after ruling out non-finite values.
-  "ignore": ["src/byoai/recorder/mandate_format.py"],
+  //
+  // scripts/gen_extension_icons.py is a maintainer-run asset generator that needs
+  // Pillow, which is not a dependency of any extra; it is not type-checked.
+  "ignore": ["src/byoai/recorder/mandate_format.py", "scripts/gen_extension_icons.py"],
   "executionEnvironments": [
     {
       // Tests: relax only the rules that fire on test-double style code, not

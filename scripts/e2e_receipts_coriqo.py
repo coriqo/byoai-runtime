@@ -127,13 +127,15 @@ class Mcp:
                                      env=env, text=True, bufsize=1)
         self.stderr: list[str] = []
         self.out: list[dict] = []
+        assert self.proc.stdin and self.proc.stdout and self.proc.stderr
+        self.stdin, self.stdout, self.stderr_pipe = self.proc.stdin, self.proc.stdout, self.proc.stderr
         self.cv = threading.Condition()
         self.n = 0
         threading.Thread(target=self._rd, daemon=True).start()
-        threading.Thread(target=lambda: [self.stderr.append(x.rstrip()) for x in self.proc.stderr], daemon=True).start()
+        threading.Thread(target=lambda: [self.stderr.append(x.rstrip()) for x in self.stderr_pipe], daemon=True).start()
 
     def _rd(self) -> None:
-        for line in self.proc.stdout:
+        for line in self.stdout:
             with self.cv:
                 self.out.append(json.loads(line))
                 self.cv.notify_all()
@@ -141,15 +143,15 @@ class Mcp:
     def call(self, method: str, params: dict | None = None, timeout: float = 60) -> dict:
         self.n += 1
         i = self.n
-        self.proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": i, "method": method, "params": params or {}}) + "\n")
-        self.proc.stdin.flush()
+        self.stdin.write(json.dumps({"jsonrpc": "2.0", "id": i, "method": method, "params": params or {}}) + "\n")
+        self.stdin.flush()
         with self.cv:
             if not self.cv.wait_for(lambda: any(m.get("id") == i for m in self.out), timeout):
                 raise SystemExit(f"no answer to {method}; stderr: {self.stderr[-8:]}")
             return next(m for m in self.out if m.get("id") == i)
 
     def close(self, timeout: float = 90) -> int:
-        self.proc.stdin.close()
+        self.stdin.close()
         try:
             return self.proc.wait(timeout)
         except subprocess.TimeoutExpired:
@@ -219,8 +221,8 @@ def main() -> int:
     mcp = Mcp(cmd, run_env)
     mcp.call("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
                             "clientInfo": {"name": "receipts-e2e", "version": "1"}}, timeout=90)
-    mcp.proc.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
-    mcp.proc.stdin.flush()
+    mcp.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
+    mcp.stdin.flush()
     ok = mcp.call("tools/call", {"name": "search", "arguments": {"q": "invoice 1042"}})["result"]
     no = mcp.call("tools/call", {"name": "delete_account", "arguments": {"id": "A-7"}})["result"]
     check(not ok.get("isError"), "the allowed call goes through")
