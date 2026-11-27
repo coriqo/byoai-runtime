@@ -466,6 +466,7 @@ as `byoai.integrations.shield` with a console script (see `pyproject.toml`):
 ```bash
 pip install 'byoai-runtime[shield]'   # Shield alone needs only this (it signs its record with `cryptography`)
 byoai-shield ./examples/mcp_capture/captures.jsonl --host 127.0.0.1 --port 17831
+byoai-shield discover               # list MCP servers, AI apps and local model runtimes on this computer (read-only, offline; see CONFIGURATION.md)
 byoai-shield --install-login-item   # start at login (macOS launchd, Linux systemd user unit, Windows Task Scheduler), low priority; --remove-login-item undoes it
 ```
 

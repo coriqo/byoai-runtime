@@ -240,6 +240,16 @@ your email and workspace name for display; an expired OAuth sign-in is deleted t
 Signing out removes the saved token from the extension; it does not remove this computer from
 your Coriqo workspace, which your Coriqo admin does.
 
+## The optional `discover` command
+
+`byoai-shield discover` is separate from the extension and runs only when you
+run it. It reads the config files of known AI tools in your home folder and
+lists MCP server names, the program's file name, a URL's host and the names
+(not values) of environment variables and headers; installed AI apps; and local
+model runtimes. It records no file contents, command arguments, secrets or user
+name, makes no network call, and writes to the screen or a file you choose, not
+to Shield's sealed record.
+
 ## The record Shield keeps
 
 Shield seals each entry into a Merkle chain signed with a key that stays on your

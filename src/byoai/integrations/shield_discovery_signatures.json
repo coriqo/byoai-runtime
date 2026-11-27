@@ -1,0 +1,37 @@
+{
+  "version": "2026-11-27.1",
+  "mcp_clients": [
+    {"client": "claude_desktop", "paths": {
+      "darwin": ["~/Library/Application Support/Claude/claude_desktop_config.json"],
+      "linux": ["~/.config/Claude/claude_desktop_config.json"],
+      "win32": ["%APPDATA%/Claude/claude_desktop_config.json"]}},
+    {"client": "cursor", "paths": {
+      "darwin": ["~/.cursor/mcp.json"], "linux": ["~/.cursor/mcp.json"], "win32": ["~/.cursor/mcp.json"]}},
+    {"client": "vscode", "paths": {
+      "darwin": ["~/Library/Application Support/Code/User/mcp.json"],
+      "linux": ["~/.config/Code/User/mcp.json"],
+      "win32": ["%APPDATA%/Code/User/mcp.json"]}},
+    {"client": "claude_code", "paths": {
+      "darwin": ["~/.claude.json"], "linux": ["~/.claude.json"], "win32": ["~/.claude.json"]}},
+    {"client": "windsurf", "paths": {
+      "darwin": ["~/.codeium/windsurf/mcp_config.json"],
+      "linux": ["~/.codeium/windsurf/mcp_config.json"],
+      "win32": ["~/.codeium/windsurf/mcp_config.json"]}}
+  ],
+  "apps": [
+    {"app": "claude", "darwin": ["Claude.app"], "linux": ["claude-desktop"], "win32": ["%LOCALAPPDATA%/AnthropicClaude"]},
+    {"app": "chatgpt", "darwin": ["ChatGPT.app"], "linux": [], "win32": []},
+    {"app": "cursor", "darwin": ["Cursor.app"], "linux": ["cursor"], "win32": ["%LOCALAPPDATA%/Programs/cursor"]},
+    {"app": "windsurf", "darwin": ["Windsurf.app"], "linux": ["windsurf"], "win32": ["%LOCALAPPDATA%/Programs/Windsurf"]},
+    {"app": "lm_studio", "darwin": ["LM Studio.app"], "linux": ["lm-studio"], "win32": ["%LOCALAPPDATA%/LM-Studio"]},
+    {"app": "ollama", "darwin": ["Ollama.app"], "linux": ["ollama"], "win32": ["%LOCALAPPDATA%/Programs/Ollama"]},
+    {"app": "jan", "darwin": ["Jan.app"], "linux": ["jan"], "win32": ["%LOCALAPPDATA%/Programs/jan"]},
+    {"app": "claude_code", "darwin": [], "linux": ["claude"], "win32": []}
+  ],
+  "runtimes": [
+    {"runtime": "ollama", "port": 11434, "model_dirs": ["~/.ollama/models/manifests/registry.ollama.ai"]},
+    {"runtime": "lm_studio", "port": 1234, "model_dirs": ["~/.lmstudio/models", "~/.cache/lm-studio/models"]},
+    {"runtime": "llama_cpp", "port": 8080, "model_dirs": []},
+    {"runtime": "jan", "port": 1337, "model_dirs": []}
+  ]
+}
