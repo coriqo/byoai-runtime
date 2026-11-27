@@ -11,7 +11,7 @@ for a signed bundle (private, published by Coriqo).
 - Negative fixtures: `tests/fixtures/shield_signatures/invalid/`
 - Test: `tests/integrations/test_shield_signatures_schema.py`
 
-This page specifies a format. **No loader or matcher exists yet** (Wave 1). The
+This page specifies a format. A loader and matcher for model endpoints exist in `src/byoai/shield_signatures.py` (base list `src/byoai/shield_catalog_models.json`; OpenAI, Anthropic, Gemini). The model name is read only from a payload field that is present (`model`, or `modelVersion` in a Gemini response), never from the URL. Within a path pattern `*` matches characters inside one segment, so `*:generateContent` works. Other loader duties below are still open. The
 sample is illustrative, not a catalog. Signature evidence feeds the
 [event envelope](shield-event-envelope.md) through `detection`
 (`rule_id`, `rule_version`, `confidence`).
