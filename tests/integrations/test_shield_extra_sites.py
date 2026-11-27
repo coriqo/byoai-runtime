@@ -138,11 +138,30 @@ def test_popup_and_worker_load_the_same_list_and_logic():
         assert s["host"] in sites and s["app"] in sites
 
 
-def test_popup_offers_no_sign_in_and_no_page_loads_login():
-    """The privacy notice says there is no account: nothing reachable may sign in."""
-    popup = (EXT / "popup.html").read_text() + (EXT / "popup.js").read_text()
-    for word in ("Sign in", "login.html", "coriqo_session", "open-login"):
-        assert word not in popup, word
+def test_sign_in_is_offered_but_never_started_by_the_extension_itself():
+    """Signing in to Coriqo is optional: the popup and welcome page offer it, only on a click,
+    and the privacy notice says so. Nothing may open it, or sign in, by itself."""
+    import re
+    for name in ("popup.js", "welcome.js"):
+        js = (EXT / name).read_text()
+        # the page is named exactly once, and only inside a click handler (never at load)
+        at = [m.start() for m in re.finditer("login.html", js)]
+        assert len(at) == 1, name
+        assert "addEventListener('click'" in js[max(0, at[0] - 160):at[0]], name
+        # these pages only read local state to show status; they never talk to Coriqo
+        assert "coriqo_api_base" not in js, name
+        # every request these pages make goes to the local Shield address, never to Coriqo
+        for line in js.splitlines():
+            if "fetch(" in line:
+                assert "baseOf(" in line, f"{name}: {line.strip()}"
+    # no page pulls in the sign-in script, and the service worker never opens, reads or calls it
     for page in ("popup.html", "welcome.html"):
         assert "login.js" not in (EXT / page).read_text()
+    background = (EXT / "background.js").read_text()
+    for word in ("login.html", "coriqo_session", "coriqo_api_base", "coriqo_link"):
+        assert word not in background, word
     assert "login.html" not in (EXT / "manifest.json").read_text()
+    # the privacy notice must not claim there is no sign-in while there is one
+    notice = (EXT / "PRIVACY.md").read_text()
+    assert "There is no account and no sign-in" not in notice
+    assert "If you sign in to Coriqo" in notice and "optional" in notice

@@ -19,3 +19,5 @@ async function choose(granted) {
 
 el('agree').addEventListener('click', () => choose(true))
 el('decline').addEventListener('click', () => choose(false))
+
+el('connect-coriqo').addEventListener('click', () => chrome.tabs.create({ url: chrome.runtime.getURL('login.html') }))

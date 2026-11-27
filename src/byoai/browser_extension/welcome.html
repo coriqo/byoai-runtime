@@ -84,7 +84,8 @@
     <section>
       <h2>Where it goes</h2>
       <p>To the Shield program running on this computer (<code>127.0.0.1</code>). The extension
-        has no other destination: no server of ours, no analytics, nothing over the internet.
+        has no other destination: no server of ours, no analytics, nothing over the internet, unless you choose to sign in
+        to Coriqo (see below).
         What Shield does with its own record is described in its documentation.</p>
     </section>
     <section>
@@ -113,6 +114,13 @@
       <p class="fine">"Not now" leaves the extension installed but doing nothing. You can change your mind from the popup.</p>
     </div>
   </div>
+
+  <section id="coriqo">
+    <h2>Connect to Coriqo (optional)</h2>
+    <p>Capture and Coriqo are separate. If you have a Coriqo account, you can sign in and link this computer, so it
+      is tracked in your workspace. Nothing is sent to Coriqo unless you do this, and signing in does not turn on capture.</p>
+    <p><button id="connect-coriqo">Sign in and connect this computer</button></p>
+  </section>
 
   <section class="done" id="on" hidden>
     <h2>Capture is on</h2>

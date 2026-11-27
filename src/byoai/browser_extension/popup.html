@@ -65,6 +65,7 @@
       color: var(--ink); font: inherit; font-size: var(--text-xs); font-weight: var(--weight-medium); cursor: pointer;
       transition: border-color var(--motion-fast) var(--ease); }
     button.small:hover { border-color: var(--azure); }
+    button.small.wide { display: block; width: 100%; margin-top: var(--space-sm); }
     #trust, #accept { display: block; width: 100%; margin: 0 0 var(--space-sm); text-align: left; }
     .msg { min-height: var(--space-lg); margin: var(--space-sm) 0 0; font-size: var(--text-xs); }
     .msg.ok { color: var(--validated); } .msg.bad { color: var(--off-scope); }
@@ -96,6 +97,8 @@
 
   <button class="small" id="accept" hidden>I reset it on purpose. Accept the current record.</button>
   <button class="primary" id="open-shield">Open Shield</button>
+  <button class="small wide" id="connect-coriqo">Connect to Coriqo</button>
+  <p class="help" id="coriqo-line"></p>
   <p class="help" id="help" hidden>Start it with <code>byoai-shield</code>. To have it start every time you log in, run <code>byoai-shield --install-login-item</code>.</p>
 
   <p class="promise">
@@ -139,6 +142,7 @@
       <p class="help">Open the chat page first. Copies which message box and send button Shield found on it (tag, role and label only). It never includes anything you wrote.</p>
     </div>
   </details>
+  <script src="coriqo-link.js"></script>
   <script src="consent.js"></script>
   <script src="extra-sites.js"></script>
   <script src="shield-optional.js"></script>
