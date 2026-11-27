@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "format": "coriqo.shield.signatures",
+  "kind": "base",
+  "file_version": 1,
+  "generated_at": "2026-11-27T00:00:00Z",
+  "publisher": "byoai-runtime",
+  "signatures": [
+    {
+      "id": "model.openai.api",
+      "type": "model_endpoint",
+      "match": {
+        "hosts": [
+          "api.openai.com"
+        ],
+        "paths": [
+          "/v1/chat/completions",
+          "/v1/responses"
+        ],
+        "body_fields": [
+          "model"
+        ]
+      },
+      "vendor": "OpenAI",
+      "technology": "OpenAI chat and responses API",
+      "confidence": "probable",
+      "evidence_required": [
+        "host_match",
+        "path_match"
+      ],
+      "false_positive_notes": "Only api.openai.com matches. Azure OpenAI hosts and OpenAI-compatible gateways use the same paths and are reported as unknown provider and deployment. A request without a model field leaves the model unknown.",
+      "source": {
+        "name": "Vendor API reference",
+        "url": "https://platform.openai.com/docs/api-reference",
+        "licence": "CC0-1.0"
+      },
+      "first_seen": "2026-11-27T00:00:00Z",
+      "last_verified": "2026-11-27T00:00:00Z",
+      "version": 1,
+      "expires_at": "2027-05-27T00:00:00Z"
+    },
+    {
+      "id": "model.anthropic.messages",
+      "type": "model_endpoint",
+      "match": {
+        "hosts": [
+          "api.anthropic.com"
+        ],
+        "paths": [
+          "/v1/messages"
+        ],
+        "body_fields": [
+          "model"
+        ]
+      },
+      "vendor": "Anthropic",
+      "technology": "Anthropic Messages API",
+      "confidence": "probable",
+      "evidence_required": [
+        "host_match",
+        "path_match"
+      ],
+      "false_positive_notes": "Only api.anthropic.com matches. Bedrock, Vertex and gateways that expose /v1/messages on other hosts are reported as unknown. A body without a model field leaves the model unknown.",
+      "source": {
+        "name": "Vendor API reference",
+        "url": "https://docs.anthropic.com/en/api/messages",
+        "licence": "CC0-1.0"
+      },
+      "first_seen": "2026-11-27T00:00:00Z",
+      "last_verified": "2026-11-27T00:00:00Z",
+      "version": 1,
+      "expires_at": "2027-05-27T00:00:00Z"
+    },
+    {
+      "id": "model.google.generate-content",
+      "type": "model_endpoint",
+      "match": {
+        "hosts": [
+          "generativelanguage.googleapis.com"
+        ],
+        "paths": [
+          "/v1beta/models/*:generateContent",
+          "/v1beta/models/*:streamGenerateContent",
+          "/v1/models/*:generateContent",
+          "/v1/models/*:streamGenerateContent"
+        ],
+        "body_fields": [
+          "modelVersion"
+        ]
+      },
+      "vendor": "Google",
+      "technology": "Gemini generateContent API",
+      "confidence": "probable",
+      "evidence_required": [
+        "host_match",
+        "path_match"
+      ],
+      "false_positive_notes": "Gemini requests carry the model in the URL, not the body; the URL name is not read. The model is reported only from a response modelVersion field. Vertex AI hosts are not matched.",
+      "source": {
+        "name": "Vendor API reference",
+        "url": "https://ai.google.dev/api",
+        "licence": "CC0-1.0"
+      },
+      "first_seen": "2026-11-27T00:00:00Z",
+      "last_verified": "2026-11-27T00:00:00Z",
+      "version": 1,
+      "expires_at": "2027-05-27T00:00:00Z"
+    }
+  ]
+}
