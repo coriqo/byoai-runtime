@@ -2340,6 +2340,8 @@ The Shield-side gate `BYOAI_CORIQO_LINK_HOSTS` still applies on top of these.
    identity; changing it goes through Shield's settings or `byoai-shield enrol --force`. The device key never leaves the Shield. Counting the same
    device twice is Coriqo's to avoid (the key is stable).
 
+The login page also has *Skip for now* (and Esc): it stores only `coriqo_skipped` (a timestamp, local), makes no request and keeps no token or enrolment; the popup then shows *Sign in* with "Not signed in" until a sign-in starts.
+
 When `tenants` has more than one slug the login page shows a workspace picker.
 A slug is read as `<who>_<region>` (`coriqo_msp_usa` shows as "Coriqo MSP,
 United States"; known regions are `usa`, `uk`, `eu`, `ca`, `au`, anything else

@@ -6,8 +6,11 @@ replaces personal details in the message box before you send, when your
 Shield's policy says to; on claude.ai and chatgpt.com it also does so in the
 network request itself. No account is needed. Signing in to Coriqo is optional,
 your choice, and separate from all of this (see "If you sign in to Coriqo").
+
 It does nothing until you agree on the welcome page it opens when you install
 it, and you can turn it off again at any time from its popup.
+
+The sign-in page has a *Skip for now* button (also Esc). Skipping sends nothing, stores no token and enrols nothing; it only remembers, on this computer, that you skipped, so the popup shows a quiet *Sign in* entry instead of the usual offer. Signing in later clears that note.
 
 ## What it does
 
