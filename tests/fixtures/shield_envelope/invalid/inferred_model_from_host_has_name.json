@@ -1,0 +1,1 @@
+{"kind": "browser.chat.request", "envelope_version": 1, "ai_event_type": "ai.model.requested", "evidence_level": "observed", "collector": "browser_extension", "policy_action": "redact", "outcome": "sent_redacted", "model": {"identification": "inferred", "name": "gpt-5", "source": "host_inference"}}

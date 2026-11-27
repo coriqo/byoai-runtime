@@ -1,0 +1,1 @@
+{"kind": "tool_result", "envelope_version": 1, "ai_event_type": "ai.tool.result", "evidence_level": "verified", "collector": "recorder", "policy_action": "redact", "outcome": "sent_redacted", "tool": {"status": "result"}}

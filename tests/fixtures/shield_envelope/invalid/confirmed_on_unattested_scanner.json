@@ -1,0 +1,1 @@
+{"kind": "scanner.mcp", "envelope_version": 1, "ai_event_type": "ai.app.visited", "evidence_level": "unattested", "collector": "scanner", "policy_action": "redact", "outcome": "sent_redacted", "detection": {"rule_id": "x", "rule_version": "1", "confidence": "confirmed"}}

@@ -5,9 +5,5 @@
   "evidence_level": "observed",
   "kind": "mandate_verdict",
   "outcome": "denied",
-  "policy_action": "block",
-  "tool": {
-    "name": "delete_file",
-    "status": "requested"
-  }
+  "policy_action": "block"
 }

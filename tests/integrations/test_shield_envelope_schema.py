@@ -112,3 +112,40 @@ def test_real_tool_receipt_rows_accept_the_envelope(validator, tmp_path):
                             "policy_action": "block" if r.get("mandate_verdict") == "blocked" else "allow",
                             "outcome": "denied" if r["kind"] == "tool.error" else "allowed",
                             "tool": {"name": r["tool"], "status": st, "call_id": r["call_id"]}})
+
+
+def test_frozen_interface_snapshot():
+    """A silent edit to a frozen value fails here; changing one is a version bump."""
+    s = json.loads(SCHEMA_PATH.read_text())
+    assert s["$id"] == "https://coriqo.com/schemas/shield-event-envelope-v1.json"
+    assert s["properties"]["envelope_version"] == {"const": 1}
+    enums = {k: s["properties"][k]["enum"] for k in
+             ("ai_event_type", "evidence_level", "collector", "outcome", "policy_action")}
+    assert enums == {
+        "ai_event_type": ["ai.model.requested", "ai.model.response", "ai.tool_call.requested",
+                          "ai.tool.result", "ai.tool.executed", "ai.data.attachment",
+                          "ai.policy.enforced", "ai.policy.evaluated", "ai.app.discovered",
+                          "ai.app.visited", "ai.collector.health", "ai.mcp.configured",
+                          "ai.runtime.detected"],
+        "evidence_level": ["observed", "observed_requested", "inferred", "verified",
+                           "unobservable_payload", "unattested"],
+        "collector": ["browser_extension", "desktop_proxy", "mcp_interposer", "recorder",
+                      "governed_tool", "scanner"],
+        "outcome": ["not_applicable", "unknown", "sent", "sent_redacted", "blocked", "cancelled",
+                    "answered", "failed", "uploaded", "removed", "allowed", "denied"],
+        "policy_action": ["none", "observe", "allow", "flag", "warn", "redact", "block",
+                          "pending_approval"],
+    }
+
+
+def test_row_field_set_is_closed(validator):
+    s = json.loads(SCHEMA_PATH.read_text())
+    assert s["unevaluatedProperties"] is False
+    row = _load(FIXTURES / "valid" / "browser.chat.request.json")
+    for name in ("file_name", "prompt_text", "Text", "name"):
+        assert list(validator.iter_errors({**row, name: "x"})), name
+    # a desktop-only field is not allowed on a browser row
+    assert list(validator.iter_errors({**row, "target": "claude.ai"}))
+    # every string is bounded
+    assert list(validator.iter_errors({**row, "wire": "x" * 61}))
+    assert list(validator.iter_errors({**row, "flags": ["secret:" + "a" * 100]}))

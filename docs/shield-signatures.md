@@ -53,9 +53,9 @@ sample is illustrative, not a catalog. Signature evidence feeds the
 | `evidence_required` | Non-empty list from `host_match`, `path_match`, `header_present`, `body_field_present`, `process_running`, `bundle_installed`, `config_file_present`, `config_entry_present`, `port_listening`. |
 | `false_positive_notes` | Required, non-empty. What looks like this but is not. |
 | `source` | `name`, optional `url` (https), and `licence` (SPDX id or `LicenseRef-*`). |
-| `first_seen`, `last_verified` | UTC timestamps. |
+| `first_seen`, `last_verified` | UTC timestamps, `YYYY-MM-DDTHH:MM:SS[.ffffff]Z` only (no offset). `first_seen <= last_verified <= expires_at` is a contract rule (the schema cannot compare fields); a loader rejects the entry, or the file for a base list, that breaks it. |
 | `version` | Integer, at least 1, bumped when the entry changes. |
-| `expires_at` | UTC timestamp. Required. An entry nobody re-verified stops matching. |
+| `expires_at` | UTC timestamp. Required. An entry nobody re-verified stops matching. At most **400 days** after `last_verified` (a loader rejects a longer one, so no entry lives for ever). |
 
 ### Match conditions
 
@@ -64,14 +64,14 @@ credential or a message.
 
 | Key | Content | Rules |
 |---|---|---|
-| `hosts` | Host patterns | Lowercase. Exact (`api.openai.com`) or a single leftmost wildcard label (`*.openai.azure.com`). No regex. |
+| `hosts` | Host patterns | Lowercase. Exact (`api.openai.com`) or a single leftmost wildcard label (`*.openai.azure.com`). No regex. A wildcard sits **above a registrable domain**: `*.co.uk` or `*.github.io` (a public suffix) must never appear, and the review of every change checks each wildcard parent against the public suffix list. The schema cannot do that. It also does not stop punycode (`xn--`) lookalike labels, so review reads each `xn--` host decoded. |
 | `paths` | Path patterns | Start with `/`. `*` matches one segment. Query strings are not matched. |
 | `header_names` | Header **names** | Lowercase. Presence only. |
 | `body_fields` | JSON field **names** | Presence only; the value is never read into a row (a model name may be read only under the envelope's model rules). |
 | `process_names` | Process names | |
 | `bundle_ids` | macOS bundle or Windows package ids | |
 | `ports` | Local TCP ports | |
-| `config_paths` | `{darwin, linux, windows}` lists | Start with `~/`, `%VAR%/` or `$VAR/`. No `..` segment. No absolute paths. |
+| `config_paths` | `{darwin, linux, windows}` lists | A base (`~`, `%VAR%` or `$VAR`), then 1 to 12 segments of `/` plus letters, digits, space and `._@+-`. Forward slashes only: no backslash, no empty segment, no control character, no `..`. No absolute paths. The loader also resolves the path (see loader rule 12). |
 
 Required match keys by type:
 
@@ -94,15 +94,18 @@ tests must cover each line.
 2. **Unknown field: reject the file.** The schema is closed (`additionalProperties: false`) at file, entry, match and source level. A new field needs a new `schema_version`; a loader never skips an unknown field and keeps the rest.
    - Bundle: discard the bundle, keep the base list.
    - Base list: refuse it and report a collector-health fact (`ai.collector.health`). Do not guess.
-3. **Bad signature: fail closed on the bundle.** A bundle with a missing slot, an unknown `key_id`, a malformed or wrong signature, or a failed verification is discarded **whole**. No entry of it is used. Verification is offline against pinned keys. The base list stays in force and the loader reports the failure as health, not as a silent fallback.
+3. **Location decides the kind, not the file.** The base list loads only from its packaged path. Any file at the bundle location is a bundle whatever its `kind` field says, and must carry a valid signature: a bundle with `signature` removed and `kind` edited to `base` is a bad-signature bundle and is discarded whole. The schema also refuses a `base` file that carries a `signature`, but only this rule stops the downgrade.
+   - **Bad signature: fail closed on the bundle.** A bundle with a missing slot, an unknown `key_id`, a malformed or wrong signature, or a failed verification is discarded **whole**. No entry of it is used. Verification is offline against pinned keys. The base list stays in force and the loader reports the failure as health, not as a silent fallback.
 4. **Expired file.** A bundle past its `expires_at` is treated as invalid and discarded whole. An expired base list is still used, since it ships with the package, but each of its entries is still held to rule 5, and the loader reports that the list is stale.
 5. **Expired entry: skip that entry only.** An entry past its `expires_at` never matches. It is reported as a coverage gap, never as "not AI".
 6. **Rollback.** A bundle whose `file_version` is lower than the highest one this loader has accepted is discarded. The loader keeps that number in its own state.
-7. **Merging.** Duplicate `id` inside one file rejects the file. Across base and bundle, the entry with the higher `version` wins. A bundle cannot delete a base entry.
+7. **Merging.** Duplicate `id` inside one file rejects the file. Across base and bundle, the entry with the higher `version` wins, **but** a bundle entry may only add coverage: for the same `id`, each `match` list must contain every value of the base entry's, its `evidence_required` must not be a smaller set, and its `confidence` must not be higher. Otherwise the bundle entry is ignored and the loader reports it as health. A bundle can add entries, never remove or weaken a base entry's match (a dead match such as `hosts: ["x.invalid"]` therefore cannot override). Retiring a base entry is a reviewed change to the base list.
 8. **No regex.** Patterns are the literal forms above. A loader must not compile a signature field as a regular expression.
 9. **Read only.** Loading and matching never write to a signature file.
 10. **Never auto-promote.** A domain or process seen in traffic that matches no signature (the existing `health.unmatched` canary, a `desktop.meta` `not_covered` row, a scanner sighting) is **never** added to any signature list automatically, by the loader, the proxy, the extension or Coriqo. It is reported as an unmatched sighting (`unattested` or `unobservable_payload`) and enters a list only through a reviewed change to the base list or a newly signed bundle.
 11. **Evidence honesty.** A match from a signature sets `evidence_level` per the envelope rules. A host-only match of a model API is at most `inferred` for the provider and says nothing about the model; a model name is never produced from a signature.
+
+12. **Config paths stay inside their base.** Expand `~`, `%VAR%` or `$VAR`, resolve the result (symlinks included), and reject the path if it leaves the expanded base directory. An unset variable rejects the entry. The schema's pattern is a first filter; this is the check.
 
 ## Public and private sides
 

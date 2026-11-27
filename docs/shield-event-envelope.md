@@ -27,9 +27,9 @@ signed bytes or the recorder `EventKind` list.
 1. **Additive.** No existing field is renamed, removed or re-typed. A row with no envelope stays valid and is read as unclassified.
 2. **No `ai.*` in `EventKind`.** `ai_event_type` values live in row payloads and derived views only. `docs/seal-format.md` 4.2 is untouched.
 3. **No byte changes.** No new hashing, no canonical JSON change, no signed-byte change. Envelope fields do not enter any digest that exists today (see "Recorder events" below, which is the one place this needs care).
-4. **Message text is never a field.** The schema rejects the property names `text`, `message`, `messages`, `content`, `prompt`, `reply`, `response_text`, `completion`, `body`, `input`, `output`, `args`, `arguments`, `arguments_text`, `result_text` anywhere at the row's top level, and the nested objects (`model`, `tool`, `agent`, `detection`) are closed.
+4. **The row's field set is closed.** The schema allows only the envelope names and the pre-existing row fields in `$defs/legacy_fields`, per row kind, with `unevaluatedProperties: false`; every string is bounded by a pattern or length and the nested objects (`model`, `tool`, `agent`, `detection`) are closed. A name outside the list (`text`, `prompt`, `file_name`, `Text`, anything) is rejected, and a free-text value cannot fit the patterns. This is a **format** check on a row that is offered to it. The runtime text guard is still the allowlists in code (`clean_browser_row`, the proxy's `_log` callers); the schema does not replace them.
 5. **Never invent a model name.** `model.name` exists only when the source carried one, and `model.source` says where. Otherwise `model.identification` is `unknown` and there is no name.
-6. **Execution is never assumed.** `tool.status = executed` and `ai_event_type = ai.tool.executed` require `tool.execution_source` and the `governed_tool` collector. A model's request, a gate's decision and a tool result row are not execution.
+6. **Execution is never assumed.** `tool.status = executed` and `ai_event_type = ai.tool.executed` imply each other, and both require `tool.execution_source` and the `governed_tool` collector. `evidence_level: verified` needs that same pair. `tool.status = requested` needs `observed_requested`. A row with a `tools` list is a request row (`ai.tool_call.requested`, `observed_requested`). A model's request, a gate's decision and a tool result row are not execution.
 7. **A request is a request.** Every `ai.tool_call.requested` carries `evidence_level: observed_requested`.
 
 ## Fields
@@ -85,9 +85,11 @@ A desktop `warn` has no user prompt (it behaves as redact, see the `shield_proxy
 |---|---|---|
 | `unknown` | absent | absent |
 | `observed` | required | `request_field`, `response_field` or `event_field` (the name was in the payload or in `AgentEvent.model`) |
-| `inferred` | required | `host_inference` only |
+| `inferred` | absent (`provider` required) | absent. A host says who the provider is, never which model |
 
 Browser chat rows normally cannot carry a model: use `{"identification": "unknown"}`. A desktop row for a provider API (for example Mistral) may carry the model only when the request body had a `model` field and the adapter read it.
+
+`agent` follows the same rule: with `identification: unknown` there is no `id` and no `name`, and `agent.name` is a label with no spaces, never free text. `detection.confidence` is never `confirmed` when the collector is `scanner` or the evidence is `unattested` or `inferred`.
 
 ### `tool`
 
@@ -152,6 +154,14 @@ break the join. So:
 
 Any later decision to stamp recorder payloads is a format question for the
 owner, not an adapter detail.
+
+## What later units must change
+
+None of this touches hashing, canonical JSON or signed bytes.
+
+- `clean_browser_row` rebuilds every browser row from an allowlist, so today it drops **every** new envelope field (`envelope_version`, `ai_event_type`, ... `model`, `tool`). The browser allowlist must grow by exactly the names and shapes in this schema.
+- `ReceiptSink.note` builds fixed dicts for `tool.call`, `tool.result` and `tool.error`; it must add the envelope fields itself.
+- `desktop._log(**fields)` has no allowlist: it appends whatever its caller passes. It needs one that matches `$defs/legacy_fields` plus the envelope names. Until it has, the schema rejects such a row but nothing in the proxy does.
 
 ## Validating
 
