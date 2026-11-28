@@ -316,6 +316,17 @@ export const ShieldCoriqo = z.object({
   last_error: z.string().nullish(),
   needs_attention: z.boolean(),
   marketing_url: z.string().nullish(),
+  /** The activity-sharing job. Optional: older Shields send only part of it. */
+  sync: z.object({
+    /** null: Shield couldn't read its policy; missing: an older Shield. Neither means off. */
+    level: z.enum(['seal', 'daily', 'events']).nullish(),
+    every_s: z.number().nullish(),
+    pending: z.number().int().nonnegative(),
+    last_sent_at: z.number().nullish(),
+    next_attempt_at: z.number().nullish(),
+    failures: z.number().int().nonnegative().optional(),
+    last_error: z.string().nullish(),
+  }).optional(),
 })
 export type ShieldCoriqo = z.infer<typeof ShieldCoriqo>
 /** What enrol and "Send now" answer with: the same status, minus the link. */

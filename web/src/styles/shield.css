@@ -167,6 +167,11 @@
 .coriqo-form.enrol { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }
 @media (max-width: 760px) { .coriqo-form, .coriqo-form.enrol { grid-template-columns: minmax(0, 1fr); } }
 .coriqo-status { margin: var(--space-sm) 0; }
+.sync-jobs { margin: var(--space-sm) 0; display: grid; gap: var(--space-sm); }
+.sync-scroll { overflow-x: auto; }
+.sync-table th[scope="row"] { font-size: var(--text-sm); font-weight: 600; color: var(--ink); white-space: normal; min-width: 180px; }
+.sync-table td { white-space: normal; }
+.sync-what { display: block; font-weight: 400; font-size: var(--text-xs); margin-top: var(--space-xs); }
 
 /* ============ timeline ============ */
 .shield-timeline { display: flex; flex-direction: column; gap: var(--space-lg); }
