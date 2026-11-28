@@ -76,6 +76,9 @@
       <p>It also records which of Shield's rules a message matched (for example
         "email address"), by name, never the matching text. That is all. The message text is read in the page
         and thrown away. By default it is not stored and not sent to Shield or anywhere else. If you turn on keeping a redacted preview in Shield's Settings, the first 200 characters stay on this computer.</p>
+      <p>So the popup can show what it did, the extension also keeps counts in this browser: per app and per day,
+        how many messages it checked, secrets it stopped, personal details it replaced and warnings it showed, and
+        how often each rule matched. Numbers only, for the last 30 days. Turning capture off deletes them.</p>
     </section>
     <section>
       <h2>What it changes</h2>
@@ -89,16 +92,17 @@
     </section>
     <section>
       <h2>Where it goes</h2>
-      <p>To the Shield program running on this computer (<code>127.0.0.1</code>). The extension
+      <p>The counts stay in this browser. The notes above go to the Shield desktop app on this computer
+        (<code>127.0.0.1</code>) if you have it. The extension
         has no other destination: no server of ours, no analytics, nothing over the internet, unless you choose to sign in
         to Coriqo (see below).
         What Shield does with its own record is described in its documentation.</p>
     </section>
     <section>
-      <h2>You need Shield running</h2>
-      <p>This extension is the browser side of Shield, a separate program you install on this computer
-        (<code>byoai-shield</code>). Without it, nothing is recorded; a few messages are held for a short
-        while and then dropped.</p>
+      <h2>Nothing to install</h2>
+      <p>The checks run in this browser as soon as you agree. You do not need to install or start anything else.</p>
+      <p>Optional: the Shield desktop app adds a sealed record and covers apps outside the browser. Without it,
+        the notes for that record are held for a short while, up to 50, and then dropped; the counts above are kept.</p>
     </section>
     <section>
       <h2>Sites your administrator adds</h2>
@@ -129,9 +133,10 @@
   </section>
 
   <section class="done" id="on" hidden>
-    <h2>Shield is on. Try it now.</h2>
-    <p>Copy the sample message, open an AI app, paste it and press send. Shield swaps the email, phone and card
-      for labels before the AI sees them. The sample is made up.</p>
+    <h2>Shield is on in this browser. Try it now.</h2>
+    <p>Protection started when you agreed, with nothing to install. Copy the sample message, open ChatGPT or
+      Claude, paste it and press send. Shield swaps the email, phone and card for labels before the AI sees them.
+      On Gemini it checks the message box when you send, which is best effort. The sample is made up.</p>
     <pre id="sample">Draft a reply to jane.doe@example.com. Call her on 415-555-0132 and confirm the card 4242 4242 4242 4242.</pre>
     <div class="tryit">
       <button class="primary" id="copy-sample">Copy sample message</button>
@@ -140,8 +145,9 @@
       <a class="app" href="https://gemini.google.com/app" target="_blank" rel="noopener">Open Gemini</a>
     </div>
     <p class="fine" id="copied" hidden>Copied. Paste it into the chat and send.</p>
-    <p class="fine">Pages that were already open need a reload. Start Shield with <code>byoai-shield</code> if it
-      isn't running, and open the toolbar popup any time to check on it or turn capture off.</p>
+    <p class="fine">Pages that were already open need a reload. Open the toolbar popup any time to see what Shield
+      stopped and replaced, or to turn capture off. Optional: the Shield desktop app adds a sealed record and covers
+      apps outside the browser.</p>
   </section>
   <section id="off" hidden>
     <h2>Capture is off</h2>

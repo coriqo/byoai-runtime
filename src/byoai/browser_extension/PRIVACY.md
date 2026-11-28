@@ -21,9 +21,12 @@ The sign-in page has a *Skip for now* button (also Esc). Skipping sends nothing,
 
 When you send a message on claude.ai, chatgpt.com (and chat.openai.com),
 gemini.google.com or copilot.microsoft.com (and copilot.com, copilot.cloud.microsoft, and m365.cloud.microsoft/chat), the extension notes the fact and
-hands it to **Shield, a separate program running on your own computer**
-(`byoai-shield`). No other site is watched. Without Shield running, nothing is
-recorded.
+hands it to **Shield, an optional desktop program running on your own computer**
+(`byoai-shield`). No other site is watched. The in-page checks (stopping
+secrets, replacing personal details, the warning card) run in the browser and
+need no desktop program. Without Shield running, no sealed record is kept: a
+few notes are held for a short while and dropped, and the extension keeps only
+the local counts described below.
 
 ## What is collected
 
@@ -189,6 +192,7 @@ setting of Shield, off by default, not of this extension.
 | `chrome.storage.local` `shield_policy` | Shield's mode, its per-tier actions and which apps it covers, as your paired Shield reported them | refreshed from Shield; removed when you turn capture off |
 | `chrome.storage.local` `extra_sites_status` | whether each admin-added site was set up, or why not (host names and a short reason, no content) | overwritten on each policy refresh |
 | `chrome.storage.local` `health_unmatched` | the time the canary last fired, per app | until that app's sends are recognised again, or you turn capture off |
+| `chrome.storage.local` `local_counts` | per app (Claude, ChatGPT, Gemini, Copilot) and per day: how many messages were checked, secrets stopped, personal details replaced and warnings shown, and how often each rule matched, by rule name. Numbers only: no message text, no replaced values, no addresses. Shown in the popup; never sent anywhere | the last 30 days, older days dropped on each write; removed when you turn capture off. Not counted for an app Shield is set not to check |
 | `chrome.storage.local` `last_capture` / `today` | one "last message noted" time per app, and today's message count | overwritten on each send; removed when you turn capture off |
 
 None of this contains message text, and none of it leaves your computer.
@@ -227,7 +231,7 @@ None of this contains message text, and none of it leaves your computer.
 
 - **Turn it off:** popup → Details → *Turn capture off*. This stops recording
   and replacing, and removes anything still waiting to be sent, plus the
-  per-app times, the count and the saved policy above.
+  per-app times, the count, the local counts and the saved policy above.
 - **Remove it:** uninstalling the extension stops capture at the source.
 - **Erase what Shield already kept:** Shield's Settings → Privacy → *Remove
   now* (`POST /api/privacy/scrub`). Sealed entries stay, because removing

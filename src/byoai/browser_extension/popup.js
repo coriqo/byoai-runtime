@@ -7,6 +7,7 @@
 const el = (id) => document.getElementById(id)
 
 const FALLBACK_ENDPOINT = 'http://127.0.0.1:17831/api/browser'
+const LEGACY_ENDPOINT = 'http://127.0.0.1:8300/api/browser' // an old default, not a choice
 const APPS = {
   'claude.ai': 'Claude',
   'chatgpt.com': 'ChatGPT',
@@ -33,6 +34,7 @@ const ICON_DRAWINGS = {
   failed: ['seal', 'M12.5 12.5l7 7M19.5 12.5l-7 7'],
   alert: ['line', 'M16 5l12 21H4zM16 13v6M16 23v.1'],
   off: ['line', 'M16 5a11 11 0 100 22 11 11 0 000-22zM11 16h10'],
+  on: ['line', 'M16 5a11 11 0 100 22 11 11 0 000-22zM11 16.5l3.5 3.5 6.5-7'],
 }
 function drawIcon(name) {
   const [kind, glyph] = ICON_DRAWINGS[name] || ICON_DRAWINGS.pending
@@ -161,9 +163,37 @@ async function refresh() {
     return
   }
   const [probed, app] = await Promise.all([probe(), currentApp()])
+  if (probed.state === 'unreachable') {
+    // No local Shield answered. Whether that matters depends on whether one was ever set up.
+    // Read straight from storage, not through the worker, so a slow worker cannot make it look unset.
+    const [stored, managed] = await Promise.all([
+      chrome.storage.local.get(['pinned_shield', 'endpoint', 'rollback', 'shield_policy', globalThis.ShieldStats.KEY]).catch(() => null),
+      readManagedFlag(),
+    ])
+    const saved = stored?.endpoint
+    probed.state = globalThis.ShieldStats.standaloneState({ state: 'unreachable', verifyFailed: probed.verifyFailed,
+      // A failed storage read is "could not tell", which counts as expected.
+      pin: stored ? stored.pinned_shield : true, managed,
+      customEndpoint: !!saved && saved !== FALLBACK_ENDPOINT && saved !== LEGACY_ENDPOINT })
+    stored ||= {}
+    // A rollback seen earlier stays on screen until accepted, Shield answering or not.
+    if (stored.rollback) probed.shorter = stored.rollback
+    probed.counts = stored[globalThis.ShieldStats.KEY]
+    // What the page checks use with no Shield answering: the last policy a paired Shield gave, else the defaults.
+    probed.mode = stored.shield_policy?.mode || null
+    probed.apps = stored.shield_policy?.apps || {}
+  }
   lastRender = { probed, app }
   render(probed, app)
   await showGate(app)
+}
+
+// true / false from Chrome's managed storage, or null when it gives no answer in
+// time (counted as expected). An absent policy area, or one that throws (some
+// builds do with no policy), is "not managed", as readManaged and the worker say.
+async function readManagedFlag() {
+  const answer = globalThis.ShieldManaged.readManaged(chrome.storage).then((m) => m.managed)
+  return withTimeout(answer, 1500).catch(() => null)
 }
 
 async function showGate(app) {
@@ -200,7 +230,8 @@ async function probe() {
     } catch { /* an older Shield: say nothing rather than guess */ }
     return { state, endpoint, verify, apps, mode }
   } catch {
-    return { state: 'unreachable', endpoint }
+    // It proved it is our Shield, then its record check failed: not "away", a warning.
+    return { state: 'unreachable', endpoint, verifyFailed: true }
   }
 }
 
@@ -271,7 +302,7 @@ function ago(ms) {
 
 const shortAddress = (endpoint) => { try { return new URL(endpoint).host } catch { return endpoint } }
 
-function render({ state, endpoint, verify, apps, mode, shorter }, app) {
+function render({ state, endpoint, verify, apps, mode, shorter, counts }, app) {
   el('endpoint').value = endpoint
   el('addr').textContent = shortAddress(endpoint)
   el('addr').title = baseOf(endpoint)
@@ -284,6 +315,7 @@ function render({ state, endpoint, verify, apps, mode, shorter }, app) {
   }
   const primary = el('open-shield')
   el('help').hidden = true
+  el('desktop-line').hidden = true
   el('trust').hidden = true
   el('accept').hidden = true
   primary.hidden = false
@@ -311,6 +343,16 @@ function render({ state, endpoint, verify, apps, mode, shorter }, app) {
     primary.hidden = true
     return
   }
+  if (shorter && (state === 'unreachable' || state === 'away' || state === 'protecting')) {
+    // Warnings win over the calm states.
+    set('bad', 'failed', "Shield's record is shorter than it was",
+      `It held ${shorter.was} sealed entries and now holds ${shorter.now}. Something deleted or reset it.`)
+    el('accept').hidden = false
+    el('help').hidden = false
+    primary.textContent = 'Check again'
+    primary.dataset.retry = '1'
+    return
+  }
   if (state === 'unreachable') {
     set('bad', 'alert', "Shield isn't running",
       'Messages you send now are held here for a short while, up to 50, then dropped.')
@@ -319,10 +361,28 @@ function render({ state, endpoint, verify, apps, mode, shorter }, app) {
     primary.dataset.retry = '1'
     return
   }
-  delete primary.dataset.retry
+  const S = globalThis.ShieldStats
+  const week = () => S.weekLine(S.summarize(counts, Date.now(), 7), S.summarize(counts, Date.now(), 1))
+  if (state === 'protecting') {
+    // No desktop app, and none expected: the in-page checks are the product here.
+    set('ok', 'on', 'Protecting this browser', week())
+    primary.hidden = true
+    el('desktop-line').hidden = false
+  } else if (state === 'away') {
+    // A Shield was set up here and has stopped answering: say so, calmly.
+    set('wait', 'off', "Your Shield desktop app isn't answering",
+      `It was set up for this browser and has not answered just now. Checks in this browser still run. ${week()} ` +
+      'Notes for its sealed record are held here for a short while, up to 50, then dropped.')
+    el('help').hidden = false
+    primary.textContent = 'Check again'
+    primary.dataset.retry = '1'
+  }
+  if (state !== 'protecting' && state !== 'away') delete primary.dataset.retry
   const v = verify || {}
   const n = v.entries
-  if (shorter) {
+  if (state === 'protecting' || state === 'away') {
+    // status set above
+  } else if (shorter) {
     set('bad', 'failed', "Shield's record is shorter than it was",
       `It held ${shorter.was} sealed entries and now holds ${shorter.now}. Something deleted or reset it.`)
     el('accept').hidden = false
@@ -353,6 +413,9 @@ function render({ state, endpoint, verify, apps, mode, shorter }, app) {
     }
   } else if (app.host) {
     tab.textContent = `This tab (${app.host}) is not one Shield covers.`
+  }
+  if (state === 'protecting' && !app.name) {
+    tab.append((app.host ? ' ' : '') + 'Shield covers ChatGPT and Claude, where personal details are replaced before a message leaves the page, and Gemini and Copilot, where it checks the message box when you send (best effort).')
   }
   if (app.name && !(apps && apps[appKey] === false)) tab.append(' ' + protection(appKey, mode))
   if (app.outdated && app.outdated.length) {
