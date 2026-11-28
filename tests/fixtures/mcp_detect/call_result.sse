@@ -1,0 +1,7 @@
+event: message
+data: {"jsonrpc":"2.0","id":7,
+data: "result":{"content":[{"type":"text","text":"hi"}],"isError":false}}
+
+event: ping
+data: not json
+
