@@ -23,7 +23,7 @@ SCHEMA_PATH = Path(__file__).with_name("shield_signatures.schema.json")
 _MAX_FILE_BYTES = 1_000_000
 _MAX_PATH = 2048
 _MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@-]{0,127}")
-_TS_RE = re.compile(r"\d{4}-\d{2}-\d{2}T[0-9:.]+Z")
+_TS_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?Z", re.ASCII)
 _HOST_RE = re.compile(r"(\*\.)?[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+")
 _PATH_RE = re.compile(r"/[A-Za-z0-9/_.:*{}-]{0,120}")
 
@@ -69,19 +69,26 @@ class Catalog:
     error: str | None = None
     expired_ids: tuple[str, ...] = field(default=())
 
-    def match(self, host: Any, path: Any, body: Any = None) -> ModelMatch:
-        """Provider (and model if the payload carries one). Never raises."""
+    def match(self, host: Any, path: Any, body: Any = None, *, now: str | None = None) -> ModelMatch:
+        """Provider (and model if the payload carries one). Never raises.
+
+        An entry whose ``expires_at`` has passed no longer matches, even if it was
+        valid when the catalog was loaded. ``now`` (UTC, ``YYYY-MM-DDTHH:MM:SSZ``) is for tests.
+        """
         try:
-            return self._match(host, path, body)
+            return self._match(host, path, body, now)
         except Exception:  # noqa: BLE001 - fail closed on anything unexpected
             return NO_MATCH
 
-    def _match(self, host: Any, path: Any, body: Any) -> ModelMatch:
+    def _match(self, host: Any, path: Any, body: Any, now: str | None) -> ModelMatch:
         h = _norm_host(host)
         p = _norm_path(path)
         if h is None or p is None:
             return NO_MATCH
+        now_s = _now(now)
         for e in self.entries:
+            if e.expires_at <= now_s:
+                continue
             if any(_host_ok(pat, h) for pat in e.hosts) and any(_path_ok(pat, p) for pat in e.paths):
                 model, src = _read_model(e.provider, body)
                 return ModelMatch(
@@ -94,6 +101,32 @@ class Catalog:
                     confidence=e.confidence if e.confidence != "confirmed" else "probable",
                 )
         return NO_MATCH
+
+
+def _now(override: Any = None) -> str:
+    """Current UTC time, or ``override`` if it is a valid timestamp (normalised to seconds).
+
+    Anything that is not a valid timestamp (wrong type, junk) is ignored and the
+    real clock is used, so a bad override can never make an entry look unexpired
+    by string order.
+    """
+    if isinstance(override, str) and _TS_RE.fullmatch(override):
+        try:
+            return _norm_ts(override)
+        except ValueError:
+            pass
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _norm_ts(ts: str) -> str:
+    """Validate a timestamp and normalise it to ``YYYY-MM-DDTHH:MM:SSZ`` (fraction dropped).
+
+    Parsed with ``strptime`` (not ``fromisoformat``, whose accepted forms differ
+    between Python 3.10 and 3.11+). Raises ValueError for month 13, hour 25, ...
+    """
+    sec = ts[17:19] if len(ts) > 17 and ts[16] == ":" else "00"
+    datetime.strptime(ts[:16] + ":" + sec, "%Y-%m-%dT%H:%M:%S")
+    return ts[:16] + ":" + sec + "Z"
 
 
 def _norm_host(host: Any) -> str | None:
@@ -125,9 +158,31 @@ def _host_ok(pattern: str, host: str) -> bool:
 
 
 def _path_ok(pattern: str, path: str) -> bool:
-    # ``*`` matches within one segment (never across ``/``), so ``*:generateContent`` works.
-    rx = "".join("[^/]+" if c == "*" else re.escape(c) for c in pattern)
-    return re.fullmatch(rx, path) is not None
+    """``*`` matches one or more characters within a single segment, never across ``/``.
+
+    Segment by segment with a greedy literal search: no regex, so a pattern full
+    of ``*`` cannot cause backtracking blow-up.
+    """
+    pats, segs = pattern.split("/"), path.split("/")
+    return len(pats) == len(segs) and all(_seg_ok(a, b) for a, b in zip(pats, segs))
+
+
+def _seg_ok(pat: str, seg: str) -> bool:
+    parts = pat.split("*")
+    if len(parts) == 1:
+        return pat == seg
+    first, last = parts[0], parts[-1]
+    end = len(seg) - len(last)
+    if not seg.startswith(first) or not seg.endswith(last) or end < len(first):
+        return False
+    pos = len(first)
+    for mid in parts[1:-1]:
+        pos += 1  # the star before ``mid`` takes at least one character
+        idx = seg.find(mid, pos)
+        if idx < 0 or idx + len(mid) > end:
+            return False
+        pos = idx + len(mid)
+    return pos + 1 <= end  # the last star takes at least one character
 
 
 def _read_model(provider: str, body: Any) -> tuple[str | None, str | None]:
@@ -200,7 +255,7 @@ def _load(text: str, now: str | None) -> Catalog:
     sigs = doc.get("signatures")
     if not isinstance(sigs, list) or not sigs:
         return _fail("no signatures")
-    now_s = now or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    now_s = _now(now)
     entry_keys, match_keys, source_keys = _schema_keys()
     seen: set[str] = set()
     entries: list[_Entry] = []
@@ -216,6 +271,10 @@ def _load(text: str, now: str | None) -> Catalog:
             return _fail("unknown match or source field")
         exp, ver, conf = s.get("expires_at"), s.get("version"), s.get("confidence")
         if not isinstance(exp, str) or not _TS_RE.fullmatch(exp):
+            return _fail("bad expires_at")
+        try:
+            exp = _norm_ts(exp)
+        except ValueError:
             return _fail("bad expires_at")
         if not isinstance(ver, int) or isinstance(ver, bool) or ver < 1:
             return _fail("bad version")
