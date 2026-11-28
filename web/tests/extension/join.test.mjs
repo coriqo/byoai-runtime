@@ -8,36 +8,78 @@ import fs from 'node:fs'
 const L = createRequire(import.meta.url)(path.join(REPO, 'src/byoai/browser_extension/coriqo-link.js'))
 const BASE = 'https://app.coriqo.io'
 const NOW = 1_800_000_000_000
-const msg = { type: 'coriqo.join.finished', connect: true }
-const pending = { tenant: 'coriqo_msp_usa', at: NOW - 60_000 }
+
+const STATE = 'ab'.repeat(32)
+const msg = { type: 'coriqo.join.finished', connect: true, state: STATE, tenant: 'acme_msp' }
+const pending = { region: 'usa', state: STATE, at: NOW - 60_000 }
+const acc = (o = {}) => L.acceptJoinMessage({ msg, senderOrigin: BASE, base: BASE, pending, now: NOW, ...o })
+
+async function bg({ managed, pending, twice = false, burst = 0, msgOverride }) {
+  const store = { coriqo_pending_join: pending }
+  const calls = { tabs: 0 }
+  const tick = () => new Promise((r) => setTimeout(r, 1))
+  const chrome = {
+    storage: {
+      local: { get: async () => { await tick(); return { ...store } }, set: async (o) => { await tick(); Object.assign(store, o) } },
+      managed: { get: async () => { await tick(); return managed } },
+    },
+    runtime: { getManifest: () => ({}), getURL: (x) => x },
+    tabs: { create: () => { calls.tabs++ } },
+  }
+  const fn = new Function('chrome', 'globalThis', extract('background.js', 'handleJoinMessage') + extract('background.js', 'handleJoinOnce') + '; return handleJoinMessage')(chrome, { CoriqoLink: L })
+  if (burst) {
+    const ok = await Promise.all(Array.from({ length: burst }, () => fn(msgOverride || msg, { origin: BASE })))
+    return { ok, store, calls }
+  }
+  let ok = await fn(msgOverride || msg, { origin: BASE })
+  if (twice) ok = [ok, await fn(msgOverride || msg, { origin: BASE })]
+  return { ok, store, calls }
+}
 
 describe('join helpers', () => {
-  it('picks the UK workspace for the UK and Europe, and the US one for everyone else', () => {
-    expect(L.joinTenantFor('uk')).toBe('coriqo_msp_uk')
-    expect(L.joinTenantFor('eu')).toBe('coriqo_msp_uk')
-    expect(L.joinTenantFor('usa')).toBe('coriqo_msp_usa')
-    expect(L.joinTenantFor(null)).toBe('coriqo_msp_usa')
-  })
-
-  it('builds an address with the workspace and source only', () => {
-    const u = new URL(L.joinUrl({ base: BASE, tenant: 'coriqo_msp_uk' }))
+  it('builds an address with region, source and state only', () => {
+    const u = new URL(L.joinUrl({ base: BASE, region: 'uk', state: STATE }))
     expect(u.origin + u.pathname).toBe('https://app.coriqo.io/join')
-    expect([...u.searchParams.keys()].sort()).toEqual(['source', 'tenant'])
-    expect(() => L.joinUrl({ base: 'http://evil.example', tenant: 'x' })).toThrow('bad_base')
+    expect([...u.searchParams.keys()].sort()).toEqual(['region', 'source', 'state'])
+    expect(u.searchParams.get('state')).toBe(STATE)
+    expect([...new URL(L.joinUrl({ base: BASE, state: STATE })).searchParams.keys()].sort()).toEqual(['source', 'state'])
+    expect(() => L.joinUrl({ base: 'http://evil.example', state: STATE })).toThrow('bad_base')
   })
 
-  it('accepts the finished message from the Coriqo page for a join it started', () => {
-    expect(L.acceptJoinMessage({ msg, senderOrigin: BASE, base: BASE, pending, now: NOW })).toEqual({ ok: true, connect: true })
-    expect(L.acceptJoinMessage({ msg: { ...msg, connect: false }, senderOrigin: BASE, base: BASE, pending, now: NOW }).connect).toBe(false)
+  it('makeJoinState gives 64 lowercase hex, different each call', () => {
+    const c = { getRandomValues: (a) => { for (let i = 0; i < a.length; i++) a[i] = Math.floor(Math.random() * 256); return a } }
+    const a = L.makeJoinState(c), b = L.makeJoinState(c)
+    expect(a).toMatch(/^[0-9a-f]{64}$/)
+    expect(a).not.toBe(b)
+  })
+
+  it('accepts the finished message and returns its tenant', () => {
+    expect(acc()).toEqual({ ok: true, connect: true, tenant: 'acme_msp' })
+    expect(acc({ msg: { ...msg, connect: false } }).connect).toBe(false)
+  })
+
+  it('refuses a state that differs, is missing, short or uppercase', () => {
+    expect(acc({ msg: { ...msg, state: 'cd'.repeat(32) } }).ok).toBe(false)
+    expect(acc({ msg: { ...msg, state: undefined } }).ok).toBe(false)
+    expect(acc({ msg: { ...msg, state: 'ab'.repeat(31) }, pending: { ...pending, state: 'ab'.repeat(31) } }).ok).toBe(false)
+    const up = 'AB'.repeat(32)
+    expect(acc({ msg: { ...msg, state: up }, pending: { ...pending, state: up } }).ok).toBe(false)
+    expect(acc({ pending: { region: 'usa', at: NOW - 1000 } }).ok).toBe(false)
+  })
+
+  it('refuses a tenant that does not match the slug pattern', () => {
+    for (const t of [undefined, '', 'Acme', '1abc', 'a-b', 'a'.repeat(52), 'a b', 5]) {
+      expect(acc({ msg: { ...msg, tenant: t } }).ok).toBe(false)
+    }
   })
 
   it('treats anything but connect === true as no connect', () => {
-    expect(L.acceptJoinMessage({ msg: { type: msg.type, connect: 'yes' }, senderOrigin: BASE, base: BASE, pending, now: NOW }).connect).toBe(false)
+    expect(acc({ msg: { ...msg, connect: 'yes' } }).connect).toBe(false)
   })
 
   it('refuses a page that is not the Coriqo address in use', () => {
     for (const origin of ['https://evil.example', 'http://app.coriqo.io', 'https://app.coriqo.io.evil.example', undefined]) {
-      expect(L.acceptJoinMessage({ msg, senderOrigin: origin, base: BASE, pending, now: NOW }).ok).toBe(false)
+      expect(acc({ senderOrigin: origin }).ok).toBe(false)
     }
   })
 
@@ -48,8 +90,8 @@ describe('join helpers', () => {
   })
 
   it('refuses any other message type', () => {
-    for (const m of [null, {}, { type: 'other' }, { type: 'coriqo.join.finished ' }]) {
-      expect(L.acceptJoinMessage({ msg: m, senderOrigin: BASE, base: BASE, pending, now: NOW }).ok).toBe(false)
+    for (const m of [{ type: 'other' }, { type: 'coriqo.join.finished ' }, { type: undefined }]) {
+      expect(L.acceptJoinMessage({ msg: m && { ...msg, ...m }, senderOrigin: BASE, base: BASE, pending, now: NOW }).ok).toBe(false)
     }
   })
 
@@ -76,7 +118,7 @@ const mkStore = (init = {}) => {
     set: (o, cb) => { Object.assign(store, o); cb?.() },
     remove: (k, cb) => { for (const x of [].concat(k)) delete store[x]; cb?.() } } } } }
 }
-const fresh = () => ({ tenant: 'coriqo_msp_usa', at: Date.now() - 1000, accepted: true, connect: true })
+const fresh = () => ({ region: 'usa', state: STATE, tenant: 'acme_usa', at: Date.now() - 1000, accepted: true, connect: true })
 function mkRun({ pend, oauth, session, confirm = true, picked, after, policy = true }) {
   const { store, chrome } = mkStore(pend ? { coriqo_pending_join: pend } : {})
   const calls = { oauth: 0, connect: 0 }
@@ -88,7 +130,7 @@ function mkRun({ pend, oauth, session, confirm = true, picked, after, policy = t
     { querySelector: () => (picked === undefined ? null : { value: typeof picked === 'function' ? picked() : picked }) }, async () => ({ enabled: policy }))
   return { fn, calls, store }
 }
-const goodSession = (over = {}) => ({ via: 'oauth', at: Date.now() + 5, tenant_slug: 'coriqo_msp_usa', tenants: ['coriqo_msp_usa'], ...over })
+const goodSession = (over = {}) => ({ via: 'oauth', at: Date.now() + 5, tenant_slug: 'acme_usa', tenants: ['acme_usa'], ...over })
 
 describe('E1 auto-join never connects with an older session', () => {
   it('does not connect when sign-in was cancelled but an older session is stored', async () => {
@@ -102,7 +144,7 @@ describe('E1 auto-join never connects with an older session', () => {
     expect(r.calls.connect).toBe(0)
   })
   it('does not connect when the session names another workspace than the join', async () => {
-    const r = mkRun({ pend: fresh(), oauth: true, session: goodSession({ tenant_slug: 'coriqo_msp_uk', tenants: ['coriqo_msp_uk', 'coriqo_msp_usa'] }) })
+    const r = mkRun({ pend: fresh(), oauth: true, session: goodSession({ tenant_slug: 'acme_uk', tenants: ['acme_uk', 'acme_usa'] }) })
     await r.fn()
     expect(r.calls.connect).toBe(0)
   })
@@ -115,7 +157,7 @@ describe('E1 auto-join never connects with an older session', () => {
     const r = mkRun({ pend: fresh(), oauth: true, session: goodSession() })
     expect(await r.fn()).toBe(true)
     expect(r.calls.connect).toBe(1)
-    expect(r.calls.tenant).toBe('coriqo_msp_usa') // onConnect is told the joined workspace, not left to read the picker
+    expect(r.calls.tenant).toBe('acme_usa') // onConnect is told the joined workspace, not left to read the picker
     expect(r.store.coriqo_pending_join).toBeUndefined()
   })
   it('does not connect when connect was not ticked', async () => {
@@ -133,14 +175,14 @@ describe('E1 auto-join never connects with an older session', () => {
 
 describe('Y1 nothing changes during the auto-connect window', () => {
   it('does not connect when the picker moves to another workspace in the window', async () => {
-    let pick = 'coriqo_msp_usa'
-    const r = mkRun({ pend: fresh(), oauth: true, session: goodSession(), picked: () => pick, after: () => { pick = 'coriqo_msp_uk' } })
+    let pick = 'acme_usa'
+    const r = mkRun({ pend: fresh(), oauth: true, session: goodSession(), picked: () => pick, after: () => { pick = 'acme_uk' } })
     await r.fn()
     expect(r.calls.connect).toBe(0)
   })
   it('does not connect when the stored session changes workspace in the window', async () => {
     const sess = goodSession()
-    const r = mkRun({ pend: fresh(), oauth: true, session: sess, after: () => { sess.tenant_slug = 'coriqo_msp_uk' } })
+    const r = mkRun({ pend: fresh(), oauth: true, session: sess, after: () => { sess.tenant_slug = 'acme_uk' } })
     await r.fn()
     expect(r.calls.connect).toBe(0)
   })
@@ -154,7 +196,7 @@ describe('Y1 nothing changes during the auto-connect window', () => {
     expect(b.calls.connect).toBe(0)
   })
   it('connects once when nothing changed', async () => {
-    const r = mkRun({ pend: fresh(), oauth: true, session: goodSession(), picked: 'coriqo_msp_usa' })
+    const r = mkRun({ pend: fresh(), oauth: true, session: goodSession(), picked: 'acme_usa' })
     await r.fn()
     expect(r.calls.connect).toBe(1)
   })
@@ -206,45 +248,25 @@ describe('E4 stale flags and the admin off switch', () => {
       expect(store.coriqo_pending_join !== undefined).toBe(kept)
     }
   })
-  async function bg({ managed, pending, twice = false, burst = 0 }) {
-    const store = { coriqo_pending_join: pending }
-    const calls = { tabs: 0 }
-    const tick = () => new Promise((r) => setTimeout(r, 1))
-    const chrome = {
-      storage: {
-        local: { get: async () => { await tick(); return { ...store } }, set: async (o) => { await tick(); Object.assign(store, o) } },
-        managed: { get: async () => { await tick(); return managed } },
-      },
-      runtime: { getManifest: () => ({}), getURL: (x) => x },
-      tabs: { create: () => { calls.tabs++ } },
-    }
-    const fn = new Function('chrome', 'globalThis', extract('background.js', 'handleJoinMessage') + extract('background.js', 'handleJoinOnce') + '; return handleJoinMessage')(chrome, { CoriqoLink: L })
-    if (burst) {
-      const ok = await Promise.all(Array.from({ length: burst }, () => fn(msg, { origin: BASE })))
-      return { ok, store, calls }
-    }
-    let ok = await fn(msg, { origin: BASE })
-    if (twice) ok = [ok, await fn(msg, { origin: BASE })]
-    return { ok, store, calls }
-  }
   it('accepts a join while linking is on', async () => {
-    const r = await bg({ managed: {}, pending: { tenant: 't', at: Date.now() - 1000 } })
+    const r = await bg({ managed: {}, pending: { region: 'usa', state: STATE, at: Date.now() - 1000 } })
     expect(r.ok).toBe(true)
     expect(r.calls.tabs).toBe(1)
     expect(r.store.coriqo_pending_join.accepted).toBe(true)
+    expect(r.store.coriqo_pending_join.tenant).toBe('acme_msp') // from the message, not the page's own guess
   })
   it('an accepted join is used up: a second message opens no second tab', async () => {
-    const r = await bg({ managed: {}, pending: { tenant: 't', at: Date.now() - 1000 }, twice: true })
+    const r = await bg({ managed: {}, pending: { region: 'usa', state: STATE, at: Date.now() - 1000 }, twice: true })
     expect(r.ok).toEqual([true, false])
     expect(r.calls.tabs).toBe(1)
   })
   it('a burst of concurrent messages opens exactly one tab', async () => {
-    const r = await bg({ managed: {}, pending: { tenant: 't', at: Date.now() - 1000 }, burst: 5 })
+    const r = await bg({ managed: {}, pending: { region: 'usa', state: STATE, at: Date.now() - 1000 }, burst: 5 })
     expect(r.ok.filter(Boolean).length).toBe(1)
     expect(r.calls.tabs).toBe(1)
   })
   it('if the login tab never ran, the page may try again after a minute (but not before)', async () => {
-    const stuck = (ago) => ({ tenant: 't', at: Date.now() - 5000, accepted: true, accepted_at: Date.now() - ago, connect: true })
+    const stuck = (ago) => ({ region: 'usa', state: STATE, at: Date.now() - 5000, accepted: true, accepted_at: Date.now() - ago, connect: true })
     const late = await bg({ managed: {}, pending: stuck(61_000) })
     expect(late.ok).toBe(true)
     expect(late.calls.tabs).toBe(1)
@@ -253,7 +275,7 @@ describe('E4 stale flags and the admin off switch', () => {
     expect(early.calls.tabs).toBe(0)
   })
   it('refuses early when the admin turned linking off: no flag, no tab', async () => {
-    const r = await bg({ managed: { coriqo_link: 'disabled' }, pending: { tenant: 't', at: Date.now() - 1000 } })
+    const r = await bg({ managed: { coriqo_link: 'disabled' }, pending: { region: 'usa', state: STATE, at: Date.now() - 1000 } })
     expect(r.ok).toBe(false)
     expect(r.calls.tabs).toBe(0)
     expect(r.store.coriqo_pending_join.accepted).toBeUndefined()
@@ -277,7 +299,7 @@ describe('review fixes: a failed sign-in keeps the join, a used one cannot run t
     const r = mkRun({ pend: fresh(), oauth: false, session: null })
     expect(await r.fn()).toBe(true)
     expect(r.calls.connect).toBe(0)
-    expect(r.store.coriqo_pending_join).toMatchObject({ tenant: 'coriqo_msp_usa', accepted: false })
+    expect(r.store.coriqo_pending_join).toMatchObject({ tenant: 'acme_usa', accepted: false })
   })
   it('uses the join up once signed in, even when connect was not ticked', async () => {
     const r = mkRun({ pend: { ...fresh(), connect: false }, oauth: true, session: goodSession() })
@@ -305,5 +327,37 @@ describe('review fixes: a failed sign-in keeps the join, a used one cannot run t
   })
   it('keeps the browser-only limits card open by default', () => {
     expect(read('login.html')).toMatch(/<details class="card" id="upsell-card" open>/)
+  })
+})
+
+describe('no MSP workspace names ship in the extension', () => {
+  it('no shipped file names an MSP workspace', () => {
+    for (const f of fs.readdirSync(EXT, { recursive: true })) {
+      const full = path.join(EXT, f)
+      if (!fs.statSync(full).isFile() || /\.(png|jpg|ico)$/.test(f)) continue
+      const t = fs.readFileSync(full, 'utf8')
+      expect(t, f).not.toMatch(new RegExp('coriqo' + '_msp|JOIN_TENANTS|joinTenantFor'))
+    }
+  })
+})
+
+describe('review fixes: the workspace cannot be swapped by a later message, and the person sees it', () => {
+  it('a later message with the same state cannot change the workspace Coriqo already named', async () => {
+    const first = { type: 'coriqo.join.finished', connect: true, state: STATE, tenant: 'acme_usa' }
+    const second = { ...first, tenant: 'other_ws' }
+    const pending = { region: 'usa', state: STATE, at: Date.now() - 1000, accepted: false, tenant: 'acme_usa' }
+    const r = await bg({ managed: {}, pending, msgOverride: second })
+    expect(r.ok).toBe(false)
+    expect(r.calls.tabs).toBe(0)
+    expect(r.store.coriqo_pending_join.tenant).toBe('acme_usa')
+    const same = await bg({ managed: {}, pending, msgOverride: first })
+    expect(same.ok).toBe(true)
+  })
+  it('the cancel window names the workspace that is about to be connected', () => {
+    expect(read('login.html')).toMatch(/id="auto-ws"/)
+    expect(read('login.js')).toMatch(/el\('auto-ws'\)\.textContent = workspace/)
+  })
+  it('the join regions are the known regions, not a second list', () => {
+    expect(read('coriqo-link.js')).toMatch(/JOIN_REGIONS = Object\.keys\(REGIONS\)/)
   })
 })

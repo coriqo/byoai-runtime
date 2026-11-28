@@ -130,16 +130,17 @@ async function onOAuth() {
 
 const PENDING_JOIN_KEY = 'coriqo_pending_join'
 
-// Send the person to Coriqo's pay-to-join page for the workspace nearest them, and remember that we
+// Send the person to Coriqo's pay-to-join page for the region nearest them, and remember that we
 // did, so only a join we started can be finished by a message from that page (see background.js).
 async function onJoin() {
   if (!(await getPolicy()).enabled) return setMsg('join-msg', OFF_TEXT, 'bad')
   try {
     const L = globalThis.CoriqoLink
     const region = L.detectRegion({ language: navigator.language, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone })
-    const tenant = L.joinTenantFor(region)
-    const url = L.joinUrl({ base: await getApiBase(), tenant })
-    await new Promise((r) => chrome.storage.local.set({ [PENDING_JOIN_KEY]: { tenant, at: Date.now() } }, r))
+    const guess = L.JOIN_REGIONS.includes(region) ? region : undefined
+    const state = L.makeJoinState()
+    const url = L.joinUrl({ base: await getApiBase(), region: guess, state })
+    await new Promise((r) => chrome.storage.local.set({ [PENDING_JOIN_KEY]: { region: guess || null, state, at: Date.now() } }, r))
     chrome.tabs.create({ url })
     setMsg('join-msg', 'Opened Coriqo in a new tab. Come back here when you are done.', 'ok')
   } catch (err) {
@@ -151,9 +152,10 @@ const AUTO_CONNECT_MS = 5000
 
 // The person ticked "connect" on Coriqo's page, but still gets a visible few seconds to stop it.
 // Resolves true when the time runs out, false if they press Cancel.
-function confirmAutoConnect(ms = AUTO_CONNECT_MS) {
+function confirmAutoConnect(ms = AUTO_CONNECT_MS, workspace = '') {
   return new Promise((resolve) => {
     const box = el('auto-status')
+    el('auto-ws').textContent = workspace // the person sees which workspace is about to be connected
     const cancel = el('auto-cancel')
     box.hidden = false
     // The workspace is fixed while the status shows, so what is connected is what was joined.
@@ -202,7 +204,8 @@ async function runAfterJoin() {
   if (!pending.connect) return true
   const session = await getSession()
   if (session?.via !== 'oauth' || !(session.at >= startedAt) || session.tenant_slug !== pending.tenant) return true
-  if (!(await confirmAutoConnect())) return true
+  const shown = L.tenantLabel(pending.tenant)
+  if (!(await confirmAutoConnect(undefined, shown.region ? `${shown.name}, ${shown.region}` : shown.name))) return true
   // The window was open for seconds: look again at who is signed in and which workspace is picked.
   const again = await getSession()
   const picked = document.querySelector('#tenants input[name=tenant]:checked')?.value || again?.tenant_slug

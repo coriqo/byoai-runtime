@@ -2431,7 +2431,7 @@ The login page also has *Skip for now* (and Esc): it stores only `coriqo_skipped
 When `tenants` has more than one slug the login page shows the chosen workspace
 as one line ("Nearest to you" when it was picked by region) and keeps the full
 picker folded under *Use a different workspace*.
-A slug is read as `<who>_<region>` (`coriqo_msp_usa` shows as "Coriqo MSP,
+A slug is read as `<who>_<region>` (`acme_usa` shows as "Acme,
 United States"; known regions are `usa`, `uk`, `eu`, `ca`, `au`, anything else
 is shown as is). Coriqo's `tenant_slug` is preselected when Coriqo
 names one; otherwise the workspace nearest the user is, and the first entry if
@@ -2444,17 +2444,18 @@ message (with a copy button) and links that open ChatGPT, Claude and Gemini.
 Nothing is sent anywhere by it.
 
 When the sign-in works but the account has no workspace, the login page offers *Join Coriqo*. It
-opens `<coriqo base>/join?tenant=<coriqo_msp_usa|coriqo_msp_uk>&source=extension` in a new tab (the UK
-workspace for the UK and Europe, the US one otherwise, by the same on-device guess as above; no email or
-token is in the address) and stores `coriqo_pending_join` (workspace and time, local). Coriqo's page
+opens `<coriqo base>/join?region=<usa|uk|eu|ca|au>&source=extension&state=<64 hex>` in a new tab (the region
+is the same on-device guess as above and is left out when unknown; `state` is 32 random bytes made per join;
+no email, token or workspace is in the address) and stores `coriqo_pending_join` (`{ region, state, at }`, local). Coriqo's page
 takes the payment and a password. When it is done it sends the extension one message,
-`{ type: "coriqo.join.finished", connect: true|false }`, using `externally_connectable`. The manifest
+`{ type: "coriqo.join.finished", connect: true|false, state, tenant }` (`state` is the exact value from the address, `tenant` is the workspace slug Coriqo chose), using `externally_connectable`. The manifest
 matches only the join page: `https://app.coriqo.io/join*`, plus `http://localhost/join*` in the
 unpacked dev manifest (Chrome match patterns ignore the port). `scripts/package_extension.py` (the
 `build:extension` script) removes the localhost entry from store builds and refuses to build one that
 still lists localhost or plain http; `--keep-key` (dev build) keeps it. The extension accepts the
 message only if linking is not switched off by the admin (`coriqo_link: "disabled"` gets `{ ok: false }`,
 no flag stored, no tab opened), it started a join in the last hour, the message is exactly that type,
+`state` equals the stored one (64 lowercase hex), `tenant` looks like a slug (`^[a-z][a-z0-9_]{0,50}$`; it is stored as the join's workspace),
 and the sender's origin is the Coriqo address in use (`coriqo_api_base`, or the default). It then opens
 `login.html?auto=1`, which signs in with Coriqo. Only when the person ticked the connect box on Coriqo's
 page (`connect: true`) does it go on to *Connect this computer*, and then only when all of these hold: the

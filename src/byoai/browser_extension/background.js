@@ -332,9 +332,11 @@ async function handleJoinOnce(msg, sender, L) {
   const verdict = L.acceptJoinMessage({ msg, senderOrigin: sender.origin, base, pending: store.coriqo_pending_join })
   if (!verdict.ok) return false
   const was = store.coriqo_pending_join
+  // Once Coriqo has named the workspace for this join it cannot be changed by a later message with the same state.
+  if (was?.tenant && was.tenant !== verdict.tenant) return false
   // One hand-off at a time: but if the login tab never ran (closed before it loaded), let the page try again after a minute.
   if (was?.accepted === true && Date.now() - (was.accepted_at || 0) < 60_000) return false
-  await chrome.storage.local.set({ coriqo_pending_join: { ...was, accepted: true, accepted_at: Date.now(), connect: verdict.connect } })
+  await chrome.storage.local.set({ coriqo_pending_join: { ...was, accepted: true, accepted_at: Date.now(), connect: verdict.connect, tenant: verdict.tenant } })
   chrome.tabs.create({ url: chrome.runtime.getURL('login.html?auto=1') })
   return true
 }

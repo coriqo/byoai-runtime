@@ -281,7 +281,7 @@
   }
 
   // ---- workspaces: readable names and a region suggestion -------------------
-  // A workspace slug looks like `coriqo_msp_usa`: who it is for, then the region it lives in.
+  // A workspace slug looks like `<who>_<region>`: who it is for, then the region it lives in.
   const REGIONS = { usa: 'United States', uk: 'United Kingdom', eu: 'European Union', ca: 'Canada', au: 'Australia' }
   const EU = new Set(['AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'GR', 'HU', 'IE', 'IT', 'LV',
     'LT', 'LU', 'MT', 'NL', 'PL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE'])
@@ -344,16 +344,22 @@
     return `Connected to Coriqo: ${t.name}${t.region ? `, ${t.region}` : ''}.${device}`
   }
 
-  // Joining a Coriqo MSP workspace by paying (the page is Coriqo's). The extension names only the
-  // workspace and where it came from; no email or token goes in the address.
-  const JOIN_TENANTS = { usa: 'coriqo_msp_usa', uk: 'coriqo_msp_uk' }
+  // Joining a Coriqo workspace by paying (the page is Coriqo's). The extension names only a coarse
+  // region and a random state; Coriqo picks the workspace. No email, token or workspace in the address.
   const JOIN_TTL_MS = 60 * 60 * 1000
   const JOIN_FINISHED = 'coriqo.join.finished'
-  function joinTenantFor(region) { return region === 'uk' || region === 'eu' ? JOIN_TENANTS.uk : JOIN_TENANTS.usa }
-  function joinUrl({ base, tenant }) {
+  const STATE_RE = /^[0-9a-f]{64}$/
+  const TENANT_RE = /^[a-z][a-z0-9_]{0,50}$/
+  const JOIN_REGIONS = Object.keys(REGIONS)
+  function makeJoinState(cryptoImpl = globalThis.crypto) {
+    const b = cryptoImpl.getRandomValues(new Uint8Array(32))
+    return Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('')
+  }
+  function joinUrl({ base, region, state }) {
     const u = new URL('/join', checkBase(base))
-    u.searchParams.set('tenant', tenant)
+    if (JOIN_REGIONS.includes(region)) u.searchParams.set('region', region)
     u.searchParams.set('source', 'extension')
+    u.searchParams.set('state', state)
     return u.toString()
   }
   // May this message from a web page finish a join this extension started? Only when the extension
@@ -370,10 +376,13 @@
     let origin
     try { origin = new URL(checkBase(base)).origin } catch { return no }
     if (senderOrigin !== origin) return no
-    return { ok: true, connect: msg.connect === true }
+    if (typeof msg.state !== 'string' || !STATE_RE.test(msg.state)) return no
+    if (typeof pending.state !== 'string' || msg.state !== pending.state) return no
+    if (typeof msg.tenant !== 'string' || !TENANT_RE.test(msg.tenant)) return no
+    return { ok: true, connect: msg.connect === true, tenant: msg.tenant }
   }
 
-  const api = { JOIN_TTL_MS, isPendingJoinFresh, joinTenantFor, joinUrl, acceptJoinMessage, JOIN_FINISHED, CLIENT_ID, DEFAULT_BASE, linkPolicy, resolveBase, sessionExpired, exactHttpsOrigin, linkSummary, checkClientId, tenantLabel, detectRegion, pickTenant, checkBase, makePkce, buildAuthorizeUrl, parseRedirect, exchangeCode,
+  const api = { JOIN_TTL_MS, isPendingJoinFresh, makeJoinState, JOIN_REGIONS, joinUrl, acceptJoinMessage, JOIN_FINISHED, CLIENT_ID, DEFAULT_BASE, linkPolicy, resolveBase, sessionExpired, exactHttpsOrigin, linkSummary, checkClientId, tenantLabel, detectRegion, pickTenant, checkBase, makePkce, buildAuthorizeUrl, parseRedirect, exchangeCode,
     requestEnrolGrant, requestProofNonce, requestDeviceProof, linkLocalShield, verifiedShieldKey }
   root.CoriqoLink = api
   if (typeof module !== 'undefined' && module.exports) module.exports = api
