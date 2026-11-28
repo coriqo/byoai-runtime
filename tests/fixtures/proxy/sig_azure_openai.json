@@ -1,0 +1,44 @@
+{
+  "_note": "shape from public API docs, not a live capture; no real keys",
+  "host": "contoso-prod.openai.azure.com",
+  "path": "/openai/deployments/my-private-deploy/chat/completions",
+  "request": {
+    "model": "gpt-4o",
+    "messages": [
+      {
+        "role": "user",
+        "content": "hi"
+      }
+    ]
+  },
+  "response_json": {
+    "model": "gpt-4o",
+    "choices": [
+      {
+        "message": {
+          "role": "assistant",
+          "content": "hi",
+          "tool_calls": [
+            {
+              "id": "c",
+              "type": "function",
+              "function": {
+                "name": "lookup",
+                "arguments": "{}"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "expect": {
+    "provider": "unknown",
+    "deployment": "unknown",
+    "model": null,
+    "response_model": null,
+    "tools": [
+      "lookup"
+    ]
+  }
+}

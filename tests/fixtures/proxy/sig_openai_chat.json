@@ -1,0 +1,57 @@
+{
+  "_note": "shape from public API docs, not a live capture; no real keys",
+  "host": "api.openai.com",
+  "path": "/v1/chat/completions",
+  "request": {
+    "model": "gpt-4o",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Weather in Paris?"
+      }
+    ]
+  },
+  "response_json": {
+    "id": "chatcmpl-1",
+    "object": "chat.completion",
+    "model": "gpt-4o-2024-08-06",
+    "choices": [
+      {
+        "index": 0,
+        "finish_reason": "tool_calls",
+        "message": {
+          "role": "assistant",
+          "content": null,
+          "tool_calls": [
+            {
+              "id": "call_1",
+              "type": "function",
+              "function": {
+                "name": "get_weather",
+                "arguments": "{\"city\":\"Paris\"}"
+              }
+            },
+            {
+              "id": "call_2",
+              "type": "function",
+              "function": {
+                "name": "get_time",
+                "arguments": "{}"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "expect": {
+    "provider": "openai",
+    "deployment": "vendor_api",
+    "model": "gpt-4o",
+    "response_model": "gpt-4o-2024-08-06",
+    "tools": [
+      "get_weather",
+      "get_time"
+    ]
+  }
+}

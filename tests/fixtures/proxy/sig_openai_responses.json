@@ -1,0 +1,39 @@
+{
+  "_note": "shape from public API docs, not a live capture; no real keys",
+  "host": "api.openai.com",
+  "path": "/v1/responses",
+  "request": {
+    "model": "gpt-4.1",
+    "input": "Weather in Paris?",
+    "tools": [
+      {
+        "type": "function",
+        "name": "get_weather",
+        "parameters": {}
+      }
+    ]
+  },
+  "response_json": {
+    "id": "resp_1",
+    "object": "response",
+    "model": "gpt-4.1-2025-04-14",
+    "output": [
+      {
+        "type": "function_call",
+        "id": "fc_1",
+        "call_id": "call_1",
+        "name": "get_weather",
+        "arguments": "{}"
+      }
+    ]
+  },
+  "expect": {
+    "provider": "openai",
+    "deployment": "vendor_api",
+    "model": "gpt-4.1",
+    "response_model": "gpt-4.1-2025-04-14",
+    "tools": [
+      "get_weather"
+    ]
+  }
+}

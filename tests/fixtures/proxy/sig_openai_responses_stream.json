@@ -1,0 +1,20 @@
+{
+  "_note": "shape from public API docs, not a live capture; no real keys",
+  "host": "api.openai.com",
+  "path": "/v1/responses",
+  "request": {
+    "model": "gpt-4.1",
+    "stream": true,
+    "input": "Weather?"
+  },
+  "response_sse": "event: response.created\ndata: {\"type\": \"response.created\", \"response\": {\"id\": \"resp_1\", \"model\": \"gpt-4.1-2025-04-14\", \"output\": []}}\n\nevent: response.output_item.added\ndata: {\"type\": \"response.output_item.added\", \"output_index\": 0, \"item\": {\"type\": \"function_call\", \"id\": \"fc_1\", \"call_id\": \"call_1\", \"name\": \"get_weather\", \"arguments\": \"\"}}\n\n",
+  "expect": {
+    "provider": "openai",
+    "deployment": "vendor_api",
+    "model": "gpt-4.1",
+    "response_model": "gpt-4.1-2025-04-14",
+    "tools": [
+      "get_weather"
+    ]
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "_note": "shape from public API docs, not a live capture; no real keys",
+  "host": "generativelanguage.googleapis.com",
+  "path": "/v1beta/models/gemini-2.0-flash:generateContent",
+  "request": {
+    "contents": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "text": "Weather in Paris?"
+          }
+        ]
+      }
+    ],
+    "tools": [
+      {
+        "functionDeclarations": [
+          {
+            "name": "get_weather"
+          }
+        ]
+      }
+    ]
+  },
+  "response_json": {
+    "candidates": [
+      {
+        "content": {
+          "role": "model",
+          "parts": [
+            {
+              "functionCall": {
+                "name": "get_weather",
+                "args": {
+                  "city": "Paris"
+                }
+              }
+            }
+          ]
+        },
+        "finishReason": "STOP"
+      }
+    ],
+    "modelVersion": "gemini-2.0-flash"
+  },
+  "expect": {
+    "provider": "google",
+    "deployment": "vendor_api",
+    "model": null,
+    "response_model": "gemini-2.0-flash",
+    "tools": [
+      "get_weather"
+    ]
+  }
+}
