@@ -473,6 +473,14 @@ byoai-shield discover --send        # also upload that report to Coriqo with a d
 byoai-shield --install-login-item   # start at login (macOS launchd, Linux systemd user unit, Windows Task Scheduler), low priority; --remove-login-item undoes it
 ```
 
+**Mac menu bar app.** `desktop/macos/` is a small SwiftUI app that puts Shield
+in the menu bar: protection state, today's counts, recent activity, the Coriqo
+connection, an "Open at login" switch, and an "Open Shield" window that shows
+the Shield console. It only reads the local Shield API (the login item's
+`--port`, else `BYOAI_SHIELD_PORT`, else 17831) and changes no settings itself.
+Build it with `desktop/macos/build-app.sh` (needs Xcode 15+, macOS 14+); the
+app lands in `desktop/macos/build/Coriqo Shield.app`.
+
 API: `/api/feed` (limit/offset pagination, `need`/`since`/`sealed`/`q` filters applied before paging, `summary_since` for exact counts, `anchor` for a stable page), `/api/verify`, `/api/policy`
 GET+POST (validated; a bad value is a 400 that names the field),
 `/api/privacy` (what the ledger holds right now), `POST /api/privacy/scrub`,
