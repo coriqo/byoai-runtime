@@ -132,8 +132,8 @@ const PENDING_JOIN_KEY = 'coriqo_pending_join'
 
 // Send the person to Coriqo's pay-to-join page for the region nearest them, and remember that we
 // did, so only a join we started can be finished by a message from that page (see background.js).
-async function onJoin() {
-  if (!(await getPolicy()).enabled) return setMsg('join-msg', OFF_TEXT, 'bad')
+async function onJoin(msgId = 'join-msg') {
+  if (!(await getPolicy()).enabled) return setMsg(msgId, OFF_TEXT, 'bad')
   try {
     const L = globalThis.CoriqoLink
     const region = L.detectRegion({ language: navigator.language, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone })
@@ -142,9 +142,9 @@ async function onJoin() {
     const url = L.joinUrl({ base: await getApiBase(), region: guess, state })
     await new Promise((r) => chrome.storage.local.set({ [PENDING_JOIN_KEY]: { region: guess || null, state, at: Date.now() } }, r))
     chrome.tabs.create({ url })
-    setMsg('join-msg', 'Opened Coriqo in a new tab. Come back here when you are done.', 'ok')
+    setMsg(msgId, 'Opened Coriqo in a new tab. Come back here when you are done.', 'ok')
   } catch (err) {
-    setMsg('join-msg', err?.message === 'bad_base' ? BAD_BASE_TEXT : "Couldn't open Coriqo. Try again.", 'bad')
+    setMsg(msgId, err?.message === 'bad_base' ? BAD_BASE_TEXT : "Couldn't open Coriqo. Try again.", 'bad')
   }
 }
 
@@ -396,7 +396,8 @@ async function init() {
   })
   el('oauth-start').addEventListener('click', working(onOAuth))
   el('connect').addEventListener('click', working(() => onConnect()))
-  el('join').addEventListener('click', working(onJoin))
+  el('join').addEventListener('click', working(() => onJoin('join-msg')))
+  el('join-new').addEventListener('click', working(() => onJoin('request-msg'))) // a person with no Coriqo account yet
   el('join-retry').addEventListener('click', working(() => onOAuth()))
 
   el('email').addEventListener('input', updateSendEnabled)

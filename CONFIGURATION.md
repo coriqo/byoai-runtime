@@ -2443,7 +2443,7 @@ After the user agrees on the welcome page, it shows a try-it panel: a made-up sa
 message (with a copy button) and links that open ChatGPT, Claude and Gemini.
 Nothing is sent anywhere by it.
 
-When the sign-in works but the account has no workspace, the login page offers *Join Coriqo*. It
+The first sign-in screen also offers *New to Coriqo? Join* to a person who has no Coriqo account at all, and when a sign-in works but the account has no workspace the page offers *Join Coriqo*; both start the same join below. It
 opens `<coriqo base>/join?region=<usa|uk|eu|ca|au>&source=extension&state=<64 hex>` in a new tab (the region
 is the same on-device guess as above and is left out when unknown; `state` is 32 random bytes made per join;
 no email, token or workspace is in the address) and stores `coriqo_pending_join` (`{ region, state, at }`, local). Coriqo's page

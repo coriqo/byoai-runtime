@@ -361,3 +361,13 @@ describe('review fixes: the workspace cannot be swapped by a later message, and 
     expect(read('coriqo-link.js')).toMatch(/JOIN_REGIONS = Object\.keys\(REGIONS\)/)
   })
 })
+
+describe('a person with no Coriqo account can start from the first screen', () => {
+  it('the first screen offers Join, wired to the same join start', () => {
+    expect(read('login.html')).toMatch(/id="join-new"/)
+    const src = read('login.js')
+    expect(src).toMatch(/el\('join-new'\)\.addEventListener\('click', working\(\(\) => onJoin\('request-msg'\)\)\)/)
+    expect(src).toMatch(/async function onJoin\(msgId = 'join-msg'\)/)
+    expect(extract('login.js', 'onJoin')).not.toMatch(/setMsg\('join-msg'/) // the status goes to the step that is showing
+  })
+})
