@@ -173,7 +173,9 @@ the rest may change in a minor release, with the change listed in the
   - the versioned mandate file format.
 - **Provisional.** The pipeline runtime and stages, providers, framework
   integrations, the Shield and Shield server, the MCP interposer, the console
-  and the optional extras.
+  and the optional extras. The Shield base catalogs load through
+  `byoai.shield_signatures` (`load_catalog`, `load_app_catalog`); see
+  [CONFIGURATION.md](CONFIGURATION.md).
 
 ### 2. Hello world
 

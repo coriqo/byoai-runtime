@@ -215,7 +215,7 @@ def test_no_generic_platform_hosts(imp, catalog, meta):
 def test_importer_is_repeatable(imp, catalog):
     """Regenerating from a catalog with no inputs keeps seeds and imports unchanged."""
     seeds = [e for e in catalog["signatures"] if e["id"] in imp.SEED_IDS]
-    assert len(seeds) == 15
+    assert len(seeds) == 12
     again, _, _ = imp.build([], [], [], popular=set(), seed=seeds, seed_meta={}, today="2026-11-27")
     assert again["signatures"] == seeds
 

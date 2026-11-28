@@ -272,6 +272,26 @@ Other flags: `--force` (enrol again), `--no-managed`, `--jitter-seconds N`
 arrive together). A busy server (HTTP 429/502/503/504) is retried up to three
 times with backoff. Step-by-step for Jamf and Intune: `docs/msp-zero-touch.md`.
 
+### Shield base catalogs and `load_app_catalog`
+
+Two packaged base lists ship with the runtime: `shield_catalog_models.json` (model API
+endpoints, read by `byoai.shield_signatures.load_catalog`) and `shield_catalog_apps.json`
+(AI application hosts) with its sidecar `shield_catalog_apps_meta.json`. No id or host is in both.
+
+```python
+from byoai.shield_signatures import load_app_catalog
+
+cat = load_app_catalog()            # AppCatalog(entries=(AppEntry, ...), error=None)
+```
+
+`AppEntry` carries `id`, `hosts`, `vendor`, `confidence`, `tier` (`listed` or `candidate`),
+`nature` (`ai-native` or `ai-enabled`), `category`, `origin` and `verified` (true only for
+seed entries). The sidecar records the sha256 of the catalog it was built for; a mismatch,
+a missing or extra id, an unknown value, a tier that disagrees with origin, a bad host or
+an unknown entry type returns `AppCatalog(error=...)` with no entries (fail closed). It
+never raises. Expired entries are skipped; `now=` (UTC `YYYY-MM-DDTHH:MM:SSZ`) is for
+tests and an empty or malformed value fails closed. Details: `docs/shield-signatures.md`.
+
 ### Shield managed mode
 
 Once enrolled with Coriqo, Shield can be put into managed mode: a Coriqo
