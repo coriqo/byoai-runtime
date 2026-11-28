@@ -343,7 +343,7 @@ async function setOfflineIfPaired() {
 
 // A Coriqo page (the pay-to-join page) tells us the person finished joining. It carries no data: it
 // can only nudge a join this extension started, and only from the Coriqo address in use. The sign-in
-// and the connect then run on our own login page, as they would if the person had clicked them.
+// and the connect then run on our own sign-in page, as they would if the person had clicked them.
 async function handleJoinMessage(msg, sender) {
   // One at a time: the check-then-set below spans awaits, so a burst would all pass it.
   if (handleJoinMessage.busy) return false
@@ -362,7 +362,7 @@ async function handleJoinOnce(msg, sender, L) {
   const was = store.coriqo_pending_join
   // Once Coriqo has named the workspace for this join it cannot be changed by a later message with the same state.
   if (was?.tenant && was.tenant !== verdict.tenant) return false
-  // One hand-off at a time: but if the login tab never ran (closed before it loaded), let the page try again after a minute.
+  // One hand-off at a time: but if the sign-in tab never ran (closed before it loaded), let the page try again after a minute.
   if (was?.accepted === true && Date.now() - (was.accepted_at || 0) < 60_000) return false
   await chrome.storage.local.set({ coriqo_pending_join: { ...was, accepted: true, accepted_at: Date.now(), connect: verdict.connect, tenant: verdict.tenant } })
   chrome.tabs.create({ url: chrome.runtime.getURL('login.html?auto=1') })
