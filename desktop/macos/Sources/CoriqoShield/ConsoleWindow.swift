@@ -1,10 +1,46 @@
 import SwiftUI
 import WebKit
 
+/// The desktop window: one shared NSWindow, opened from the menu or a relaunch.
+enum ConsoleWindow {
+    private static var window: NSWindow?
+
+    /// Open the window, optionally on one Shield page (e.g. "shield?tab=settings").
+    @MainActor static func show(page: String? = nil) {
+        if let page, let web = findWeb(window?.contentView) {
+            web.load(URLRequest(url: URL(string: page, relativeTo: ShieldModel.base)!))
+        }
+        if window == nil {
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 780),
+                             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                             backing: .buffered, defer: false)
+            w.title = "Coriqo Shield"
+            w.titlebarAppearsTransparent = true
+            w.backgroundColor = NSColor(Brand.paper)
+            w.minSize = NSSize(width: 900, height: 600)
+            w.isReleasedWhenClosed = false
+            w.contentView = NSHostingView(rootView: ConsoleView(page: page ?? "shield"))
+            w.center()
+            w.setFrameAutosaveName("CoriqoShieldConsole")
+            window = w
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
+    }
+
+    private static func findWeb(_ view: NSView?) -> WKWebView? {
+        guard let view else { return nil }
+        if let web = view as? WKWebView { return web }
+        for sub in view.subviews { if let web = findWeb(sub) { return web } }
+        return nil
+    }
+}
+
 /// The desktop view: Shield's own console, served by byoai-shield on this Mac.
 struct ConsoleView: View {
+    var page = "shield"
     var body: some View {
-        WebView(url: ShieldModel.base.appendingPathComponent("shield"))
+        WebView(url: URL(string: page, relativeTo: ShieldModel.base)!)
     }
 }
 

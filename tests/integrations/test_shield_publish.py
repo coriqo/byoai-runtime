@@ -1258,3 +1258,32 @@ def test_a_gap_widened_during_a_refused_gap_only_batch_is_kept(sync):
     clock.t += 3600
     pub.tick()
     assert pub.state.sync_gap == {"from": "2026-09-01T00:00:00Z", "to": "2026-09-09T00:00:00Z"}
+
+
+def test_status_says_how_activity_is_shared(sync):
+    pub, coriqo, clock, policy, add = sync
+    st = pub.status()["sync"]
+    assert st["level"] == "events" and st["every_s"] == 60 and st["next_attempt_at"] is None
+    coriqo.events_status = 503
+    add(2)
+    pub.tick()
+    st = pub.status()["sync"]
+    assert st["pending"] == 2 and st["failures"] == 1
+    assert st["next_attempt_at"] == pub.state.sync_next_attempt_at > clock.t
+    policy["sync"] = "daily"
+    assert pub.status()["sync"]["every_s"] == 3600
+    policy["sync"] = "seal"
+    st = pub.status()["sync"]
+    assert st["level"] == "seal" and st["every_s"] is None and st["next_attempt_at"] is None
+
+
+def test_status_never_calls_an_unreadable_policy_off(sync):
+    pub, coriqo, clock, policy, add = sync
+    coriqo.events_status = 503
+    add(2)
+    pub.tick()
+    def broken():
+        raise ValueError("policy file unreadable")
+    pub._policy = broken
+    st = pub.status()["sync"]
+    assert st["level"] is None and st["pending"] == 2 and st["failures"] == 1

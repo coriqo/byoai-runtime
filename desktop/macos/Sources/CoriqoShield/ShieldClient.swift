@@ -24,7 +24,20 @@ struct Verify: Decodable {
 }
 
 struct CoriqoStatus: Decodable {
+    struct Sync: Decodable {
+        let level: String?
+        let pending: Int?
+        let last_sent_at: Double?
+        let next_attempt_at: Double?
+        let failures: Int?
+        let last_error: String?
+    }
     let connected: Bool?
+    let has_new: Bool?
+    let last_sent_at: Double?
+    let next_attempt_at: Double?
+    let every_hours: Double?
+    let sync: Sync?
     let tenant: String?
     let base_url: String?
     let last_error: String?
@@ -80,7 +93,7 @@ final class ShieldModel: ObservableObject {
             let c = try? await cReq
             feed = f; coriqo = c; updated = Date()
             if v?.tamper_evident == false {
-                state = .attention("The activity log changed outside Shield. Open Shield to see what changed.")
+                state = .attention("The record on this Mac was changed outside Shield. Open Shield to see what changed.")
             } else if c?.needs_attention == true {
                 state = .attention(c?.last_error ?? "Coriqo needs attention.")
             } else {
@@ -94,7 +107,7 @@ final class ShieldModel: ObservableObject {
             let code = (error as? URLError)?.code
             state = (code == .cannotConnectToHost || code == .cannotFindHost)
                 ? .stopped
-                : .attention("Shield is running but not answering. Try again in a moment.")
+                : .attention("Shield is running but slow to answer. This usually clears on its own.")
         }
     }
 

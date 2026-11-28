@@ -9,7 +9,7 @@ import {
   RETENTION_DAYS, enrolWithCoriqo, fetchCoriqo, fetchInstalledApps, fetchPolicy, fetchPrivacy,
   publishSeal, savePolicy, scrubStoredText,
 } from '@/api/shield'
-import type { ShieldAction, ShieldFileAction, ShieldPolicy, ShieldSharing } from '@/api/shield'
+import type { ShieldAction, ShieldCoriqo, ShieldFileAction, ShieldPolicy, ShieldSharing } from '@/api/shield'
 import { APP_NAME, Banner, ConfirmDialog, Icon, SectionHead, plural } from './shared'
 
 const MODES = [
@@ -359,12 +359,78 @@ function whenNext(epochSeconds: number) {
   return `in about ${Math.round(mins / 60)} h`
 }
 
+type JobState = { tag: 'ok' | 'warn' | 'bad' | 'info' | 'unknown'; word: string }
+
+/** What each sync job is doing right now: its schedule, its state, the last
+ * send and the next one. Read every few seconds, so it moves as sends happen. */
+function SyncJobs({ ci }: { ci: ShieldCoriqo }) {
+  const sealState: JobState = ci.needs_attention ? { tag: 'bad', word: 'Needs attention' }
+    : ci.last_error ? { tag: 'warn', word: 'Retrying' }
+      : ci.has_new ? { tag: 'info', word: 'Waiting to send' }
+        : { tag: 'ok', word: 'Up to date' }
+  const sync = ci.sync
+  // Off only when Shield says so; an older Shield or an unreadable policy is unknown.
+  const level = sync?.level ?? 'unknown'
+  const actState: JobState = level === 'seal' ? { tag: 'unknown', word: 'Off' }
+    : sync?.last_error || (sync?.failures ?? 0) > 0 ? { tag: 'warn', word: 'Retrying' }
+      : (sync?.pending ?? 0) > 0 ? { tag: 'info', word: `${plural(sync!.pending, 'event')} waiting` }
+        : { tag: 'ok', word: 'Up to date' }
+  const jobs = [
+    {
+      name: 'Seal', state: sealState,
+      schedule: `Scheduled, at most every ${ci.every_hours} hours`,
+      what: 'Root, entry count and signature. No activity.',
+      last: ci.last_sent_at ? `${ago(ci.last_sent_at)}, ${plural(ci.last_height, 'entry', 'entries')}` : 'Not yet',
+      next: !ci.has_new ? 'When there is something new' : ci.next_attempt_at ? whenNext(ci.next_attempt_at) : 'Within a minute',
+    },
+    {
+      name: 'Activity', state: actState,
+      schedule: level === 'events' ? 'Live, about every minute' : level === 'daily' ? 'Daily totals, sent hourly'
+        : level === 'seal' ? 'Not shared' : 'Unknown',
+      what: level === 'events' ? "Each message's app, time, length and verdict. Never the words."
+        : level === 'daily' ? 'Messages per app per day, and how many were caught.'
+          : level === 'seal' ? 'Your policy shares no activity, only the seal.'
+            : "Shield didn't say what it shares. Update Shield, or check its policy.",
+      last: level === 'seal' ? '—' : sync?.last_sent_at ? ago(sync.last_sent_at) : 'Not yet',
+      next: level === 'seal' ? '—' : sync?.next_attempt_at ? whenNext(sync.next_attempt_at) : 'When there is something new',
+    },
+  ]
+  return (
+    <div className="sync-jobs" aria-live="polite">
+      <p className="muted setting-help">
+        Connected to {ci.tenant ?? 'your tenant'} · <span className="mono">{ci.base_url}</span>
+      </p>
+      <div className="sync-scroll"><table className="shield-table sync-table">
+        <thead>
+          <tr><th scope="col">Job</th><th scope="col">State</th><th scope="col">Schedule</th><th scope="col">Last sent</th><th scope="col">Next</th></tr>
+        </thead>
+        <tbody>
+          {jobs.map(j => (
+            <tr key={j.name}>
+              <th scope="row">{j.name}<span className="muted sync-what">{j.what}</span></th>
+              <td><span className={`tag ${j.state.tag}`}>{j.state.word}</span></td>
+              <td>{j.schedule}</td>
+              <td>{j.last}</td>
+              <td>{j.next}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table></div>
+      {sync?.last_error && (
+        <Banner tone="warn" role="status"><span>Activity: {sync.last_error}</span></Banner>
+      )}
+    </div>
+  )
+}
+
 /** The link to a Coriqo tenant. Set up once with an enrolment token; after
  * that it sends this Mac's signed seal on its own, rarely, and retries by
  * itself. The only state that asks for a person is Coriqo refusing the Mac. */
 function CoriqoLink() {
   const qc = useQueryClient()
-  const info = useQuery({ queryKey: ['shield-coriqo'], queryFn: fetchCoriqo, refetchInterval: 30_000 })
+  const info = useQuery({ queryKey: ['shield-coriqo'], queryFn: fetchCoriqo,
+    // Every 5 s while something is waiting to send, so sends show as they happen; 30 s otherwise.
+    refetchInterval: q => (q.state.data?.has_new || (q.state.data?.sync?.pending ?? 0) > 0 ? 5_000 : 30_000) })
   const [form, setForm] = useState({ base_url: '', token: '' })
   const [reconnect, setReconnect] = useState(false)
   const enrol = useMutation({
@@ -388,26 +454,7 @@ function CoriqoLink() {
 
       {info.isPending && <p className="muted setting-help" role="status">Checking the connection…</p>}
 
-      {ci?.connected && (
-        <dl className="keeps-list stacked coriqo-status">
-          <dt>Connected to</dt>
-          <dd>{ci.tenant ?? 'your tenant'} · <span className="mono">{ci.base_url}</span></dd>
-          <dt>Last sent</dt>
-          <dd>
-            {ci.last_sent_at
-              ? `${ago(ci.last_sent_at)}, covering ${plural(ci.last_height, 'entry', 'entries')}`
-              : 'Not yet. The first send happens within a minute.'}
-          </dd>
-          <dt>Next</dt>
-          <dd>
-            {!ci.has_new
-              ? `Nothing new to send. Shield sends at most every ${ci.every_hours} hours, and only when there's something new.`
-              : ci.next_attempt_at
-                ? `New activity, sending ${whenNext(ci.next_attempt_at)}.`
-                : 'New activity, sending within a minute.'}
-          </dd>
-        </dl>
-      )}
+      {ci?.connected && <SyncJobs ci={ci} />}
 
       {ci?.last_error && (
         <Banner tone={ci.needs_attention ? 'bad' : 'warn'} role={ci.needs_attention ? 'alert' : 'status'}>

@@ -881,10 +881,31 @@ class Publisher:
             "every_hours": self.every_s / 3600,
             "last_error": s.last_error,
             "needs_attention": s.needs_attention,
-            "sync": {"pending": len(s.sync_outbox or []),
-                     "last_sent_at": s.sync_last_sent_at or None,
-                     "last_error": s.sync_last_error},
+            "sync": self._sync_status(e is not None),
         }
+
+    def _sync_status(self, enrolled: bool) -> dict:
+        """The activity-sharing job, for the Settings page and the menu bar:
+        which level the policy sets (``seal`` means no activity is shared),
+        how often it sends, and when the next send is due. ``level`` is None
+        when the policy can't be read: unknown, never reported as "off"."""
+        s = self.state
+        level: str | None
+        try:
+            level = sync_level(self._policy()) if self._policy is not None else "seal"
+        except Exception:  # noqa: BLE001 - a status read never raises
+            level = None
+        pending = len(s.sync_outbox or [])
+        every = SYNC_EVERY_S.get(level) if level else None
+        next_at = None
+        if enrolled and every and (pending or s.sync_gap):
+            next_at = max(s.sync_next_attempt_at or 0.0,
+                          (s.sync_last_sent_at + every) if s.sync_last_sent_at else 0.0,
+                          self._now())
+        return {"level": level, "every_s": every, "pending": pending,
+                "last_sent_at": s.sync_last_sent_at or None,
+                "next_attempt_at": next_at, "failures": s.sync_failures,
+                "last_error": s.sync_last_error}
 
     # -- loop -----------------------------------------------------------------
     def start(self) -> threading.Thread:

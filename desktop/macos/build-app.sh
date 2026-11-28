@@ -35,3 +35,6 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 PLIST
 codesign --force --sign - "$APP"
 echo "Built $APP"
+if [ "${1:-}" = "--install" ]; then
+  rm -rf "/Applications/Coriqo Shield.app" && cp -R "$APP" /Applications/ && echo "Installed to /Applications"
+fi
