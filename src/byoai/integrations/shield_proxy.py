@@ -33,7 +33,10 @@ import json
 import re
 import sys
 import time
+from collections.abc import Mapping
+from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 from byoai.integrations.shield import (
     _MIME,
@@ -93,17 +96,28 @@ NOT_COVERED: tuple[dict, ...] = (
     {"host": "www.perplexity.ai", "reason": "proprietary format, not captured"},
 )
 
+# The model-API wire formats whose rows carry provider, model and tool requests.
+SIGNATURE_PATHS = (
+    re.compile(r"/v1/messages"),
+    re.compile(r"/chat/completions$"),
+    re.compile(r"/v1/responses"),
+    re.compile(r":(?:stream)?[gG]enerateContent$"),
+)
 # Paths that ARE the product: the user's chat going out, the model's reply
 # coming back, and MCP tool traffic on the chat wire.
 INTERESTING = (
     re.compile(r"/chat_conversations/.+/completion"),   # claude.ai chat send
-    re.compile(r"/v1/messages"),                        # API / agent wire format
     re.compile(r"/api/organizations/[^/]+/mcp"),        # MCP aggregation endpoints
     re.compile(r"/backend-api/(f/)?conversation$"),     # chatgpt.com chat send
-    re.compile(r"/chat/completions$"),                  # OpenAI-compatible chat
-    re.compile(r"/v1/responses"),                       # OpenAI Responses
-    re.compile(r":(?:stream)?[gG]enerateContent$"),     # Gemini
+    *SIGNATURE_PATHS,                                   # model-API wire formats
 )
+# The envelope's tool-name rule (shield_events._TOOL): this charset, 1-48 chars.
+_TOOL_NAME = re.compile(r"[A-Za-z0-9_.:-]{1,48}")
+UNNAMED_TOOL = "unnamed_tool"
+MAX_TOOLS = 32
+# More distinct tools than MAX_TOOLS: the last kept entry says so, so a decoy
+# flood cannot hide a request silently.
+TOOLS_TRUNCATED = "tools_truncated"
 # A POST that looks like a chat send but matched nothing above: the app may
 # have changed its wire format. Counted per host, see ShieldProxy._canary.
 LOOKS_LIKE_SEND = re.compile(r"conversation|completion|chat|messages|generateContent")
@@ -257,6 +271,169 @@ def reply_text(raw: str) -> str:
         return "".join(str((c.get("message") or {}).get("content") or "")
                        for c in body["choices"] if isinstance(c, dict))
     return ""
+
+
+@lru_cache(maxsize=1)
+def _catalog():
+    from byoai.shield_signatures import load_catalog
+    return load_catalog()
+
+
+REQUEST_MODEL = ("request_field",)
+REPLY_MODEL = ("request_field", "response_field")  # Gemini names it only in modelVersion
+
+
+def _field_model(m: Any, sources: tuple[str, ...]) -> str | None:
+    """The model of a catalog match, only when read from a field of the payload
+    (one of ``sources``); a rule default or URL guess is never recorded."""
+    return m.model if m.model and m.model_source in sources else None
+
+
+def signature_fields(host: Any, path: Any, body: Any) -> dict[str, str]:
+    """Provider, deployment and (only when the request body carries one) model
+    for a model-API request. A host the catalog does not know (a private Azure
+    deployment, a gateway) is ``unknown``/``unknown`` and records no model.
+    Never raises."""
+    try:
+        m = _catalog().match(host, path, body)
+    except Exception:  # noqa: BLE001 - a record must never break the app
+        return {"provider": "unknown", "deployment": "unknown"}
+    out = {"provider": m.provider, "deployment": m.deployment}
+    model = _field_model(m, REQUEST_MODEL)
+    if model:
+        out["model"] = model
+    return out
+
+
+def _name(v: Any) -> str:
+    """The name verbatim if it already fits the envelope's rule, else the fixed
+    placeholder. Never stripped or cut: a rewritten name could read as another
+    tool."""
+    return v if isinstance(v, str) and _TOOL_NAME.fullmatch(v) else UNNAMED_TOOL
+
+
+def _seq(v: Any) -> list:
+    return v if isinstance(v, list) else []
+
+
+def _tool_names(ev: Mapping, out: list[str]) -> None:
+    """Names of the tools a model asked for in one JSON document or SSE event.
+    A request, never an execution; arguments and ids are not read."""
+    def add(v: Any) -> None:
+        out.append(_name(v))
+
+    def blocks(items: Any) -> None:
+        for b in _seq(items):
+            if isinstance(b, Mapping) and b.get("type") in ("tool_use", "function_call", "custom_tool_call"):
+                add(b.get("name"))
+
+    for node in (ev, ev.get("message"), ev.get("response")):
+        if not isinstance(node, Mapping):
+            continue
+        blocks(node.get("content"))          # Anthropic message
+        blocks(node.get("output"))           # OpenAI Responses
+    block = ev.get("content_block")          # Anthropic stream
+    blocks([block])
+    blocks([ev.get("item")])                 # Responses stream
+    for c in _seq(ev.get("choices")):
+        if not isinstance(c, Mapping):
+            continue
+        for msg in (c.get("message"), c.get("delta")):
+            if not isinstance(msg, Mapping):
+                continue
+            # Only a streamed delta with no name key at all is a continuation
+            # chunk; anywhere else a missing name is an unnamed request.
+            is_delta = msg is c.get("delta")
+            for t in _seq(msg.get("tool_calls")):
+                fn = t.get("function") if isinstance(t, Mapping) else None
+                if isinstance(fn, Mapping) and not (is_delta and "name" not in fn):
+                    add(fn.get("name"))
+            fc = msg.get("function_call")
+            if isinstance(fc, Mapping) and not (is_delta and "name" not in fc):
+                add(fc.get("name"))
+    for cand in _seq(ev.get("candidates")):
+        content = cand.get("content") if isinstance(cand, Mapping) else None
+        parts = content.get("parts") if isinstance(content, Mapping) else None
+        for part in _seq(parts):
+            if isinstance(part, Mapping) and isinstance(part.get("functionCall"), Mapping):
+                add(part["functionCall"].get("name"))
+
+
+def observe_reply(host: Any, path: Any, raw: Any) -> dict[str, Any]:
+    """Model (only when the reply carries one) and requested tool names from a
+    model-API reply, JSON or SSE. A body that yields nothing parseable yields
+    ``{}``, never a guess. Never raises.
+
+    Labelling an unparseable reply as unobservable needs an envelope change
+    in a later version; until then it carries no label."""
+    try:
+        return _observe_reply(host, path, raw)
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+# A reply is a JSON object, a JSON array of objects (Gemini streamGenerateContent
+# without alt=sse), or SSE data lines. At most MAX_EVENTS are read.
+MAX_EVENTS = 256
+# Catalog matching costs per event: after this many events that yielded no
+# model, stop trying (tool names are still read from every event).
+MODEL_SCAN_EVENTS = 8
+
+
+def _reply_events(raw: str) -> list[Mapping] | None:
+    """Events of a reply, [] for a parseable reply without objects, None when
+    nothing parses."""
+    try:
+        doc = json.loads(raw)
+    except ValueError:
+        doc = None
+    if isinstance(doc, Mapping):
+        return [doc]
+    if isinstance(doc, list):
+        return [e for e in doc[:MAX_EVENTS] if isinstance(e, Mapping)]
+    if doc is not None:
+        return []
+    events: list[Mapping] = []
+    for line in raw.splitlines():
+        if len(events) >= MAX_EVENTS:
+            break
+        if line.startswith("data:"):
+            try:
+                ev = json.loads(line[5:].strip())
+            except ValueError:
+                continue
+            if isinstance(ev, Mapping):
+                events.append(ev)
+    return events or None
+
+
+def _observe_reply(host: Any, path: Any, raw: Any) -> dict[str, Any]:
+    events = _reply_events(raw) if isinstance(raw, str) and raw.strip() else None
+    if events is None:
+        return {}
+    out: dict[str, Any] = {}
+    names: list[str] = []
+    cat = _catalog()
+    scanned = 0
+    for ev in events:
+        if "model" not in out and scanned < MODEL_SCAN_EVENTS:
+            scanned += 1
+            for cand in (ev, ev.get("message"), ev.get("response")):
+                if isinstance(cand, Mapping):
+                    try:
+                        model = _field_model(cat.match(host, path, cand), REPLY_MODEL)
+                    except Exception:  # noqa: BLE001  one hostile event keeps earlier tools
+                        model = None
+                    if model:
+                        out["model"] = model
+                        break
+        _tool_names(ev, names)
+    tools = list(dict.fromkeys(names))
+    if len(tools) > MAX_TOOLS:
+        tools = [*tools[:MAX_TOOLS - 1], TOOLS_TRUNCATED]
+    if tools:
+        out["tools"] = tools
+    return out
 
 
 class ShieldProxy:
@@ -472,6 +649,8 @@ class ShieldProxy:
         found = flags_for(every, replies=False)
         action, rules = evaluate(every, policy, flags=found)
         extra = [f"{RULE_TIER[r]}:{r}" for r in rules]
+        sig = (signature_fields(host, _path(flow), body)
+               if _match(flow, SIGNATURE_PATHS) else {})
 
         def facts_for_row() -> dict:
             facts = inspect_text(text, policy, flags=found if text == every else None)
@@ -482,7 +661,7 @@ class ShieldProxy:
             stopped = [RULE_LABEL.get(r, r) for r in rules
                        if action_for(r, policy) == "block"]
             self._log("verdict.denied", target=host, app=app, verdict="blocked",
-                      **facts_for_row())
+                      **sig, **facts_for_row())
             _refuse(flow, "Stopped on this Mac: " + ", ".join(stopped))
             return
 
@@ -496,8 +675,10 @@ class ShieldProxy:
         verdict = f"redacted({len(redactions)})" if redactions else mode
         extra_fields = {"action": "warn"} if action == "warn" else {}
         self._log("chat.request", target=host, app=app, verdict=verdict,
-                  redactions=redactions, **extra_fields, **facts_for_row())
+                  redactions=redactions, **extra_fields, **sig, **facts_for_row())
         flow.metadata["shield_app"] = app
+        if sig:
+            flow.metadata["shield_sig"] = {k: sig[k] for k in ("provider", "deployment")}
 
     def response(self, flow) -> None:
         app = flow.metadata.get("shield_app")
@@ -509,6 +690,10 @@ class ShieldProxy:
             raw = ""
         text = reply_text(raw)
         facts = inspect_text(text, self.policy(), rules="reply")
+        sig = flow.metadata.get("shield_sig")
+        if sig:
+            facts.update(sig)
+            facts.update(observe_reply(flow.request.pretty_host or "", _path(flow), raw))
         self._log("chat.response", target=flow.request.pretty_host or "",
                   app=app, status=flow.response.status_code, **facts)
 

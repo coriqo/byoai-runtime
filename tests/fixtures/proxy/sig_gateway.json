@@ -1,0 +1,31 @@
+{
+  "_note": "shape from public API docs, not a live capture; no real keys",
+  "host": "llm.internal.example.com",
+  "path": "/v1/messages",
+  "request": {
+    "model": "internal-alias-7",
+    "max_tokens": 8,
+    "messages": [
+      {
+        "role": "user",
+        "content": "hi"
+      }
+    ]
+  },
+  "response_json": {
+    "model": "internal-alias-7",
+    "content": [
+      {
+        "type": "text",
+        "text": "hi"
+      }
+    ]
+  },
+  "expect": {
+    "provider": "unknown",
+    "deployment": "unknown",
+    "model": null,
+    "response_model": null,
+    "tools": []
+  }
+}

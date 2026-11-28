@@ -1,0 +1,27 @@
+{
+  "_note": "shape from public API docs, not a live capture; no real keys",
+  "host": "generativelanguage.googleapis.com",
+  "path": "/v1beta/models/gemini-2.0-flash:streamGenerateContent",
+  "request": {
+    "contents": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "text": "Weather?"
+          }
+        ]
+      }
+    ]
+  },
+  "response_sse": "data: {\"candidates\": [{\"content\": {\"role\": \"model\", \"parts\": [{\"functionCall\": {\"name\": \"get_weather\", \"args\": {}}}]}}], \"modelVersion\": \"gemini-2.0-flash\"}\n\n",
+  "expect": {
+    "provider": "google",
+    "deployment": "vendor_api",
+    "model": null,
+    "response_model": "gemini-2.0-flash",
+    "tools": [
+      "get_weather"
+    ]
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "_note": "shape from public API docs, not a live capture; no real keys",
+  "host": "api.openai.com",
+  "path": "/v1/chat/completions",
+  "request": {
+    "model": "gpt-4o",
+    "stream": true,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Weather?"
+      }
+    ]
+  },
+  "response_sse": "data: {\"id\": \"c1\", \"model\": \"gpt-4o-2024-08-06\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"tool_calls\": [{\"index\": 0, \"id\": \"call_1\", \"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"arguments\": \"\"}}]}}]}\n\ndata: {\"id\": \"c1\", \"model\": \"gpt-4o-2024-08-06\", \"choices\": [{\"index\": 0, \"delta\": {\"tool_calls\": [{\"index\": 0, \"function\": {\"arguments\": \"{\\\"city\\\":\"}}]}}]}\n\ndata: [DONE]\n\n",
+  "expect": {
+    "provider": "openai",
+    "deployment": "vendor_api",
+    "model": "gpt-4o",
+    "response_model": "gpt-4o-2024-08-06",
+    "tools": [
+      "get_weather"
+    ]
+  }
+}
