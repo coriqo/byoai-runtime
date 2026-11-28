@@ -371,3 +371,127 @@ describe('a person with no Coriqo account can start from the first screen', () =
     expect(extract('login.js', 'onJoin')).not.toMatch(/setMsg\('join-msg'/) // the status goes to the step that is showing
   })
 })
+
+describe('the first screen says what is free and what is paid, in two clear paths', () => {
+  const html = () => read('login.html')
+  it('an existing account is covered by its organisation, a new personal account needs a paid plan', () => {
+    const h = html()
+    expect(h).toMatch(/I have a Coriqo account[\s\S]*covered\s+by your organisation: no payment/)
+    expect(h).toMatch(/I'm new to Coriqo[\s\S]*Personal and non-business accounts need a paid plan/)
+    expect(h).toMatch(/Work for an organisation that uses Coriqo\? Don't pay here: ask your administrator to add you/)
+  })
+  it('the email link sits behind a fold, and every control the script needs is still there once', () => {
+    const h = html()
+    expect(h).toMatch(/<details class="sees" id="email-link">[\s\S]*id="send"[\s\S]*<\/details>/)
+    for (const id of ['oauth-start', 'join-new', 'email', 'workspace', 'send', 'request-msg', 'skip', 'lead']) {
+      expect([...h.matchAll(new RegExp(`id="${id}"`, 'g'))].length, id).toBe(1)
+    }
+  })
+  it('names no price, plan or payment provider (the amounts live on Coriqo)', () => {
+    expect(html()).not.toMatch(/stripe|\$\d|per month|\/mo\b|focused|pro plan/i)
+  })
+})
+
+describe('review fixes: the first screen keeps its promises honest', () => {
+  const h = () => read('login.html')
+  it('says pairing with a local Shield needs no account and no payment, on every step', () => {
+    const html = h()
+    const leadAt = html.indexOf('id="lead"')
+    expect(html.slice(leadAt, leadAt + 400)).toMatch(/needs no account and no payment/)
+    expect(leadAt).toBeLessThan(html.indexOf('id="step-request"')) // outside the steps, so no step hides it
+  })
+  it('does not promise the computer connects: that depends on the box the person ticks on Coriqo', () => {
+    expect(h()).toMatch(/If you tick the box there, Shield then connects this computer/)
+    expect(h()).not.toMatch(/connects this computer when you finish/)
+  })
+  it('the email field label matches the copy that any email works', () => {
+    expect(h()).toMatch(/<label for="email">Email<\/label>/)
+    expect(h()).not.toMatch(/Work email/)
+  })
+})
+
+
+describe('join offer (price line comes from Coriqo at run time)', () => {
+  const ok = (summary) => ({ summary })
+  it('parseJoinOffer accepts a normal summary only', () => {
+    expect(L.parseJoinOffer(ok('one plan, billed on Coriqo'))).toBe('one plan, billed on Coriqo')
+    for (const bad of [null, undefined, 'x', 5, [], {}, ok(''), ok(7), ok('a'.repeat(121)), ok('a <b> c'), ok('a\nb'), ok('a\u0007b')]) {
+      expect(L.parseJoinOffer(bad)).toBeNull()
+    }
+    expect(L.parseJoinOffer(ok('a'.repeat(120)))).toBe('a'.repeat(120))
+  })
+  it('parseJoinOffer rejects bidi and zero-width format characters', () => {
+    for (const c of ['\u202e', '\u200b', '\u200f', '\u2066', '\u2069', '\ufeff']) {
+      expect(L.parseJoinOffer(ok(`Free ${c}now`))).toBeNull()
+    }
+  })
+  it('fetchJoinOffer refuses redirects', async () => {
+    let seen
+    await L.fetchJoinOffer({ fetchImpl: async (u, i) => { seen = i; return res(200, { summary: 'S' }) }, base: BASE })
+    expect(seen.redirect).toBe('error')
+  })
+  const res = (status, body, json = true) => ({ status, ok: status === 200, json: async () => { if (!json) throw new Error('x'); return body } })
+  it('fetchJoinOffer returns the string, or null on any failure', async () => {
+    let seen
+    const good = async (url, init) => { seen = { url, init }; return res(200, { summary: 'S' }) }
+    expect(await L.fetchJoinOffer({ fetchImpl: good, base: BASE })).toBe('S')
+    expect(seen.url).toBe(`${BASE}/api/v1/billing/msp-join/offer`)
+    expect(seen.init.credentials).toBe('omit')
+    expect(seen.init.method || 'GET').toBe('GET')
+    expect(await L.fetchJoinOffer({ fetchImpl: async () => { throw new Error('net') }, base: BASE })).toBeNull()
+    expect(await L.fetchJoinOffer({ fetchImpl: async () => res(503, { summary: 'S' }), base: BASE })).toBeNull()
+    expect(await L.fetchJoinOffer({ fetchImpl: async () => res(200, null, false), base: BASE })).toBeNull()
+    expect(await L.fetchJoinOffer({ fetchImpl: good, base: 'http://evil.example' })).toBeNull()
+    expect(await L.fetchJoinOffer({ fetchImpl: good, base: 'nonsense' })).toBeNull()
+  })
+  it('fetchJoinOffer gives up on a hung fetch', async () => {
+    const t = Date.now()
+    expect(await L.fetchJoinOffer({ fetchImpl: () => new Promise(() => {}), base: BASE, timeoutMs: 20 })).toBeNull()
+    expect(Date.now() - t).toBeLessThan(1000)
+  })
+  const dir = path.join(REPO, 'src/byoai/browser_extension')
+  const loginJs = fs.readFileSync(path.join(dir, 'login.js'), 'utf8')
+  it('login.js fills #join-cost with textContent, after the policy-off return', () => {
+    expect(fs.readFileSync(path.join(dir, 'login.html'), 'utf8')).toMatch(/<p id="join-cost"><\/p>/)
+    expect(loginJs).toMatch(/node\.textContent\s*=/)
+    expect(loginJs).not.toMatch(/innerHTML/)
+    const off = loginJs.indexOf("setMsg('request-msg', OFF_TEXT, 'bad')\n    return")
+    const call = loginJs.indexOf('fetchJoinOffer')
+    expect(off).toBeGreaterThan(0)
+    expect(call).toBeGreaterThan(off)
+  })
+  it('nothing numeric or priced is hardcoded in the shipped files', () => {
+    for (const f of ['login.html', 'login.js', 'coriqo-link.js']) {
+      const s = fs.readFileSync(path.join(dir, f), 'utf8')
+      expect(s, f).not.toMatch(/\$\d/)
+      expect(s, f).not.toMatch(/per month|per year|a year/i)
+    }
+    for (const f of fs.readdirSync(dir).filter((x) => /\.(js|html|json|md)$/.test(x))) {
+      expect(fs.readFileSync(path.join(dir, f), 'utf8'), f).not.toMatch(/\$\d/)
+    }
+  })
+})
+
+describe('review fixes: the price card reads cleanly and never contradicts itself', () => {
+  const L2 = createRequire(import.meta.url)(path.join(REPO, 'src/byoai/browser_extension/coriqo-link.js'))
+  it('a summary of only spaces is not a price, and surrounding spaces are trimmed', () => {
+    expect(L2.parseJoinOffer({ summary: '     ' })).toBeNull()
+    expect(L2.parseJoinOffer({ summary: '\t ' })).toBeNull()
+    expect(L2.parseJoinOffer({ summary: '  X per month  ' })).toBe('X per month')
+  })
+  it('the card adds no full stop of its own, so a summary that ends in punctuation is not doubled', () => {
+    const src = read('login.js')
+    expect(src).toMatch(/`Price: \$\{line\}`/)
+    expect(src).not.toMatch(/`Price: \$\{line\}\./)
+  })
+  it('the paid-plan paragraph does not say connecting costs nothing; the organisation sentence is its own paragraph', () => {
+    const h = read('login.html')
+    const paid = h.match(/<p><b>Personal and non-business accounts need a paid plan\.<\/b>[\s\S]*?<\/p>/)[0]
+    expect(paid).not.toMatch(/no cost|covered by your organisation/)
+    expect(h).toMatch(/<p>Work for an organisation that uses Coriqo\? Don't pay here[\s\S]*?at no cost to you\.<\/p>/)
+  })
+  it('loadJoinCost reuses the node it looked up', () => {
+    const body = read('login.js').match(/async function loadJoinCost\(\) \{[\s\S]*?\n\}/)[0]
+    expect(body.match(/el\('join-cost'\)/g).length).toBe(1)
+  })
+})

@@ -435,6 +435,7 @@ async function init() {
     setMsg('request-msg', OFF_TEXT, 'bad')
     return
   }
+  loadJoinCost()
   await clearStalePendingJoin()
   if (new URLSearchParams(location.search).get('auto') === '1') {
     busy = true
@@ -448,6 +449,15 @@ async function init() {
   } else {
     showStep('request')
   }
+}
+
+// The price line comes from Coriqo when this screen opens (one GET, no credentials); text only.
+async function loadJoinCost() {
+  const node = el('join-cost')
+  if (!node) return
+  let line = null
+  try { line = await globalThis.CoriqoLink.fetchJoinOffer({ fetchImpl: fetch.bind(globalThis), base: await getApiBase() }) } catch { /* none */ }
+  node.textContent = line ? `Price: ${line}` : 'You will see the price before you pay.'
 }
 
 function updateSendEnabled() {
