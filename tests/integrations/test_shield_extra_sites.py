@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -130,7 +131,7 @@ def test_popup_and_worker_load_the_same_list_and_logic():
         assert f'src="{script}"' in popup
     assert popup.index("extra-sites.js") < popup.index("popup.js")
     worker = (EXT / "background.js").read_text()
-    assert "importScripts('extra-sites.js', 'shield-optional.js')" in worker
+    assert "importScripts('extra-sites.js', 'shield-optional.js', 'shield-stats.js')" in worker
     # The page profile for each curated host exists, marked optional, so the
     # gate knows an admin switches it on.
     sites = (EXT / "shield-sites.js").read_text()
@@ -157,9 +158,63 @@ def test_sign_in_is_offered_but_never_started_by_the_extension_itself():
     # no page pulls in the sign-in script, and the service worker never opens, reads or calls it
     for page in ("popup.html", "welcome.html"):
         assert "login.js" not in (EXT / page).read_text()
-    background = (EXT / "background.js").read_text()
-    for word in ("login.html", "coriqo_session", "coriqo_api_base", "coriqo_link"):
-        assert word not in background, word
+    # The service worker never reads the sign-in session. It opens the sign-in page in exactly
+    # one place: finishing a join the person started, after Coriqo's page says it is done, only
+    # when the admin allows linking and only when the message passed acceptJoinMessage. Checked
+    # on the raw file, comments included: a check must be a live top-level line to count.
+    code = (EXT / "background.js").read_text()
+    assert "coriqo_session" not in code
+    # Indirection the old whole-file ban also relied on not being used: no bracket access to the
+    # extension APIs, and the hand-off named only where it is defined and called.
+    assert not re.search(r"chrome\s*\[", code)
+    assert code.count("handleJoinOnce") == 2
+    start = code.index("async function handleJoinOnce(msg, sender, L) {")
+    end = code.index("\n}\n", start) + 3
+    join, rest = code[start:end], code[:start] + code[end:]
+    # Nothing outside the join hand-off names the sign-in page (however it is spelled together),
+    # reads the Coriqo link settings, or calls the hand-off.
+    assert "login" not in rest.lower()
+    for word in ("coriqo_link", "coriqo_api_base", "coriqo_pending_join"):
+        assert word not in rest, word
+    # The hand-off is reached only through handleJoinMessage, and that only from the
+    # external-message listener (a message from a web page, never install or startup).
+    assert re.findall(r"handleJoinOnce\(", rest) == ["handleJoinOnce("]
+    assert "return await handleJoinOnce(msg, sender, globalThis.CoriqoLink)" in rest
+    # The only page the worker opens outside the hand-off is the welcome page, by its literal name;
+    # no other tab, window or extension URL is built anywhere else.
+    assert len(re.findall(r"\.(?:tabs|windows)\.(?:create|update)\(", rest)) == 1
+    assert rest.count("chrome.tabs.create({ url: chrome.runtime.getURL('welcome.html') })") == 1
+    assert re.findall(r"getURL\([^)]*\)", rest) == ["getURL('')", "getURL('welcome.html')"]
+    calls = [m.start() for m in re.finditer(r"handleJoinMessage\(", rest)]
+    assert len(calls) == 2  # its definition and the one listener call
+    listener = rest.index("chrome.runtime.onMessageExternal.addListener(")
+    assert listener < calls[1] < rest.index("\n})", listener)
+    # Inside it: the admin policy and the message verdict are real, live checks before the tab.
+    assert join.count("login") == 1 and join.count("chrome.tabs.create") == 1
+    # Each step is its own statement at the function's top level (two-space indent, whole line),
+    # so wrapping a check in a dead branch or a condition moves it and fails here.
+    def top(line: str) -> int:
+        m = re.search(r"\n  " + re.escape(line) + r"[^\n]*\n", join)
+        assert m, line
+        # and not the body of a brace-less if/else/while/for on the line before
+        before = join[:m.start()].rstrip().rsplit("\n", 1)[-1].strip()
+        assert not re.search(r"(^|\W)(if|else|while|for)\b[^;{}]*$", before), line
+        return m.start()
+    policy = top("const policy = L.linkPolicy(managed)")
+    gate1 = top("if (!policy.enabled) return false")
+    verdict = top("const verdict = L.acceptJoinMessage({ msg, senderOrigin: sender.origin")
+    gate2 = top("if (!verdict.ok) return false")
+    opened = top("chrome.tabs.create({ url: chrome.runtime.getURL('login.html?auto=1') })")
+    assert join.count("if (!verdict.ok)") == 1 and join.count("if (!policy.enabled)") == 1
+    # Before the checks it only reads what it needs to make them: exactly these two reads, and it
+    # makes no network request at all.
+    reads = re.findall(r"chrome\.storage\.\w+\.get\([^)]*\)", join)
+    assert reads == ["chrome.storage.local.get(['coriqo_pending_join', 'coriqo_api_base'])",
+                     "chrome.storage.managed.get(['coriqo_link', 'coriqo_api_base'])"]
+    for word in ("coriqo_link", "coriqo_api_base"):
+        assert join.count(word) == (1 if word == "coriqo_link" else 3), word
+    assert "fetch(" not in join and "XMLHttpRequest" not in join and "sendBeacon" not in join
+    assert policy < gate1 < verdict < gate2 < opened
     assert "login.html" not in (EXT / "manifest.json").read_text()
     # the privacy notice must not claim there is no sign-in while there is one
     notice = (EXT / "PRIVACY.md").read_text()
@@ -180,5 +235,6 @@ def test_skip_is_ignored_while_a_sign_in_is_under_way_and_any_sign_in_clears_it(
     body = js[js.index("async function onSkip"):js.index("async function init")]
     assert "if (busy) return" in body
     for handler in ("onOAuth", "onConnect", "onSend", "onConsume"):
-        assert f"working({handler})" in js, handler
+        # wrapped directly, or through a no-argument arrow that calls it
+        assert re.search(rf"working\(({handler}|\(\) => {handler}\(\))\)", js), handler
     assert "remove(SKIP_KEY" in js[js.index("function setSession"):js.index("function clearSession")]
