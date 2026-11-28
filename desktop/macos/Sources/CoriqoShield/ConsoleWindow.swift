@@ -27,13 +27,21 @@ struct WebView: NSViewRepresentable {
     final class Coordinator: NSObject, WKNavigationDelegate {
         func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                      decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-            guard let url = action.request.url else { return decisionHandler(.cancel) }
-            if url.host == "127.0.0.1" && url.port == ShieldModel.port {
-                decisionHandler(.allow)
-            } else {
-                NSWorkspace.shared.open(url)
-                decisionHandler(.cancel)
+            guard let url = action.request.url, let scheme = url.scheme?.lowercased() else {
+                return decisionHandler(.cancel)
             }
+            // Shield's own pages (and the blank/error page) stay in the window.
+            if (scheme == "http" && url.host == "127.0.0.1" && url.port == ShieldModel.port)
+                || url.absoluteString == "about:blank" {
+                return decisionHandler(.allow)
+            }
+            // Anything else opens in the browser only when the person clicked a
+            // web or mail link; scripts, redirects and frames never launch apps.
+            if action.navigationType == .linkActivated, action.targetFrame?.isMainFrame != false,
+               ["http", "https", "mailto"].contains(scheme) {
+                NSWorkspace.shared.open(url)
+            }
+            decisionHandler(.cancel)
         }
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation _: WKNavigation!, withError _: Error) {
