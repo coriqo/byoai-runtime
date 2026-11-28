@@ -199,7 +199,7 @@ describe('page capture: which tools the AI ran for a reply', () => {
     expect(await res.text()).toContain('sunny')          // the app still gets the whole reply
     await settle()
     const reply = p.captured.find((r) => r.kind === 'browser.chat.reply')
-    expect(reply).toEqual({ kind: 'browser.chat.reply', app: 'chatgpt', send_id: p.captured[0].send_id, tools: ['web.run'], sources: 2 })
+    expect(reply).toEqual({ kind: 'browser.chat.reply', app: 'chatgpt', send_id: p.captured[0].send_id, tools: ['web.run'], sources: 2, evidence_level: 'observed_requested' })
     expect(p.captured[0].send_id).toMatch(/^[0-9a-f-]{32,36}$/)
     expect(JSON.stringify(p.captured)).not.toMatch(/91°|sunny|Houston weather/)
   })
@@ -227,6 +227,6 @@ describe('page capture: which tools the AI ran for a reply', () => {
     const p = page('claude.ai', agreed('redact'), streamOf(events))
     await (await p.send(JSON.stringify({ prompt: 'hi' }))).text()
     await settle()
-    expect(p.captured.find((r) => r.kind === 'browser.chat.reply')).toMatchObject({ tools: ['web_search'], sources: 0 })
+    expect(p.captured.find((r) => r.kind === 'browser.chat.reply')).toMatchObject({ tools: ['web_search'], sources: 0, evidence_level: 'observed_requested' })
   })
 })
