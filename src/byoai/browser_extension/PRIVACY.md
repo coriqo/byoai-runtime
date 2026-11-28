@@ -11,6 +11,8 @@ When you connect this computer, Coriqo may also ask Shield to sign a one-time co
 It does nothing until you agree on the welcome page it opens when you install
 it, and you can turn it off again at any time from its popup.
 
+If you have no Coriqo workspace, the sign-in page can send you to Coriqo to join one and pay. When you finish there, Coriqo's page may send this extension one message saying you are done. The extension acts on it only if linking is not switched off by your administrator, it started the join in the last hour, and the page is the Coriqo address it uses. If you ticked *Connect this computer to Coriqo* on Coriqo's page, the extension then signs in and, after a 5-second "Connecting this computer…" notice with a *Cancel* button, connects this computer for you, sending what "If you sign in to Coriqo" lists; if you did not tick it, nothing is connected until you press *Connect this computer*. The message itself carries no data. The extension's manifest lists Coriqo's join page under `externally_connectable` for this (a local address only in unpacked development copies, not in store builds).
+
 The sign-in page has a *Skip for now* button (also Esc). Skipping sends nothing, stores no token and enrols nothing; it only remembers, on this computer, that you skipped, so the popup shows a quiet *Sign in* entry instead of the usual offer. Signing in later clears that note.
 
 ## What it does

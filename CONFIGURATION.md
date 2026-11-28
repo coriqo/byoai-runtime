@@ -2428,13 +2428,50 @@ The Shield-side gate `BYOAI_CORIQO_LINK_HOSTS` still applies on top of these.
 
 The login page also has *Skip for now* (and Esc): it stores only `coriqo_skipped` (a timestamp, local), makes no request and keeps no token or enrolment; the popup then shows *Sign in* with "Not signed in" until a sign-in starts.
 
-When `tenants` has more than one slug the login page shows a workspace picker.
+When `tenants` has more than one slug the login page shows the chosen workspace
+as one line ("Nearest to you" when it was picked by region) and keeps the full
+picker folded under *Use a different workspace*.
 A slug is read as `<who>_<region>` (`coriqo_msp_usa` shows as "Coriqo MSP,
 United States"; known regions are `usa`, `uk`, `eu`, `ca`, `au`, anything else
 is shown as is). Coriqo's `tenant_slug` is preselected when Coriqo
 names one; otherwise the workspace nearest the user is, and the first entry if
-none is. The nearest is tagged "Near you" as a hint, guessed on the device from
+none is. The nearest is tagged "Nearest to you" as a hint, guessed on the device from
 the browser's time zone, then its language; the guess is never sent to Coriqo
 and never overrides the one Coriqo named. The user can pick another.
+
+After the user agrees on the welcome page, it shows a try-it panel: a made-up sample
+message (with a copy button) and links that open ChatGPT, Claude and Gemini.
+Nothing is sent anywhere by it.
+
+When the sign-in works but the account has no workspace, the login page offers *Join Coriqo*. It
+opens `<coriqo base>/join?tenant=<coriqo_msp_usa|coriqo_msp_uk>&source=extension` in a new tab (the UK
+workspace for the UK and Europe, the US one otherwise, by the same on-device guess as above; no email or
+token is in the address) and stores `coriqo_pending_join` (workspace and time, local). Coriqo's page
+takes the payment and a password. When it is done it sends the extension one message,
+`{ type: "coriqo.join.finished", connect: true|false }`, using `externally_connectable`. The manifest
+matches only the join page: `https://app.coriqo.io/join*`, plus `http://localhost/join*` in the
+unpacked dev manifest (Chrome match patterns ignore the port). `scripts/package_extension.py` (the
+`build:extension` script) removes the localhost entry from store builds and refuses to build one that
+still lists localhost or plain http; `--keep-key` (dev build) keeps it. The extension accepts the
+message only if linking is not switched off by the admin (`coriqo_link: "disabled"` gets `{ ok: false }`,
+no flag stored, no tab opened), it started a join in the last hour, the message is exactly that type,
+and the sender's origin is the Coriqo address in use (`coriqo_api_base`, or the default). It then opens
+`login.html?auto=1`, which signs in with Coriqo. Only when the person ticked the connect box on Coriqo's
+page (`connect: true`) does it go on to *Connect this computer*, and then only when all of these hold: the
+sign-in succeeded in this run, the session was created in this run (never an older stored one), and the
+session's workspace is the one the join named when the account lists it. Auto-connect is kept (consent is
+the checkbox on Coriqo's page), but the login page first shows "Connecting this computer…" with a
+*Cancel* button and waits 5 seconds, so the person can stop it before anything is sent. The pending join
+(`coriqo_pending_join`) is single-use and is dropped when older than one hour, both when the auto run starts
+and whenever the login page opens. The message carries no data or credentials; the sign-in, the Shield key
+check and the device proof are the ones described above. Payment, the password and the sign-up page live
+on Coriqo's side.
+
+The automatic finish works only when the Coriqo address in use is the default (`https://app.coriqo.io`),
+or `localhost` in a dev build, because `externally_connectable` lists only those two. With any other
+address (a custom `coriqo_api_base`, a self-hosted Coriqo) Chrome never delivers the message, and the
+person signs in by hand. A second message for a join that was already accepted gets `{ ok: false }`.
+The extension's `host_permissions` stay `http://127.0.0.1/*` and `http://localhost/*` (the local Shield
+endpoint and a dev Coriqo need them); only `externally_connectable` is limited to the join page.
 
 A magic-link session (the older sign-in) cannot link a computer.

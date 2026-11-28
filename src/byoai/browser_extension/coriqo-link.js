@@ -344,7 +344,36 @@
     return `Connected to Coriqo: ${t.name}${t.region ? `, ${t.region}` : ''}.${device}`
   }
 
-  const api = { CLIENT_ID, DEFAULT_BASE, linkPolicy, resolveBase, sessionExpired, exactHttpsOrigin, linkSummary, checkClientId, tenantLabel, detectRegion, pickTenant, checkBase, makePkce, buildAuthorizeUrl, parseRedirect, exchangeCode,
+  // Joining a Coriqo MSP workspace by paying (the page is Coriqo's). The extension names only the
+  // workspace and where it came from; no email or token goes in the address.
+  const JOIN_TENANTS = { usa: 'coriqo_msp_usa', uk: 'coriqo_msp_uk' }
+  const JOIN_TTL_MS = 60 * 60 * 1000
+  const JOIN_FINISHED = 'coriqo.join.finished'
+  function joinTenantFor(region) { return region === 'uk' || region === 'eu' ? JOIN_TENANTS.uk : JOIN_TENANTS.usa }
+  function joinUrl({ base, tenant }) {
+    const u = new URL('/join', checkBase(base))
+    u.searchParams.set('tenant', tenant)
+    u.searchParams.set('source', 'extension')
+    return u.toString()
+  }
+  // May this message from a web page finish a join this extension started? Only when the extension
+  // began one in the last hour, the message is exactly the finished one, and the page is the Coriqo
+  // address in use. The page can ask for the connect to run; it can never carry data in.
+  // A join this extension started is live for an hour; a time in the future is not live.
+  function isPendingJoinFresh(pending, now = Date.now()) {
+    return !!pending && Number.isFinite(pending.at) && now >= pending.at && now - pending.at <= JOIN_TTL_MS
+  }
+  function acceptJoinMessage({ msg, senderOrigin, base, pending, now = Date.now() }) {
+    const no = { ok: false, connect: false }
+    if (!isPendingJoinFresh(pending, now)) return no
+    if (!msg || msg.type !== JOIN_FINISHED) return no
+    let origin
+    try { origin = new URL(checkBase(base)).origin } catch { return no }
+    if (senderOrigin !== origin) return no
+    return { ok: true, connect: msg.connect === true }
+  }
+
+  const api = { JOIN_TTL_MS, isPendingJoinFresh, joinTenantFor, joinUrl, acceptJoinMessage, JOIN_FINISHED, CLIENT_ID, DEFAULT_BASE, linkPolicy, resolveBase, sessionExpired, exactHttpsOrigin, linkSummary, checkClientId, tenantLabel, detectRegion, pickTenant, checkBase, makePkce, buildAuthorizeUrl, parseRedirect, exchangeCode,
     requestEnrolGrant, requestProofNonce, requestDeviceProof, linkLocalShield, verifiedShieldKey }
   root.CoriqoLink = api
   if (typeof module !== 'undefined' && module.exports) module.exports = api

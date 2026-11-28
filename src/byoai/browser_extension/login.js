@@ -84,8 +84,9 @@ function sendBg(msg) {
   return new Promise((resolve) => chrome.runtime.sendMessage(msg, (r) => resolve(r)))
 }
 
+// Resolves true only once a session was stored; every other outcome is false.
 async function onOAuth() {
-  if (!(await getPolicy()).enabled) return setMsg('request-msg', OFF_TEXT, 'bad')
+  if (!(await getPolicy()).enabled) { setMsg('request-msg', OFF_TEXT, 'bad'); return false }
   chrome.storage.local.remove(SKIP_KEY)
   el('oauth-start').disabled = true
   setMsg('request-msg', 'Opening Coriqo…')
@@ -102,11 +103,16 @@ async function onOAuth() {
     const list = t.tenants.length ? t.tenants : (t.tenant_slug ? [t.tenant_slug] : [])
     const tenant = L.pickTenant(list, L.detectRegion({ language: navigator.language,
       timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }), t.tenant_slug)
-    if (!tenant) throw new Error('no_tenant')
+    if (!tenant) {
+      showStep('join'); setMsg('request-msg', '')
+      setMsg('join-msg', 'This account has no workspace yet. If you just paid, give it a minute and sign in again. Otherwise choose Join Coriqo.', 'bad')
+      return false
+    }
     await setSession({ access_token: t.access_token, email: t.email || '', tenant_slug: tenant,
       tenants: list, at: Date.now(), expires_at: t.expires_at, via: 'oauth' })
     setMsg('request-msg', '')
     await showDone()
+    return true
   } catch (err) {
     const m = err?.message || ''
     setMsg('request-msg',
@@ -116,9 +122,94 @@ async function onOAuth() {
           : m === 'bad_client_id' ? 'The saved Coriqo client id is not valid.'
             : /^http:/.test(m) ? 'Coriqo had a problem. Try again shortly.'
               : "Couldn't sign in. Check your connection and try again.", 'bad')
+    return false
   } finally {
     el('oauth-start').disabled = false
   }
+}
+
+const PENDING_JOIN_KEY = 'coriqo_pending_join'
+
+// Send the person to Coriqo's pay-to-join page for the workspace nearest them, and remember that we
+// did, so only a join we started can be finished by a message from that page (see background.js).
+async function onJoin() {
+  if (!(await getPolicy()).enabled) return setMsg('join-msg', OFF_TEXT, 'bad')
+  try {
+    const L = globalThis.CoriqoLink
+    const region = L.detectRegion({ language: navigator.language, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone })
+    const tenant = L.joinTenantFor(region)
+    const url = L.joinUrl({ base: await getApiBase(), tenant })
+    await new Promise((r) => chrome.storage.local.set({ [PENDING_JOIN_KEY]: { tenant, at: Date.now() } }, r))
+    chrome.tabs.create({ url })
+    setMsg('join-msg', 'Opened Coriqo in a new tab. Come back here when you are done.', 'ok')
+  } catch (err) {
+    setMsg('join-msg', err?.message === 'bad_base' ? BAD_BASE_TEXT : "Couldn't open Coriqo. Try again.", 'bad')
+  }
+}
+
+const AUTO_CONNECT_MS = 5000
+
+// The person ticked "connect" on Coriqo's page, but still gets a visible few seconds to stop it.
+// Resolves true when the time runs out, false if they press Cancel.
+function confirmAutoConnect(ms = AUTO_CONNECT_MS) {
+  return new Promise((resolve) => {
+    const box = el('auto-status')
+    const cancel = el('auto-cancel')
+    box.hidden = false
+    // The workspace is fixed while the status shows, so what is connected is what was joined.
+    const radios = [...document.querySelectorAll('#tenants input[name=tenant]')]
+    radios.forEach((r) => { r.disabled = true })
+    const done = (go) => {
+      clearTimeout(timer); cancel.removeEventListener('click', stop); box.hidden = true
+      radios.forEach((r) => { r.disabled = false })
+      resolve(go)
+    }
+    const stop = () => done(false)
+    const timer = setTimeout(() => done(true), ms)
+    cancel.addEventListener('click', stop)
+  })
+}
+
+// A pending join older than the hour is forgotten, whenever the login page opens.
+async function clearStalePendingJoin() {
+  const pending = await new Promise((r) => chrome.storage.local.get(PENDING_JOIN_KEY, (v) => r(v[PENDING_JOIN_KEY] || null)))
+  if (pending && !globalThis.CoriqoLink.isPendingJoinFresh(pending)) {
+    await new Promise((r) => chrome.storage.local.remove(PENDING_JOIN_KEY, r))
+  }
+}
+
+// Opened by the background script after the pay-to-join page says the person finished: sign in, and
+// connect this computer if they ticked that box there (after a short, cancellable pause). Runs once;
+// the flag is consumed. It connects only with the session this run just created, in the joined workspace.
+async function runAfterJoin() {
+  const L = globalThis.CoriqoLink
+  const pending = (await new Promise((r) => chrome.storage.local.get(PENDING_JOIN_KEY, (v) => r(v[PENDING_JOIN_KEY] || null))))
+  if (!pending?.accepted) return false
+  if (!L.isPendingJoinFresh(pending)) {
+    await new Promise((r) => chrome.storage.local.remove(PENDING_JOIN_KEY, r))
+    return false
+  }
+  const startedAt = Date.now()
+  const signedIn = await onOAuth()
+  if (signedIn !== true) {
+    // The join stays (the hour still runs) but is open to one more message from Coriqo's page, so a closed
+    // sign-in window or a workspace that is still being set up does not lose it.
+    await new Promise((r) => chrome.storage.local.set({ [PENDING_JOIN_KEY]: { ...pending, accepted: false } }, r))
+    return true
+  }
+  // Signed in: the join is used up, so a repeated message cannot run it again.
+  await new Promise((r) => chrome.storage.local.remove(PENDING_JOIN_KEY, r))
+  if (!pending.connect) return true
+  const session = await getSession()
+  if (session?.via !== 'oauth' || !(session.at >= startedAt) || session.tenant_slug !== pending.tenant) return true
+  if (!(await confirmAutoConnect())) return true
+  // The window was open for seconds: look again at who is signed in and which workspace is picked.
+  const again = await getSession()
+  const picked = document.querySelector('#tenants input[name=tenant]:checked')?.value || again?.tenant_slug
+  if (again?.via !== 'oauth' || !(again.at >= startedAt) || again.tenant_slug !== pending.tenant || picked !== pending.tenant) return true
+  if (!(await getPolicy()).enabled) return true
+  await onConnect(pending.tenant)
+  return true
 }
 
 async function showDone() {
@@ -146,6 +237,10 @@ async function showDone() {
   }))
   el('tenant-field').hidden = tenants.length < 2
   const shown = L.tenantLabel(picked || session.tenant_slug)
+  // The nearest workspace is already chosen; the list stays folded away unless asked for.
+  el('nearest').hidden = tenants.length < 2
+  el('nearest-name').textContent = shown.region ? `${shown.name}, ${shown.region}` : shown.name
+  el('nearest-tag').hidden = !(region && L.tenantLabel(picked).regionKey === region)
   el('done-workspace').textContent = shown.region ? `${shown.name}, ${shown.region}` : shown.name
   // OAuth sessions can connect a computer; a magic-link session has no
   // device-enrolment right, so the card is not offered.
@@ -155,7 +250,9 @@ async function showDone() {
   showStep('done')
 }
 
-async function onConnect() {
+// `forcedTenant` is set by the automatic join path: the computer is enrolled in the workspace that was
+// joined and checked, never in whatever the picker shows when the Shield answers.
+async function onConnect(forcedTenant) {
   const L = globalThis.CoriqoLink
   const btn = el('connect')
   btn.disabled = true
@@ -186,7 +283,8 @@ async function onConnect() {
       return setMsg('request-msg', 'Sign in again to connect this computer.', 'bad')
     }
     const base = await getApiBase()
-    const tenant = document.querySelector('#tenants input[name=tenant]:checked')?.value || session.tenant_slug
+    const tenant = (typeof forcedTenant === 'string' && forcedTenant)
+      || document.querySelector('#tenants input[name=tenant]:checked')?.value || session.tenant_slug
     setMsg('connect-msg', 'Asking Coriqo…')
     const device = { publicKey: pinned, label: `${navigator.platform || 'computer'}`, platform: navigator.platform,
       extensionVersion: chrome.runtime.getManifest().version }
@@ -239,7 +337,7 @@ async function onConnect() {
 }
 
 function showStep(name) {
-  for (const s of ['request', 'consume', 'done']) {
+  for (const s of ['request', 'join', 'consume', 'done']) {
     el(`step-${s}`).classList.toggle('active', s === name)
   }
 }
@@ -294,7 +392,9 @@ async function init() {
     if (e.key === 'Escape' && el('step-request').classList.contains('active') && !el('skip').disabled) onSkip()
   })
   el('oauth-start').addEventListener('click', working(onOAuth))
-  el('connect').addEventListener('click', working(onConnect))
+  el('connect').addEventListener('click', working(() => onConnect()))
+  el('join').addEventListener('click', working(onJoin))
+  el('join-retry').addEventListener('click', working(() => onOAuth()))
 
   el('email').addEventListener('input', updateSendEnabled)
   el('workspace').addEventListener('input', updateSendEnabled)
@@ -330,6 +430,13 @@ async function init() {
     showStep('request')
     setMsg('request-msg', OFF_TEXT, 'bad')
     return
+  }
+  await clearStalePendingJoin()
+  if (new URLSearchParams(location.search).get('auto') === '1') {
+    busy = true
+    let ran = false
+    try { ran = await runAfterJoin() } finally { busy = false }
+    if (ran) return
   }
   const session = await getSession()
   if (session) {

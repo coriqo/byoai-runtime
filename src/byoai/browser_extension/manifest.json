@@ -19,6 +19,12 @@
   "storage": {
     "managed_schema": "managed_schema.json"
   },
+  "externally_connectable": {
+    "matches": [
+      "https://app.coriqo.io/join*",
+      "http://localhost/join*"
+    ]
+  },
   "action": {
     "default_title": "Coriqo Shield capture",
     "default_popup": "popup.html",
