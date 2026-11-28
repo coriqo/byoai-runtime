@@ -371,3 +371,42 @@ describe('a person with no Coriqo account can start from the first screen', () =
     expect(extract('login.js', 'onJoin')).not.toMatch(/setMsg\('join-msg'/) // the status goes to the step that is showing
   })
 })
+
+describe('the first screen says what is free and what is paid, in two clear paths', () => {
+  const html = () => read('login.html')
+  it('an existing account is covered by its organisation, a new personal account needs a paid plan', () => {
+    const h = html()
+    expect(h).toMatch(/I have a Coriqo account[\s\S]*covered\s+by your organisation: no payment/)
+    expect(h).toMatch(/I'm new to Coriqo[\s\S]*Personal and non-business accounts need a paid plan/)
+    expect(h).toMatch(/ask your administrator to add you instead/)
+  })
+  it('the email link sits behind a fold, and every control the script needs is still there once', () => {
+    const h = html()
+    expect(h).toMatch(/<details class="sees" id="email-link">[\s\S]*id="send"[\s\S]*<\/details>/)
+    for (const id of ['oauth-start', 'join-new', 'email', 'workspace', 'send', 'request-msg', 'skip', 'lead']) {
+      expect([...h.matchAll(new RegExp(`id="${id}"`, 'g'))].length, id).toBe(1)
+    }
+  })
+  it('names no price, plan or payment provider (the amounts live on Coriqo)', () => {
+    expect(html()).not.toMatch(/stripe|\$\d|per month|\/mo\b|focused|pro plan/i)
+  })
+})
+
+describe('review fixes: the first screen keeps its promises honest', () => {
+  const h = () => read('login.html')
+  it('says pairing with a local Shield needs no account and no payment, on every step', () => {
+    const html = h()
+    const leadAt = html.indexOf('id="lead"')
+    expect(html.slice(leadAt, leadAt + 400)).toMatch(/needs no account and no payment/)
+    expect(leadAt).toBeLessThan(html.indexOf('id="step-request"')) // outside the steps, so no step hides it
+  })
+  it('does not promise the computer connects: that depends on the box the person ticks on Coriqo', () => {
+    expect(h()).toMatch(/If you tick the box there, Shield then connects this computer/)
+    expect(h()).not.toMatch(/connects this computer when you finish/)
+  })
+  it('the email field label matches the copy that any email works', () => {
+    expect(h()).toMatch(/<label for="email">Email<\/label>/)
+    expect(h()).not.toMatch(/Work email/)
+  })
+})
+

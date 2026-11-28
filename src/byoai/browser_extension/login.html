@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Sign in to Coriqo</title>
+  <title>Connect Shield to Coriqo</title>
   <link rel="stylesheet" href="shield-tokens.css">
   <style>
     /* Every colour, size, radius and shadow names a token from shield-tokens.css
@@ -68,6 +68,15 @@
     .fine a, .card a { color: var(--azure-soft); }
     .nearest { margin: var(--space-md) 0 var(--space-xs); font-size: var(--text-sm); }
     .nearest .tag { margin-left: var(--space-xs); font-size: var(--text-xs); color: var(--validated); }
+    .path { background: var(--field); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow-sm);
+      padding: var(--space-lg) var(--space-xl); margin: 0 0 var(--space-md); }
+    .path h2 { margin: 0 0 var(--space-xs); font-size: var(--text-md); font-weight: var(--weight-semibold); letter-spacing: -.01em; }
+    .path p { margin: 0; font-size: var(--text-sm); color: var(--ink-soft); }
+    .path p b { color: var(--ink); }
+    .path button { margin-top: var(--space-md); }
+    #email-link input, #email-link label, #email-link button { margin-left: var(--space-md); margin-right: var(--space-md); }
+    #email-link input { width: calc(100% - var(--space-md) * 2); }
+    #email-link button.primary { width: calc(100% - var(--space-md) * 2); margin-bottom: var(--space-md); }
     .step { display: none; }
     .step.active { display: block; }
   </style>
@@ -78,25 +87,42 @@
     <svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="11" fill="none" stroke="currentColor" stroke-width="3.6"/><circle cx="16" cy="16" r="4.6" fill="currentColor"/></svg>
     Coriqo Shield
   </div>
-  <h1>Sign in to Coriqo</h1>
+  <h1>Connect Shield to Coriqo</h1>
   <p class="lead" id="lead">
-    Optional. This links Shield's browser-only capture to your Coriqo account
-    — separate from pairing with a local Shield on this Mac, which needs no
-    sign-in at all.
+    Optional. Shield protects you on this computer either way, and pairing it with a Shield on this
+    Mac needs no account and no payment. Connecting links it to your Coriqo workspace, so your team
+    can see that it is protected. Coriqo never receives what you type or what an AI replies.
   </p>
 
   <section class="step active" id="step-request">
-    <button class="primary" id="oauth-start">Sign in with Coriqo</button>
-    <button class="secondary" id="join-new">New to Coriqo? Join</button>
-    <p class="fine">Or use an email link instead:</p>
-    <label for="email">Work email</label>
-    <input type="email" id="email" autocomplete="email" placeholder="you@company.com" />
-    <label for="workspace">Coriqo workspace</label>
-    <input type="text" id="workspace" autocomplete="off" spellcheck="false" placeholder="e.g. acme-msp" />
-    <button class="primary" id="send" disabled>Send sign-in link</button>
+    <div class="path">
+      <h2>I have a Coriqo account</h2>
+      <p>Sign in with your work account. If your organisation already uses Coriqo, connecting
+        is covered by your organisation: no payment.</p>
+      <button class="primary" id="oauth-start">Sign in with Coriqo</button>
+    </div>
+
+    <div class="path">
+      <h2>I'm new to Coriqo</h2>
+      <p><b>Personal and non-business accounts need a paid plan.</b> You pay on Coriqo and choose a
+        password. If you tick the box there, Shield then connects this computer for you. Any email works. If you work
+        for an organisation that uses Coriqo, ask your administrator to add you instead.</p>
+      <button class="secondary" id="join-new">Join Coriqo</button>
+    </div>
+
     <p class="msg" id="request-msg"></p>
+
+    <details class="sees" id="email-link">
+      <summary>Sign in with an email link instead</summary>
+      <label for="email">Email</label>
+      <input type="email" id="email" autocomplete="email" placeholder="you@company.com" />
+      <label for="workspace">Coriqo workspace</label>
+      <input type="text" id="workspace" autocomplete="off" spellcheck="false" placeholder="e.g. acme-msp" />
+      <button class="primary" id="send" disabled>Send sign-in link</button>
+    </details>
+
     <button class="secondary" id="skip">Skip for now</button>
-    <p class="fine">You can sign in later from the extension's popup. Shield keeps working on this computer either way.</p>
+    <p class="fine">Shield keeps working on this computer either way. You can connect later from the extension's popup.</p>
   </section>
 
   <section class="step" id="step-join">
