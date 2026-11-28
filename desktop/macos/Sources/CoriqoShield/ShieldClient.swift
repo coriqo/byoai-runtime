@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// Reads the local Shield (byoai-shield) API. GET only: the app never changes
@@ -68,7 +69,15 @@ final class ShieldModel: ObservableObject {
     }()
     static let base = URL(string: "http://127.0.0.1:\(port)")!
 
-    @Published var state: ShieldState = .starting
+    @Published var state: ShieldState = .starting {
+        didSet {
+            // A "!" on the Dock icon (seen while the window is open) whenever something is wrong.
+            switch state {
+            case .attention, .stopped: NSApp?.dockTile.badgeLabel = "!"
+            default: NSApp?.dockTile.badgeLabel = nil
+            }
+        }
+    }
     @Published var feed: Feed?
     @Published var coriqo: CoriqoStatus?
     @Published var updated: Date?

@@ -1,129 +1,172 @@
-import ServiceManagement
 import SwiftUI
 
-/// The menu-bar dropdown. One status, one sentence about what it means, one
-/// main action. Detail lives in the Shield window, not here.
+/// The menu-bar dropdown, a "mini player": one status you can read at a
+/// glance, today's line, and a footer naming where records go. Everything
+/// else is one click away in the Shield window.
 struct MenuView: View {
     @ObservedObject var model: ShieldModel
-    @State private var openAtLogin = SMAppService.mainApp.status == .enabled
+    @ObservedObject var login: LoginItem
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Size.spaceLg) {
-            brand
-            status
-            if model.state != .stopped && model.state != .starting { activity }
-            primary
-            promise
-            Divider().overlay(Brand.line)
-            VStack(spacing: 0) {
-                Toggle("Open at login", isOn: $openAtLogin)
-                    .toggleStyle(.switch).tint(Brand.action)
-                    .font(.system(size: Size.textSm)).foregroundStyle(Brand.ink)
-                    .frame(minHeight: Size.target)
-                    .onChange(of: openAtLogin) { _, on in
-                        do { if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() } }
-                        catch { openAtLogin = SMAppService.mainApp.status == .enabled }
-                    }
-                QuietRow(title: "Check again") { Task { await model.refresh() } }
-                QuietRow(title: "Quit Coriqo Shield") { NSApp.terminate(nil) }
+        VStack(spacing: 0) {
+            header
+            VStack(alignment: .leading, spacing: Size.spaceMd) {
+                statusButton
+                Text(look.detail)
+                    .font(.system(size: Size.textSm)).foregroundStyle(Brand.inkSoft)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let today { Text(today).font(.system(size: Size.textSm)).foregroundStyle(Brand.ink) }
+                if model.coriqo != nil && model.coriqo?.connected != true && model.state != .stopped {
+                    SecondaryButton(title: "Connect to Coriqo") { ConsoleWindow.show(page: "shield?tab=settings") }
+                }
             }
+            .padding(.horizontal, Size.spaceLg).padding(.bottom, Size.spaceLg)
+            footer
         }
-        .padding(Size.spaceLg)
-        .frame(width: 320)
+        .frame(width: 300)
         .background(Brand.paper)
+        .onAppear { login.refresh() }
     }
 
-    private var brand: some View {
+    // MARK: header: brand on the left, the window on the right
+
+    private var header: some View {
         HStack(spacing: Size.spaceSm) {
             SealMark(size: Size.iconPanel)
             Text("Coriqo Shield").font(.system(size: Size.textSm, weight: .semibold)).foregroundStyle(Brand.ink)
+            Spacer()
+            IconButton(symbol: "macwindow", label: "Open Shield window") { ConsoleWindow.show() }
         }
+        .padding(.leading, Size.spaceLg).padding(.trailing, Size.spaceSm)
+        .frame(minHeight: Size.target)
     }
 
-    // MARK: status: the one thing to read
+    // MARK: the one status
 
-    private var status: some View {
-        HStack(alignment: .top, spacing: Size.spaceMd) {
-            Image(systemName: look.symbol)
-                .font(.system(size: Size.iconPanel)).foregroundStyle(look.tint)
-                .frame(width: Size.iconNav)
-            VStack(alignment: .leading, spacing: Size.spaceXs) {
-                Text(look.title).font(Brand.title(Size.textXl)).foregroundStyle(Brand.ink)
-                Text(look.detail).font(.system(size: Size.textSm)).foregroundStyle(Brand.inkSoft)
-                    .fixedSize(horizontal: false, vertical: true)
+    /// A large, state-coloured control: the main thing to read, and the main
+    /// thing to click (open the window, or start Shield when it is off).
+    private var statusButton: some View {
+        Button {
+            if model.state == .stopped { model.startShield() } else { ConsoleWindow.show() }
+        } label: {
+            HStack(spacing: Size.spaceMd) {
+                Image(systemName: look.symbol).font(.system(size: Size.iconPanel, weight: .semibold))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(look.title).font(.system(size: Size.textMd, weight: .semibold))
+                    Text(look.action).font(.system(size: Size.textXs)).opacity(0.85)
+                }
+                Spacer()
+                Image(systemName: "chevron.right").font(.system(size: Size.iconStatus, weight: .semibold)).opacity(0.7)
             }
+            .foregroundStyle(look.ink)
+            .padding(.horizontal, Size.spaceLg)
+            .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: Size.radius).fill(look.fill))
+            .contentShape(Rectangle())
         }
-        .padding(Size.spaceMd)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: Size.radius).fill(Brand.field))
-        .overlay(RoundedRectangle(cornerRadius: Size.radius).stroke(look.edge))
-        .accessibilityElement(children: .combine)
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(look.title). \(look.action)")
     }
 
-    private var look: (symbol: String, tint: Color, edge: Color, title: String, detail: String) {
+    private var look: (symbol: String, title: String, action: String, detail: String, fill: Color, ink: Color) {
         switch model.state {
         case .protecting:
-            return ("checkmark.shield", Brand.validated, Brand.line, "Protecting this Mac",
-                    "Messages to AI apps are checked before they leave, and each check is sealed in a signed record.")
+            return ("checkmark.shield.fill", "Protected", "Open Shield",
+                    "Messages to AI apps are checked on this Mac before they leave. Your words are not stored or sent.",
+                    Brand.action, Brand.onAction)
         case .attention(let why):
-            return ("exclamationmark.triangle", Brand.pending, Brand.pending.opacity(0.45), "Needs a look", why)
+            return ("exclamationmark.triangle.fill", "Needs a look", "Open Shield to see why", why,
+                    Brand.pending, Brand.onStatus)
         case .stopped:
-            return ("pause.circle", Brand.offScope, Brand.offScope.opacity(0.45), "Shield is off",
-                    "Messages are not being checked or recorded until Shield starts.")
+            return ("shield.slash.fill", "Shield is off", "Start Shield",
+                    "Messages are not being checked or recorded.", Brand.offScope, Brand.onStatus)
         case .starting:
-            return ("circle.dashed", Brand.inkSoft, Brand.line, "Checking Shield", "One moment.")
+            return ("circle.dashed", "Checking", "One moment", "Looking for Shield on this Mac.",
+                    Brand.paper2, Brand.ink)
         }
     }
 
-    // MARK: activity: one quiet line
-
-    private var activity: some View {
-        let s = model.feed?.summary
-        let checked = s?.checked ?? 0, needs = (s?.flagged ?? 0) + (s?.high_risk ?? 0)
-        let today = checked == 0 ? "No messages checked today."
-            : "\(checked) \(checked == 1 ? "message" : "messages") checked today"
-              + (needs == 0 ? ", none flagged." : ", \(needs) to review.")
-        return VStack(alignment: .leading, spacing: Size.spaceSm) {
-            Text(today).font(.system(size: Size.textSm)).foregroundStyle(Brand.ink)
-            if model.coriqo?.connected == true { syncLine }
-        }
+    private var today: String? {
+        guard model.state != .stopped, let s = model.feed?.summary else { return nil }
+        let needs = s.flagged + s.high_risk
+        if s.checked == 0 { return "No messages checked today." }
+        return "\(s.checked) checked today · " + (needs == 0 ? "none flagged" : "\(needs) to review")
     }
 
-    /// The two sync jobs in one line each: what is shared, and where the job is.
-    private var syncLine: some View {
-        let c = model.coriqo
-        let to = c?.tenant.map { "Coriqo (\($0))" } ?? "Coriqo"
-        let seal: (String, Color) = c?.needs_attention == true ? ("needs attention", Brand.offScope)
-            : c?.last_error != nil ? ("retrying", Brand.pending)
-            : c?.has_new == true ? ("sending \(Self.when(c?.next_attempt_at))", Brand.inkSoft)
-            : ("up to date", Brand.validated)
-        // Off only when Shield says so; an older Shield or an unreadable policy is unknown.
-        let level = c?.sync?.level ?? "unknown"
-        let pending = c?.sync?.pending ?? 0
-        let act: (String, Color)? = level == "seal" ? nil
-            : (c?.sync?.failures ?? 0) > 0 || c?.sync?.last_error != nil ? ("retrying", Brand.pending)
-            : pending > 0 ? ("\(pending) waiting, sending \(Self.when(c?.sync?.next_attempt_at))", Brand.inkSoft)
-            : ("up to date", Brand.validated)
-        return VStack(alignment: .leading, spacing: Size.spaceXs) {
-            Text("Syncing with \(to)").font(.system(size: Size.textXs, weight: .semibold)).foregroundStyle(Brand.inkSoft)
-            jobRow("Seal, every \(Int(c?.every_hours ?? 6)) h", seal)
-            if let act {
-                jobRow(level == "events" ? "Activity, live" : level == "daily" ? "Daily totals, hourly" : "Activity, mode unknown", act)
-            } else {
-                Text("No activity is shared, only the seal.").font(.system(size: Size.textXs)).foregroundStyle(Brand.inkSoft)
-            }
-        }
-    }
+    // MARK: footer: where records go, and the overflow menu
 
-    private func jobRow(_ name: String, _ state: (String, Color)) -> some View {
+    private var footer: some View {
         HStack(spacing: Size.spaceSm) {
-            Circle().fill(state.1).frame(width: Size.iconStatus / 2, height: Size.iconStatus / 2)
-            Text(name).foregroundStyle(Brand.ink)
-            Spacer(minLength: Size.spaceSm)
-            Text(state.0).foregroundStyle(Brand.inkSoft).lineLimit(1)
+            Circle().fill(syncTint).frame(width: 6, height: 6)
+            Text(syncWords).font(.system(size: Size.textXs)).foregroundStyle(Brand.inkSoft).lineLimit(1)
+            Spacer()
+            Menu {
+                Toggle("Open at login", isOn: Binding(get: { login.enabled }, set: { login.set($0) }))
+                    .disabled(login.managed)
+                if login.managed { Text("Open at login is set by your organisation") }
+                Divider()
+                Button("Shield settings…") { ConsoleWindow.show(page: "shield?tab=settings") }
+                Button("Check again") { Task { await model.refresh() } }
+                Divider()
+                Button("Quit Coriqo Shield") { NSApp.terminate(nil) }
+            } label: {
+                Image(systemName: "ellipsis.circle").font(.system(size: Size.iconRow)).foregroundStyle(Brand.inkSoft)
+            }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+            .frame(width: Size.target, height: Size.target)
+            .accessibilityLabel("More")
         }
-        .font(.system(size: Size.textXs))
-        .accessibilityElement(children: .combine)
+        .padding(.leading, Size.spaceLg).padding(.trailing, Size.spaceXs)
+        .frame(minHeight: Size.target)
+        .background(Brand.paper2)
+        .overlay(alignment: .top) { Rectangle().fill(Brand.line).frame(height: 1) }
+    }
+
+    /// Both sync jobs folded into one ranked state: the worst thing wins, and
+    /// the dot and the words always come from the same case.
+    private enum Sync {
+        case off(String), sealAttention, sealRetrying, activityRetrying, activityUnknown
+        case activityWaiting(Int), sealWaiting(String), upToDate(String)
+    }
+
+    private var sync: Sync {
+        guard let c = model.coriqo, c.connected == true else {
+            return .off(model.state == .stopped ? "Not running" : "Records stay on this Mac")
+        }
+        if c.needs_attention == true { return .sealAttention }
+        if c.last_error != nil { return .sealRetrying }
+        let level = c.sync?.level
+        if level != "seal" {
+            if c.sync?.last_error != nil || (c.sync?.failures ?? 0) > 0 { return .activityRetrying }
+            if level == nil { return .activityUnknown }
+            if let n = c.sync?.pending, n > 0 { return .activityWaiting(n) }
+        }
+        if c.has_new == true { return .sealWaiting(Self.when(c.next_attempt_at)) }
+        return .upToDate(level == "events" ? "live, up to date" : level == "daily" ? "daily totals, up to date" : "seal up to date")
+    }
+
+    private var syncWords: String {
+        let to = model.coriqo?.tenant ?? "Coriqo"
+        switch sync {
+        case .off(let w): return w
+        case .sealAttention: return "\(to) · needs attention"
+        case .sealRetrying: return "\(to) · seal send retrying"
+        case .activityRetrying: return "\(to) · activity sync retrying"
+        case .activityUnknown: return "\(to) · activity sync unknown"
+        case .activityWaiting(let n): return "\(to) · \(n) waiting to sync"
+        case .sealWaiting(let when): return "\(to) · seal sends \(when)"
+        case .upToDate(let w): return "\(to) · \(w)"
+        }
+    }
+
+    private var syncTint: Color {
+        switch sync {
+        case .off: return Brand.inkSoft
+        case .sealAttention: return Brand.offScope
+        case .sealRetrying, .activityRetrying, .activityUnknown: return Brand.pending
+        case .activityWaiting, .sealWaiting: return Brand.azure
+        case .upToDate: return Brand.validated
+        }
     }
 
     private static func when(_ at: Double?) -> String {
@@ -131,47 +174,9 @@ struct MenuView: View {
         let mins = Int(((at - Date().timeIntervalSince1970) / 60).rounded())
         return mins <= 1 ? "within a minute" : mins < 60 ? "in \(mins) min" : "in \(mins / 60) h"
     }
-
-    // MARK: actions
-
-    @ViewBuilder private var primary: some View {
-        if model.state == .stopped {
-            PrimaryButton(title: "Start Shield") { model.startShield() }
-            SecondaryButton(title: "Open Shield") { ConsoleWindow.show() }
-        } else {
-            PrimaryButton(title: "Open Shield") { ConsoleWindow.show() }
-            if model.coriqo != nil && model.coriqo?.connected != true {
-                SecondaryButton(title: "Connect to Coriqo") { ConsoleWindow.show(page: "shield?tab=settings") }
-            }
-        }
-    }
-
-    private var promise: some View {
-        Text("Your words are checked on this Mac. By default they are not stored or sent.")
-            .font(.system(size: Size.textXs)).foregroundStyle(Brand.inkSoft)
-            .fixedSize(horizontal: false, vertical: true)
-    }
 }
 
-/// Filled control: the seal's navy, 44px tall.
-struct PrimaryButton: View {
-    let title: String
-    let action: () -> Void
-    @State private var hover = false
-    var body: some View {
-        Button(action: action) {
-            Text(title).font(.system(size: Size.textSm, weight: .semibold))
-                .frame(maxWidth: .infinity, minHeight: Size.target)
-                .foregroundStyle(Brand.onAction)
-                .background(RoundedRectangle(cornerRadius: Size.radiusSm).fill(hover ? Brand.actionHover : Brand.action))
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hover = $0 }
-    }
-}
-
-/// Outlined control for the second action: azure edge, ink text, 44px tall.
+/// Outlined control for a second action: hairline edge, ink text, 44px tall.
 struct SecondaryButton: View {
     let title: String
     let action: () -> Void
@@ -190,21 +195,22 @@ struct SecondaryButton: View {
     }
 }
 
-/// Plain text row, 44px tall, hover on the raised surface.
-struct QuietRow: View {
-    let title: String
+/// A 44px square icon control with a hover surface.
+struct IconButton: View {
+    let symbol: String
+    let label: String
     let action: () -> Void
     @State private var hover = false
     var body: some View {
         Button(action: action) {
-            Text(title).font(.system(size: Size.textSm)).foregroundStyle(Brand.ink)
-                .padding(.horizontal, Size.spaceSm)
-                .frame(maxWidth: .infinity, minHeight: Size.target, alignment: .leading)
+            Image(systemName: symbol).font(.system(size: Size.iconRow)).foregroundStyle(Brand.inkSoft)
+                .frame(width: Size.target, height: Size.target)
                 .background(RoundedRectangle(cornerRadius: Size.radiusSm).fill(hover ? Brand.paper2 : .clear))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, -Size.spaceSm)
         .onHover { hover = $0 }
+        .help(label)
+        .accessibilityLabel(label)
     }
 }

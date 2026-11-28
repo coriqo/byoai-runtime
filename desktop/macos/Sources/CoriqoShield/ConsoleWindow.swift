@@ -20,12 +20,24 @@ enum ConsoleWindow {
             w.minSize = NSSize(width: 900, height: 600)
             w.isReleasedWhenClosed = false
             w.contentView = NSHostingView(rootView: ConsoleView(page: page ?? "shield"))
-            w.center()
+            w.delegate = closer
+            // A remembered place if there is one, else centred on the screen in use.
+            if !w.setFrameUsingName("CoriqoShieldConsole") { w.center() }
             w.setFrameAutosaveName("CoriqoShieldConsole")
             window = w
         }
+        // While the window is open the app sits in the Dock and the app switcher,
+        // like any app; closing it returns Shield to the menu bar only.
+        NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
+    }
+
+    private static let closer = Closer()
+    private final class Closer: NSObject, NSWindowDelegate {
+        func windowWillClose(_ notification: Notification) {
+            NSApp.setActivationPolicy(.accessory)
+        }
     }
 
     private static func findWeb(_ view: NSView?) -> WKWebView? {

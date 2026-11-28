@@ -484,7 +484,10 @@ on a Mac that isn't enrolled. Opening the app from Finder or Spotlight shows
 the window; a start at login stays in the menu bar. Build it with
 `desktop/macos/build-app.sh` (needs Xcode 15+, macOS 14+); the app lands in
 `desktop/macos/build/Coriqo Shield.app`, and `build-app.sh --install` also
-copies it to `/Applications`.
+copies it to `/Applications`. Open at login is on by default; an MDM profile
+can set it for everyone with the managed preference domain
+`com.coriqo.shield.app`, key `OpenAtLogin` (true or false), and the switch
+then shows as set by your organisation.
 
 API: `/api/feed` (limit/offset pagination, `need`/`since`/`sealed`/`q` filters applied before paging, `summary_since` for exact counts, `anchor` for a stable page), `/api/verify`, `/api/policy`
 GET+POST (validated; a bad value is a 400 that names the field),

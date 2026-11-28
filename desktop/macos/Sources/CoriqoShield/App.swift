@@ -5,10 +5,11 @@ import SwiftUI
 struct CoriqoShieldApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var model = ShieldModel()
+    @StateObject private var login = LoginItem()
 
     var body: some Scene {
         MenuBarExtra {
-            MenuView(model: model)
+            MenuView(model: model, login: login)
         } label: {
             Image(systemName: model.menuSymbol)
                 .accessibilityLabel("Coriqo Shield")

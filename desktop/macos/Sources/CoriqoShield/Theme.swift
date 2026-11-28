@@ -12,6 +12,7 @@ enum Brand {
     static let action    = dyn(0x0A1834, 0x3D7EFF)
     static let actionHover = dyn(0x16294F, 0x709FFF)
     static let onAction  = dyn(0xFFFFFF, 0x0B1220)
+    static let onStatus  = dyn(0xFFFFFF, 0x0B1220)
     static let azure     = dyn(0x2447A6, 0x709FFF)
     static let seal      = Color(hex: 0x3F7BFF)
     static let validated = dyn(0x1B6A48, 0x4AD6A0)
