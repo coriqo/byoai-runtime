@@ -41,7 +41,8 @@ const isGranted = (value) => value?.version === CONSENT_VERSION
 // it first) cannot slip behind a check that already passed.
 let consentOn = false
 const hasConsent = async () => { await restore(); return consentOn }
-importScripts('extra-sites.js', 'shield-optional.js')
+importScripts('extra-sites.js', 'shield-optional.js', 'shield-stats.js')
+const STATS = globalThis.ShieldStats
 const EXTRA = globalThis.SHIELD_EXTRA_SITES
 const EXTRA_STATUS_KEY = 'extra_sites_status'
 const TODAY_KEY = 'today'
@@ -279,12 +280,14 @@ async function markPageWatched(tabId) {
 const WORKING_TITLE = 'Shield on this page: personal details are replaced before sending; app, time and length are noted. No message content leaves.'
 
 function setOffline() {
+  badgeGen++
   chrome.action.setBadgeText({ text: OFFLINE_BADGE })
   chrome.action.setBadgeBackgroundColor({ color: '#dc2626' })
   chrome.action.setTitle({ title: 'Shield is offline on this Mac — start it with byoai-shield. Rows are being dropped after 50 queued.' })
 }
 
 function setRefused(why) {
+  badgeGen++
   const text = why === 'shorter'
     ? "Shield's record is shorter than it was. Open this popup."
     : why === 'old'
@@ -300,6 +303,7 @@ function setRefused(why) {
 let rolledBack = false
 
 function setWorking() {
+  badgeGen++
   if (!consentOn) { chrome.action.setBadgeText({ text: '' }); return }
   if (rolledBack) { setRefused('shorter'); return }
   chrome.action.setBadgeText({ text: WATCHED_BADGE })
@@ -309,8 +313,32 @@ function setWorking() {
 
 function setOfflineIfQueued() {
   if (rolledBack) setRefused('shorter')
-  else if (queue.length) setOffline()
+  else if (queue.length) setOfflineIfPaired()
   else setWorking()
+}
+
+// No desktop Shield is needed for the in-page checks. A browser that never paired
+// with one is working as intended, so only a Shield that was paired and now does
+// not answer turns the badge to "offline".
+// Badge writers bump this; a decision made after an await is dropped if any
+// other badge update (a refusal, a rollback warning) happened meanwhile.
+let badgeGen = 0
+async function setOfflineIfPaired() {
+  const gen = ++badgeGen
+  let expected = true // when in doubt, say offline: rows are being dropped
+  try {
+    const store = await chrome.storage.local.get([PIN_KEY, ENDPOINT_KEY])
+    // Bounded: a managed-storage read that never settles must not keep the badge green.
+    const managed = await Promise.race([
+      globalThis.ShieldManaged.readManaged(chrome.storage),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('managed read timeout')), 1500)),
+    ])
+    const saved = store[ENDPOINT_KEY]
+    expected = STATS.shieldExpected({ pin: store[PIN_KEY], managed: managed.managed,
+      customEndpoint: !!saved && resolveEndpoint(saved) !== DEFAULT_ENDPOINT })
+  } catch { /* keep expected */ }
+  if (gen !== badgeGen) return
+  if (expected) setOffline(); else setWorking()
 }
 
 // A Coriqo page (the pay-to-join page) tells us the person finished joining. It carries no data: it
@@ -427,6 +455,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     restore().then(() => {
       if (!consentOn) { reply?.({ error: 'capture is off' }); return }
       noteCapture(sender.tab?.url, msg.row.kind)
+      noteStats(sender.tab?.url, msg.row)
       noteHealth(msg.row)
       queue.push({ ...msg.row, sent_at: new Date().toISOString(), row_id: crypto.randomUUID() })
       if (queue.length > MAX_QUEUED) queue = queue.slice(-MAX_QUEUED)
@@ -457,7 +486,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       const done = consentOn
         ? chrome.storage.local.set({ [CONSENT_KEY]: { version: CONSENT_VERSION, at: Date.now() } })
           .then(() => { getEndpoint().then((e) => refreshPolicy(e)) })
-        : chrome.storage.local.remove([CONSENT_KEY, LAST_CAPTURE_KEY, TODAY_KEY, POLICY_KEY, HEALTH_KEY])
+        : chrome.storage.local.remove([CONSENT_KEY, LAST_CAPTURE_KEY, TODAY_KEY, POLICY_KEY, HEALTH_KEY, STATS.KEY])
           .then(() => syncExtraSites([])) // withdrawn: admin-added sites stop too
       return done
     }).then(() => reply?.({ ok: true }), () => reply?.({ error: 'failed' }))
@@ -535,6 +564,27 @@ async function recordCapture(url, kind) {
       [TODAY_KEY]: { day, n: today + (kind === 'browser.chat.request' ? 1 : 0) },
     })
   } catch { /* the badge and queue matter more than this note */ }
+}
+
+// The extension's own counts (shield-stats.js): numbers per app per day, from the
+// same text-free facts the row carries, kept whether or not a Shield answers.
+// Same queue as noteCapture, so sends from several tabs do not overwrite each other.
+function noteStats(url, row) {
+  noteChain = noteChain.then(() => recordStats(url, row))
+  return noteChain
+}
+
+async function recordStats(url, row) {
+  try {
+    const host = new URL(url).host
+    const facts = STATS.factsOf(row, host)
+    if (!facts) return
+    const store = await chrome.storage.local.get([STATS.KEY, POLICY_KEY])
+    // An app Shield is set not to check is not counted as checked.
+    if (store[POLICY_KEY]?.apps?.[facts.app] === false) return
+    if (!consentOn) return // withdrawn while we were reading: write nothing back
+    await chrome.storage.local.set({ [STATS.KEY]: STATS.add(store[STATS.KEY], facts, Date.now()) })
+  } catch { /* a note, not a dependency */ }
 }
 
 // The canary: remember an app whose chat traffic went unrecognised, and
@@ -617,7 +667,7 @@ async function flush() {
     // itself without the user touching the extension.
     if (!mismatch) timer = setTimeout(flush, old ? 30000 : 10000)
     chrome.alarms?.create('shield-retry', { delayInMinutes: 1.1 })
-    if (mismatch) setRefused(); else if (old) setRefused('old'); else setOffline()
+    if (mismatch) setRefused(); else if (old) setRefused('old'); else setOfflineIfPaired()
     persist()
   }
 }
