@@ -2426,7 +2426,7 @@ The Shield-side gate `BYOAI_CORIQO_LINK_HOSTS` still applies on top of these.
    identity; changing it goes through Shield's settings or `byoai-shield enrol --force`. The device key never leaves the Shield. Counting the same
    device twice is Coriqo's to avoid (the key is stable).
 
-The login page also has *Skip for now* (and Esc): it stores only `coriqo_skipped` (a timestamp, local), makes no request and keeps no token or enrolment; the popup then shows *Sign in* with "Not signed in" until a sign-in starts.
+The login page also has *Skip for now* (and Esc), shown on the sign-in and join steps (and under the 5-second connect notice, next to that notice's own *Cancel*); Esc skips on every screen where the button shows and never blocked by a sign-in, join or connect notice in progress (a pending one is stopped): it first forgets any pending join (`coriqo_pending_join`) and removes a sign-in session only if this page's own sign-in just stored it (for example the automatic sign-in after paying, when Skip is pressed during the connect notice, which is cancelled); a session that existed before is kept, stops a sign-in, join or connect still under way without storing anything from it, then stores only `coriqo_skipped` (a timestamp, local), makes no request and keeps no token or enrolment; the popup then shows *Sign in* with "Not signed in" until a sign-in starts.
 
 When `tenants` has more than one slug the login page shows the chosen workspace
 as one line ("Nearest to you" when it was picked by region) and keeps the full
@@ -2444,9 +2444,9 @@ message (with a copy button) and links that open ChatGPT, Claude and Gemini.
 Nothing is sent anywhere by it.
 
 The first sign-in screen asks Coriqo for the price line when it opens (one `GET <coriqo base>/api/v1/billing/msp-join/offer`, no credentials, nothing about the person; it is skipped when linking is disabled). The reply's `summary` is shown as text only if it is a plain string of at most 120 characters; otherwise, or on any failure or after 4 seconds, the card says the price is shown before paying. The extension itself contains no price. The screen also offers *New to Coriqo? Join* to a person who has no Coriqo account at all, and when a sign-in works but the account has no workspace the page offers *Join Coriqo*; both start the same join below. It
-opens `<coriqo base>/join?region=<usa|uk|eu|ca|au>&source=extension&state=<64 hex>` in a new tab (the region
+opens `<coriqo base>/join?region=<usa|uk|eu|ca|au>&source=extension&state=<64 hex>` in a new foreground tab (the region
 is the same on-device guess as above and is left out when unknown; `state` is 32 random bytes made per join;
-no email, token or workspace is in the address) and stores `coriqo_pending_join` (`{ region, state, at }`, local). Coriqo's page
+no email, token or workspace is in the address) and stores `coriqo_pending_join` (`{ region, state, at }`, local). The login page itself is never navigated. Pressing Join again while that tab is open brings it forward and keeps the same `state` (where Chrome lets the extension read the tab's address, it must still be the join page on the Coriqo address in use, otherwise a new join starts); if the tab is closed before Coriqo reports back (checked again after about 1.5 s, so a join that was just accepted is not mistaken for an abandoned one), `coriqo_pending_join` is cleared, only if it is still the join that tab belonged to, and Join can be pressed again. *Skip for now* also clears `coriqo_pending_join`, so a Coriqo tab finished afterwards is not accepted. Coriqo's page
 takes the payment and a password. When it is done it sends the extension one message,
 `{ type: "coriqo.join.finished", connect: true|false, state, tenant }` (`state` is the exact value from the address, `tenant` is the workspace slug Coriqo chose), using `externally_connectable`. The manifest
 matches only the join page: `https://app.coriqo.io/join*`, plus `http://localhost/join*` in the

@@ -123,11 +123,11 @@ function mkRun({ pend, oauth, session, confirm = true, picked, after, policy = t
   const { store, chrome } = mkStore(pend ? { coriqo_pending_join: pend } : {})
   const calls = { oauth: 0, connect: 0 }
   globalThis.CoriqoLink = L
-  const fn = new Function('chrome', 'PENDING_JOIN_KEY', 'onOAuth', 'getSession', 'onConnect', 'confirmAutoConnect', 'document', 'getPolicy',
+  const fn = new Function('chrome', 'PENDING_JOIN_KEY', 'onOAuth', 'getSession', 'onConnect', 'confirmAutoConnect', 'document', 'getPolicy', 'skipped',
     extract('login.js', 'runAfterJoin') + '; return runAfterJoin')(chrome, 'coriqo_pending_join',
     async () => { calls.oauth++; return oauth }, async () => session, async (t) => { calls.connect++; calls.tenant = t },
     async () => { after?.(); return confirm },
-    { querySelector: () => (picked === undefined ? null : { value: typeof picked === 'function' ? picked() : picked }) }, async () => ({ enabled: policy }))
+    { querySelector: () => (picked === undefined ? null : { value: typeof picked === 'function' ? picked() : picked }) }, async () => ({ enabled: policy }), false)
   return { fn, calls, store }
 }
 const goodSession = (over = {}) => ({ via: 'oauth', at: Date.now() + 5, tenant_slug: 'acme_usa', tenants: ['acme_usa'], ...over })
@@ -493,5 +493,269 @@ describe('review fixes: the price card reads cleanly and never contradicts itsel
   it('loadJoinCost reuses the node it looked up', () => {
     const body = read('login.js').match(/async function loadJoinCost\(\) \{[\s\S]*?\n\}/)[0]
     expect(body.match(/el\('join-cost'\)/g).length).toBe(1)
+  })
+})
+
+describe('the first screen never navigates away, never traps, and says honestly what it does', () => {
+  const html = () => read('login.html')
+  const makeJoin = ({ tabId = 7, createFails = false } = {}) => {
+    const { store, chrome } = mkStore()
+    const created = []
+    const msgs = []
+    const open = new Set(), focused = [], urls = {}
+    chrome.tabs = { create: async (o) => { if (createFails) throw new Error('x'); created.push(o); open.add(tabId + created.length - 1); return { id: tabId + created.length - 1 } },
+      get: async (id) => { if (!open.has(id)) throw new Error('no tab'); return { id, url: urls[id] } },
+      update: async (id) => { focused.push(id) } }
+    globalThis.CoriqoLink = L
+    const code = 'let joinTabId = null, joinMsgId = "request-msg", joinState = null, skipped = false; const JOIN_CLOSE_GRACE_MS = 1;' +
+      extract('login.js', 'onJoin') + extract('login.js', 'onJoinTabClosed') +
+      '; return { onJoin, onJoinTabClosed, tab: () => joinTabId, setTab: (v) => { joinTabId = v }, skip: () => { skipped = true } }'
+    const api = new Function('chrome', 'PENDING_JOIN_KEY', 'JOIN_WAIT_TEXT', 'JOIN_CLOSED_TEXT', 'resumeAfterSkip', 'getPolicy', 'getApiBase', 'setMsg',
+      'navigator', 'Intl', 'BAD_BASE_TEXT', 'OFF_TEXT', code)(chrome, 'coriqo_pending_join', 'WAIT', 'CLOSED', () => {},
+      async () => ({ enabled: true }), async () => BASE, (id, t, k) => msgs.push([id, t, k]), { language: 'en-US' }, Intl, 'bad', 'off')
+    return { api, store, created, msgs, focused, open, urls, chrome }
+  }
+  it('Join opens Coriqo in a new, foreground tab and keeps this page where it is', async () => {
+    const { api, store, created, msgs } = makeJoin()
+    await api.onJoin('request-msg')
+    expect(created.length).toBe(1)
+    expect(created[0].active).toBe(true)
+    expect(created[0].url.startsWith(`${BASE}/join`)).toBe(true)
+    expect(store.coriqo_pending_join.state).toMatch(/^[0-9a-f]{64}$/)
+    expect(msgs.at(-1)).toEqual(['request-msg', 'WAIT', 'ok'])
+    expect(api.tab()).toBe(7)
+    const src = read('login.js')
+    expect(src).not.toMatch(/location\.(href|assign|replace)|window\.open/) // nothing here navigates this page
+  })
+  it('closing the join tab before finishing clears the pending join and says so; other tabs are ignored', async () => {
+    const { api, store, msgs, open } = makeJoin()
+    await api.onJoin('request-msg')
+    await api.onJoinTabClosed(99, 1)
+    expect(store.coriqo_pending_join).toBeTruthy()
+    await api.onJoinTabClosed(7, 1)
+    expect(store.coriqo_pending_join).toBeUndefined()
+    expect(msgs.at(-1)).toEqual(['request-msg', 'CLOSED', 'bad'])
+    open.delete(7)
+    await api.onJoin('request-msg') // Join works again
+    expect(store.coriqo_pending_join.state).toBeTruthy()
+  })
+  it('a tab closed after Coriqo reported the join is left alone (the hand-off owns it)', async () => {
+    const { api, store, msgs } = makeJoin()
+    await api.onJoin('join-msg')
+    store.coriqo_pending_join.accepted = true
+    const n = msgs.length
+    await api.onJoinTabClosed(7, 1)
+    expect(store.coriqo_pending_join.accepted).toBe(true)
+    expect(msgs.length).toBe(n)
+  })
+  it('a failed tab open is reported and leaves the page usable', async () => {
+    const { api, msgs } = makeJoin({ createFails: true })
+    await api.onJoin('request-msg')
+    expect(msgs.at(-1)[2]).toBe('bad')
+  })
+  it('Skip has no busy guard, stops a pending sign-in and connect, and is on the first and join steps', () => {
+    const skip = extract('login.js', 'onSkip')
+    expect(skip).not.toMatch(/if \(busy\)/)
+    expect(skip).toMatch(/skipped = true/)
+    expect(skip).toMatch(/auto-cancel/)
+    const oauth = extract('login.js', 'onOAuth')
+    expect(oauth.match(/if \(skipped\) return false/g).length).toBeGreaterThanOrEqual(2)
+    const h = html()
+    expect(h.indexOf('id="skip-bar"')).toBeGreaterThan(h.indexOf('id="step-consume"')) // outside the steps
+    expect(h).toMatch(/<button class="secondary" id="skip">Skip for now - you can connect later from the Shield icon<\/button>/)
+    expect(read('login.js')).toMatch(/el\('skip-bar'\)\.hidden = name === 'done'/)
+  })
+  it('Sign in uses a separate Chrome sign-in window, never this page', () => {
+    expect(extract('login.js', 'onOAuth')).toMatch(/chrome\.identity\.launchWebAuthFlow\(\{ url, interactive: true \}\)/)
+  })
+  it('the copy covers what is required, what connecting does, what is never sent, cost and destination', () => {
+    const h = html()
+    expect(h).toMatch(/Shield works on this computer either way, and nothing here is required/)
+    expect(h).toMatch(/What connecting does:<\/b> it links this computer to your Coriqo workspace, so your team can see it is protected/)
+    expect(h).toMatch(/What Coriqo never receives:<\/b> what you type, or what an AI replies/)
+    expect(h).toMatch(/Opens Coriqo in a new tab\. This page stays open\./)
+    expect(h).toMatch(/Coriqo address: <b id="dest-host"><\/b>/)
+    expect([...h.matchAll(/id="join-cost"/g)].length).toBe(1) // the price line is filled in at run time
+    expect(read('login.js')).toMatch(/new URL\(await getApiBase\(\)\)\.host/)
+  })
+  it('the join step shows a calm waiting line', () => {
+    expect(read('login.js')).toMatch(/Finish in the Coriqo tab\. You can skip and keep using Shield\./)
+  })
+
+  it('Join pressed twice focuses the open tab with the same state; a gone tab gets a new one', async () => {
+    const { api, store, created, focused, open } = makeJoin()
+    await api.onJoin('request-msg')
+    const state = store.coriqo_pending_join.state
+    await api.onJoin('request-msg')
+    expect(created.length).toBe(1)
+    expect(focused).toEqual([7])
+    expect(store.coriqo_pending_join.state).toBe(state)
+    open.delete(7)
+    await api.onJoin('request-msg')
+    expect(created.length).toBe(2)
+    expect(store.coriqo_pending_join.state).not.toBe(state)
+  })
+  it('a join accepted by the background script during the grace delay is not called abandoned', async () => {
+    const { api, store, msgs } = makeJoin()
+    await api.onJoin('request-msg')
+    const n = msgs.length
+    const p = api.onJoinTabClosed(7, 30)
+    store.coriqo_pending_join = { ...store.coriqo_pending_join, accepted: true } // lands after the tab closed
+    await p
+    expect(store.coriqo_pending_join.accepted).toBe(true)
+    expect(msgs.length).toBe(n)
+  })
+  const runSkip = async (init, flowAt = null) => {
+    const { store, chrome } = mkStore(init)
+    const els = { 'auto-cancel': { click() {} }, 'step-join': { classList: { contains: () => false } }, skip: {} }
+    const fn = new Function('chrome', 'el', 'setMsg', 'PENDING_JOIN_KEY', 'SKIP_KEY', 'SESSION_KEY', 'window',
+      `let skipped = false; let joinTabId = 5, joinState = "s", flowSessionAt = ${JSON.stringify(flowAt)};` + extract('login.js', 'onSkip') + '; return async () => { await onSkip(); return [skipped, joinTabId, flowSessionAt] }')(
+      chrome, (id) => els[id], () => {}, 'coriqo_pending_join', 'coriqo_skipped', 'coriqo_session', { close() {} })
+    return { run: fn, store }
+  }
+  it('Skip clears the pending join and the join tab, and removes a session only if this flow stored it', async () => {
+    const mine = { access_token: 'tok', via: 'oauth', at: 1234 }
+    const { run, store } = await runSkip({ coriqo_pending_join: { state: STATE, at: Date.now() }, coriqo_session: mine }, 1234)
+    expect(await run()).toEqual([true, null, null])
+    expect(store.coriqo_pending_join).toBeUndefined()
+    expect(store.coriqo_session).toBeUndefined()
+    expect(store.coriqo_skipped).toBeTruthy()
+  })
+  it('Skip leaves a session that existed before this flow untouched', async () => {
+    const earlier = { access_token: 'old', via: 'oauth', at: 99 }
+    const none = await runSkip({ coriqo_session: earlier }, null) // this flow stored nothing
+    await none.run()
+    expect(none.store.coriqo_session).toEqual(earlier)
+    const other = await runSkip({ coriqo_session: earlier }, 1234) // stored session is not the one this flow wrote
+    await other.run()
+    expect(other.store.coriqo_session).toEqual(earlier)
+    expect(other.store.coriqo_skipped).toBeTruthy()
+  })
+  it('onOAuth records the session it stored, by its time stamp', () => {
+    const o = extract('login.js', 'onOAuth')
+    expect(o).toMatch(/at: storedAt/)
+    expect(o).toMatch(/flowSessionAt = storedAt/)
+  })
+  it('a skip stops an in-flight connect before it asks Coriqo, hands over a token, or stores a link', () => {
+    const c = extract('login.js', 'onConnect')
+    expect(c.match(/if \(skipped\) return quiet\(\)/g).length).toBe(4)
+    expect(c.indexOf('if (skipped) return quiet() // before anything')).toBeLessThan(c.indexOf('await L.linkLocalShield'))
+    expect(c.lastIndexOf('if (skipped) return quiet()')).toBeGreaterThan(c.indexOf('await L.linkLocalShield'))
+    expect(c.lastIndexOf('if (skipped) return quiet()')).toBeLessThan(c.indexOf('[LINK_KEY]'))
+  })
+  it('sign-in stores no session once skipped: the last check is right before setSession', () => {
+    const o = extract('login.js', 'onOAuth')
+    const at = o.indexOf('await setSession(')
+    expect(o.slice(0, at).trimEnd().endsWith('return false // checked again right before storing: Skip means no session is kept')
+      || /if \(skipped\) return false[^\n]*\n\s*$/.test(o.slice(0, at))).toBe(true)
+    expect(o.lastIndexOf('if (skipped) return false', at)).toBeGreaterThan(o.indexOf('pickTenant'))
+  })
+  it('a failed auto sign-in restores the join only if Skip has not cleared it', () => {
+    expect(extract('login.js', 'runAfterJoin')).toMatch(/if \(still && !skipped\) await/)
+  })
+
+  it('a newer Join started during the grace delay is left alone, with no closed message', async () => {
+    const { api, store, msgs } = makeJoin()
+    await api.onJoin('request-msg')
+    const p = api.onJoinTabClosed(7, 30)
+    store.coriqo_pending_join = { region: null, state: 'cd'.repeat(32), at: Date.now() } // a newer join
+    await p
+    expect(store.coriqo_pending_join.state).toBe('cd'.repeat(32))
+    expect(msgs.at(-1)[1]).toBe('WAIT')
+  })
+  it('Join pressed again opens a new tab (new state) if the tab moved off the Coriqo join page', async () => {
+    const { api, store, created, urls, focused } = makeJoin()
+    await api.onJoin('request-msg')
+    const state = store.coriqo_pending_join.state
+    urls[7] = `${BASE}/join?state=x`
+    await api.onJoin('request-msg')
+    expect(focused).toEqual([7]) // still the join page: focused
+    urls[7] = 'https://elsewhere.example/join'
+    await api.onJoin('request-msg')
+    expect(created.length).toBe(2)
+    expect(store.coriqo_pending_join.state).not.toBe(state)
+    urls[8] = `${BASE}/other`
+    await api.onJoin('request-msg')
+    expect(created.length).toBe(3)
+  })
+  it('a Skip that lands while the join tab opens stores nothing and closes that tab', async () => {
+    const { api, store, chrome, created } = makeJoin()
+    const removed = []
+    chrome.tabs.remove = async (id) => { removed.push(id) }
+    const real = chrome.tabs.create
+    chrome.tabs.create = async (o) => { api.skip(); return real(o) }
+    await api.onJoin('request-msg')
+    expect(store.coriqo_pending_join).toBeUndefined()
+    expect(removed).toEqual([7])
+    expect(api.tab()).toBeNull()
+    void created
+  })
+  it('skipped is reset in exactly one place, and only the click handlers reach it', () => {
+    const src = read('login.js')
+    expect(src.match(/skipped = false/g).length).toBe(2) // the declaration and resumeAfterSkip
+    expect(src.match(/resumeAfterSkip\(\)/g).length).toBe(2) // its definition and the one call in `working`
+    for (const f of ['onOAuth', 'onConnect', 'runAfterJoin', 'onJoin']) expect(extract('login.js', f)).not.toMatch(/resumeAfterSkip|skipped = false/)
+  })
+  const makeWorking = () => {
+    const src = read('login.js')
+    const code = src.slice(src.indexOf('let inFlight = false'), src.indexOf('// Skip for now: remember'))
+    return new Function('resumeAfterSkip', code + '; return { working, flag: () => inFlight }')
+  }
+  it('working ignores a second press while one is in flight, resets Skip on a deliberate press, and never blocks Skip', async () => {
+    let resets = 0, calls = 0, release
+    const { working, flag } = makeWorking()(() => { resets++ })
+    const slow = working(() => { calls++; return new Promise((r) => { release = r }) })
+    const p1 = slow(); await slow(); await slow()
+    expect(calls).toBe(1)
+    expect(resets).toBe(1)
+    expect(flag()).toBe(true)
+    release(); await p1
+    expect(flag()).toBe(false)
+    await Promise.all([slow().then(() => {}), Promise.resolve().then(() => release())]); expect(calls).toBe(2)
+    expect(extract('login.js', 'onSkip')).not.toMatch(/inFlight/)
+  })
+  it('a double click on Join opens one tab', async () => {
+    const { api, created } = makeJoin()
+    const { working } = makeWorking()(() => {})
+    const click = working(() => api.onJoin('request-msg'))
+    await Promise.all([click(), click()])
+    expect(created.length).toBe(1)
+  })
+  it('runAfterJoin does nothing at all when Skip has run', async () => {
+    const { store, chrome } = mkStore({ coriqo_pending_join: fresh() })
+    globalThis.CoriqoLink = L
+    let oauth = 0
+    const fn = new Function('chrome', 'PENDING_JOIN_KEY', 'onOAuth', 'getSession', 'onConnect', 'confirmAutoConnect', 'document', 'getPolicy', 'skipped',
+      extract('login.js', 'runAfterJoin') + '; return runAfterJoin')(chrome, 'coriqo_pending_join', async () => { oauth++; return true }, async () => null,
+      async () => {}, async () => true, { querySelector: () => null }, async () => ({ enabled: true }), true)
+    expect(await fn()).toBe(false)
+    expect(oauth).toBe(0)
+    expect(store.coriqo_pending_join).toBeTruthy()
+  })
+  it('onJoinTabClosed reads again right before removing', () => {
+    const body = extract('login.js', 'onJoinTabClosed')
+    expect(body.indexOf('const last')).toBeLessThan(body.indexOf('.remove(PENDING_JOIN_KEY'))
+    expect(body).toMatch(/!last \|\| last\.state !== mine \|\| last\.accepted/)
+  })
+  it('the join-retry route runs onOAuth directly, so it needs no pending join', () => {
+    expect(read('login.js')).toMatch(/el\('join-retry'\)\.addEventListener\('click', working\(\(\) => \{ chrome\.storage\.local\.remove\(SKIP_KEY\); return onOAuth\(\) \}\)\)/)
+  })
+  it('Esc skips wherever the Skip bar is visible, including the email-link step and the connect notice', () => {
+    const src = read('login.js')
+    expect(src).toMatch(/e\.key === 'Escape' && !el\('skip-bar'\)\.hidden && !el\('skip'\)\.disabled/)
+    expect(src).toMatch(/el\('skip-bar'\)\.hidden = false/)
+    expect(extract('login.js', 'onSkip')).toMatch(/auto-cancel/)
+  })
+  it('runAfterJoin does not restore the join when Skip landed (behavioural)', async () => {
+    const { store, chrome } = mkStore({ coriqo_pending_join: fresh() })
+    globalThis.CoriqoLink = L
+    let skippedFlag = false
+    const fn = new Function('chrome', 'PENDING_JOIN_KEY', 'onOAuth', 'getSession', 'onConnect', 'confirmAutoConnect', 'document', 'getPolicy', 'skipped',
+      extract('login.js', 'runAfterJoin') + '; return runAfterJoin')(chrome, 'coriqo_pending_join',
+      async () => { skippedFlag = true; chrome.storage.local.remove('coriqo_pending_join'); return false }, async () => null, async () => {}, async () => true,
+      { querySelector: () => null }, async () => ({ enabled: true }), false)
+    await fn()
+    expect(skippedFlag).toBe(true)
+    expect(store.coriqo_pending_join).toBeUndefined()
   })
 })

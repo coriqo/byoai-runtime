@@ -87,7 +87,6 @@ function sendBg(msg) {
 // Resolves true only once a session was stored; every other outcome is false.
 async function onOAuth() {
   if (!(await getPolicy()).enabled) { setMsg('request-msg', OFF_TEXT, 'bad'); return false }
-  chrome.storage.local.remove(SKIP_KEY)
   el('oauth-start').disabled = true
   setMsg('request-msg', 'Opening Coriqo…')
   try {
@@ -97,9 +96,12 @@ async function onOAuth() {
     const redirectUri = chrome.identity.getRedirectURL()
     const pkce = await L.makePkce(crypto)
     const url = L.buildAuthorizeUrl({ base, clientId, redirectUri, challenge: pkce.challenge, state: pkce.state })
+    // Chrome's own sign-in window: this page is not navigated and stays open underneath it.
     const returned = await chrome.identity.launchWebAuthFlow({ url, interactive: true })
+    if (skipped) return false
     const code = L.parseRedirect(returned, { redirectUri, state: pkce.state })
     const t = await L.exchangeCode({ fetchImpl: fetch, base, clientId, redirectUri, code, verifier: pkce.verifier })
+    if (skipped) return false // the person skipped while this was under way: keep nothing
     const list = t.tenants.length ? t.tenants : (t.tenant_slug ? [t.tenant_slug] : [])
     const tenant = L.pickTenant(list, L.detectRegion({ language: navigator.language,
       timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }), t.tenant_slug)
@@ -108,13 +110,22 @@ async function onOAuth() {
       setMsg('join-msg', 'This account has no workspace yet. If you just paid, give it a minute and sign in again. Otherwise choose Join Coriqo.', 'bad')
       return false
     }
+    const storedAt = Date.now()
+    if (skipped) return false // checked again right before storing: Skip means no session is kept
     await setSession({ access_token: t.access_token, email: t.email || '', tenant_slug: tenant,
-      tenants: list, at: Date.now(), expires_at: t.expires_at, via: 'oauth' })
+      tenants: list, at: storedAt, expires_at: t.expires_at, via: 'oauth' })
+    flowSessionAt = storedAt // Skip may remove this session, and only this one
+    if (skipped) { // Skip landed during the write: undo it and keep the skip note
+      await clearSession()
+      await new Promise((r) => chrome.storage.local.set({ [SKIP_KEY]: { at: Date.now() } }, r))
+      return false
+    }
     setMsg('request-msg', '')
     await showDone()
     return true
   } catch (err) {
     const m = err?.message || ''
+    if (skipped) return false
     setMsg('request-msg',
       m === 'denied' || /canceled|cancelled|did not approve/i.test(m) ? 'Sign-in was cancelled.'
         : m === 'no_tenant' ? 'Your account has no workspace yet. Ask your Coriqo admin to add you.'
@@ -129,6 +140,21 @@ async function onOAuth() {
 }
 
 const PENDING_JOIN_KEY = 'coriqo_pending_join'
+const JOIN_WAIT_TEXT = 'Finish in the Coriqo tab. You can skip and keep using Shield.'
+const JOIN_CLOSED_TEXT = 'The Coriqo tab was closed before you finished. Nothing was changed. Choose Join Coriqo to try again, or skip.'
+const JOIN_CLOSE_GRACE_MS = 1500
+let joinState = null // the state of the join that tab belongs to
+let joinTabId = null // the tab this page opened for Coriqo, while it is open
+let joinMsgId = 'request-msg'
+// `at` of the session this page's own sign-in stored (null if none): the only session Skip may remove.
+let flowSessionAt = null
+let skipped = false // set by Skip: a sign-in or connect still under way then stops quietly
+
+// The ONLY place `skipped` is reset: a deliberate press of Sign in, Join, Connect or an email-link
+// action (via `working`, below). Automatic flows (runAfterJoin, onOAuth, onConnect) never reset it,
+// so an automatic post-join sign-in can never undo a Skip. If the page stayed open after Skip (a tab
+// opened by hand does), a new press starts clean.
+function resumeAfterSkip() { skipped = false; el('skip').disabled = false }
 
 // Send the person to Coriqo's pay-to-join page for the region nearest them, and remember that we
 // did, so only a join we started can be finished by a message from that page (see background.js).
@@ -138,14 +164,62 @@ async function onJoin(msgId = 'join-msg') {
     const L = globalThis.CoriqoLink
     const region = L.detectRegion({ language: navigator.language, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone })
     const guess = L.JOIN_REGIONS.includes(region) ? region : undefined
+    // Join pressed again while its tab is still open: bring that tab forward, keep the same state.
+    if (joinTabId !== null) {
+      try {
+        const tab = await chrome.tabs.get(joinTabId)
+        // Still the Coriqo join page? (Chrome shows a tab's address only where the extension may read it;
+        // when it is readable it must be the join page on the Coriqo address in use.)
+        const seen = tab?.url || tab?.pendingUrl
+        if (typeof seen === 'string') {
+          const want = new URL('/join', await getApiBase())
+          const got = new URL(seen)
+          if (got.origin !== want.origin || !(got.pathname === '/join' || got.pathname.startsWith('/join/'))) throw new Error('moved on')
+        }
+        await chrome.tabs.update(joinTabId, { active: true })
+        joinMsgId = msgId
+        setMsg(msgId, JOIN_WAIT_TEXT, 'ok')
+        return
+      } catch { joinTabId = null /* the tab is gone: start a new join below */ }
+    }
     const state = L.makeJoinState()
     const url = L.joinUrl({ base: await getApiBase(), region: guess, state })
+    if (skipped) return // Skip pressed meanwhile: nothing is stored
     await new Promise((r) => chrome.storage.local.set({ [PENDING_JOIN_KEY]: { region: guess || null, state, at: Date.now() } }, r))
-    chrome.tabs.create({ url })
-    setMsg(msgId, 'Opened Coriqo in a new tab. Come back here when you are done.', 'ok')
+    // A new, foreground tab: this page is never navigated, so Skip and every other control keep working.
+    const tab = await chrome.tabs.create({ url, active: true })
+    if (skipped) { // Skip landed while the tab opened: forget the join and close that tab
+      await new Promise((r) => chrome.storage.local.remove(PENDING_JOIN_KEY, r))
+      try { await chrome.tabs.remove(tab.id) } catch { /* already gone */ }
+      return
+    }
+    joinTabId = tab?.id ?? null
+    joinState = state
+    joinMsgId = msgId
+    setMsg(msgId, JOIN_WAIT_TEXT, 'ok')
   } catch (err) {
     setMsg(msgId, err?.message === 'bad_base' ? BAD_BASE_TEXT : "Couldn't open Coriqo. Try again.", 'bad')
   }
+}
+
+// The join tab went away without finishing: forget the join (a finished one was already handed on) so
+// nothing stays half-started, and say so; the person can press Join again or skip.
+async function onJoinTabClosed(tabId, graceMs = JOIN_CLOSE_GRACE_MS) {
+  if (joinTabId === null || tabId !== joinTabId) return
+  const mine = joinState
+  joinTabId = null
+  joinState = null
+  // Coriqo's page reports "done" and then closes itself: give the background script's accept
+  // (a read, then a write) time to land before deciding the join was left unfinished.
+  await new Promise((r) => setTimeout(r, graceMs))
+  const pending = await new Promise((r) => chrome.storage.local.get(PENDING_JOIN_KEY, (v) => r(v[PENDING_JOIN_KEY] || null)))
+  // Only the join this tab belonged to: a newer Join (other state), or none left, is not ours to clear.
+  if (!pending || pending.state !== mine || pending.accepted) return
+  // Read once more right before removing: the background script's accept may have landed in between.
+  const last = await new Promise((r) => chrome.storage.local.get(PENDING_JOIN_KEY, (v) => r(v[PENDING_JOIN_KEY] || null)))
+  if (!last || last.state !== mine || last.accepted) return
+  await new Promise((r) => chrome.storage.local.remove(PENDING_JOIN_KEY, r))
+  setMsg(joinMsgId, JOIN_CLOSED_TEXT, 'bad')
 }
 
 const AUTO_CONNECT_MS = 5000
@@ -158,11 +232,13 @@ function confirmAutoConnect(ms = AUTO_CONNECT_MS, workspace = '') {
     el('auto-ws').textContent = workspace // the person sees which workspace is about to be connected
     const cancel = el('auto-cancel')
     box.hidden = false
+    el('skip-bar').hidden = false // Skip stays within reach while the notice counts down
     // The workspace is fixed while the status shows, so what is connected is what was joined.
     const radios = [...document.querySelectorAll('#tenants input[name=tenant]')]
     radios.forEach((r) => { r.disabled = true })
     const done = (go) => {
       clearTimeout(timer); cancel.removeEventListener('click', stop); box.hidden = true
+      el('skip-bar').hidden = el('step-done').classList.contains('active')
       radios.forEach((r) => { r.disabled = false })
       resolve(go)
     }
@@ -184,6 +260,7 @@ async function clearStalePendingJoin() {
 // connect this computer if they ticked that box there (after a short, cancellable pause). Runs once;
 // the flag is consumed. It connects only with the session this run just created, in the joined workspace.
 async function runAfterJoin() {
+  if (skipped) return false
   const L = globalThis.CoriqoLink
   const pending = (await new Promise((r) => chrome.storage.local.get(PENDING_JOIN_KEY, (v) => r(v[PENDING_JOIN_KEY] || null))))
   if (!pending?.accepted) return false
@@ -196,7 +273,12 @@ async function runAfterJoin() {
   if (signedIn !== true) {
     // The join stays (the hour still runs) but is open to one more message from Coriqo's page, so a closed
     // sign-in window or a workspace that is still being set up does not lose it.
-    await new Promise((r) => chrome.storage.local.set({ [PENDING_JOIN_KEY]: { ...pending, accepted: false } }, r))
+    // (not if Skip cleared it meanwhile)
+    const still = await new Promise((r) => chrome.storage.local.get(PENDING_JOIN_KEY, (v) => r(v[PENDING_JOIN_KEY] || null)))
+    // Keeping the join open is what lets "I already paid. Sign in again" (join-retry) work: that button runs
+    // onOAuth directly and needs no pending join, so it works even if the join was cleared (a slow accept
+    // beaten by the tab-closed cleanup, or Skip). Re-armed only if it still exists and Skip has not run.
+    if (still && !skipped) await new Promise((r) => chrome.storage.local.set({ [PENDING_JOIN_KEY]: { ...pending, accepted: false } }, r))
     return true
   }
   // Signed in: the join is used up, so a repeated message cannot run it again.
@@ -261,6 +343,8 @@ async function onConnect(forcedTenant) {
   btn.disabled = true
   el('limit-help').hidden = true
   const fail = (text) => { setMsg('connect-msg', text, 'bad'); btn.disabled = false }
+  const quiet = () => { setMsg('connect-msg', ''); btn.disabled = false } // Skip pressed: stop without a word
+  if (skipped) return quiet()
   if (!(await getPolicy()).enabled) return fail(OFF_TEXT)
   try {
     setMsg('connect-msg', 'Checking Shield on this computer…')
@@ -285,6 +369,7 @@ async function onConnect(forcedTenant) {
       showStep('request')
       return setMsg('request-msg', 'Sign in again to connect this computer.', 'bad')
     }
+    if (skipped) return quiet() // Skip pressed while checking: do not ask Coriqo
     const base = await getApiBase()
     const tenant = (typeof forcedTenant === 'string' && forcedTenant)
       || document.querySelector('#tenants input[name=tenant]:checked')?.value || session.tenant_slug
@@ -317,8 +402,10 @@ async function onConnect(forcedTenant) {
       }
       return fail(`Coriqo had a problem (${grant.status}). Try again shortly.`)
     }
+    if (skipped) return quiet() // before anything is handed to the Shield or stored
     setMsg('connect-msg', 'Connecting…')
     await L.linkLocalShield({ fetchImpl: fetch, endpoint: check.endpoint, base, token: grant.token })
+    if (skipped) return quiet()
     await new Promise((r) => chrome.storage.local.set({ [LINK_KEY]: {
       tenant, device_index: grant.deviceIndex, device_limit: grant.deviceLimit, at: Date.now() } }, r))
     // The token has done its job: keep only what the pages show.
@@ -343,6 +430,7 @@ function showStep(name) {
   for (const s of ['request', 'join', 'consume', 'done']) {
     el(`step-${s}`).classList.toggle('active', s === name)
   }
+  el('skip-bar').hidden = name === 'done' // Skip is there on every step before signing in
 }
 
 function setMsg(id, text, kind) {
@@ -370,35 +458,52 @@ function extractToken(pasted) {
 let pendingEmail = ''
 let pendingWorkspace = ''
 
-// True while a sign-in, a link or an email request is under way: Skip and Esc then do nothing,
-// so a skip can never close the page in the middle of one.
-let busy = false
+// One user-started flow at a time: a second press of Sign in, Join, Connect or an email-link action
+// while one is in flight is ignored. Skip is never blocked by this. A press that gets through is a
+// deliberate one, so it also lifts an earlier Skip.
+let inFlight = false
 const working = (fn) => async (...args) => {
-  busy = true
-  try { return await fn(...args) } finally { busy = false }
+  if (inFlight) return
+  inFlight = true
+  resumeAfterSkip()
+  try { return await fn(...args) } finally { inFlight = false }
 }
 
 // Skip for now: remember the choice and close. Nothing is sent anywhere, no token is
 // stored, and no enrolment is attempted; the popup keeps a quiet Sign in entry.
 async function onSkip() {
-  if (busy) return
+  // Always works, even while a sign-in, a join or the 5-second connect notice is under way.
+  skipped = true
+  joinTabId = null
+  joinState = null
+  el('auto-cancel')?.click() // a connect waiting out its notice is cancelled
+  // Forget any join in progress, so a Coriqo tab finished after Skip cannot be accepted.
+  await new Promise((resolve) => chrome.storage.local.remove(PENDING_JOIN_KEY, resolve))
+  // Drop a session only if this page's own sign-in just stored it (e.g. the automatic one after paying);
+  // a session that existed before this flow is left untouched. Then keep the skip note.
+  const kept = await new Promise((r) => chrome.storage.local.get(SESSION_KEY, (v) => r(v[SESSION_KEY] || null)))
+  if (flowSessionAt !== null && kept?.at === flowSessionAt) await new Promise((r) => chrome.storage.local.remove(SESSION_KEY, r))
+  flowSessionAt = null
   await new Promise((resolve) => chrome.storage.local.set({ [SKIP_KEY]: { at: Date.now() } }, resolve))
-  setMsg('request-msg', 'Skipped. Shield keeps working on this computer. You can sign in later from the popup.', 'ok')
+  const where = el('step-join').classList.contains('active') ? 'join-msg' : 'request-msg'
+  setMsg(where, 'Skipped. Shield keeps working on this computer. You can connect later.', 'ok')
   el('skip').disabled = true
   try { window.close() } catch { /* a tab opened by hand stays; the message above is the answer */ }
 }
 
 async function init() {
   el('skip').addEventListener('click', onSkip)
+  chrome.tabs.onRemoved?.addListener(onJoinTabClosed)
+  showDestination()
   document.addEventListener('keydown', (e) => {
-    // Esc skips, but never while a sign-in is under way or on the later steps.
-    if (e.key === 'Escape' && el('step-request').classList.contains('active') && !el('skip').disabled) onSkip()
+    // Esc skips wherever the Skip bar is visible (first, join and email-link steps, and the connect notice).
+    if (e.key === 'Escape' && !el('skip-bar').hidden && !el('skip').disabled) onSkip()
   })
-  el('oauth-start').addEventListener('click', working(onOAuth))
+  el('oauth-start').addEventListener('click', working(() => { chrome.storage.local.remove(SKIP_KEY); return onOAuth() })) // a deliberate sign-in clears an old skip note
   el('connect').addEventListener('click', working(() => onConnect()))
   el('join').addEventListener('click', working(() => onJoin('join-msg')))
   el('join-new').addEventListener('click', working(() => onJoin('request-msg'))) // a person with no Coriqo account yet
-  el('join-retry').addEventListener('click', working(() => onOAuth()))
+  el('join-retry').addEventListener('click', working(() => { chrome.storage.local.remove(SKIP_KEY); return onOAuth() }))
 
   el('email').addEventListener('input', updateSendEnabled)
   el('workspace').addEventListener('input', updateSendEnabled)
@@ -438,9 +543,9 @@ async function init() {
   loadJoinCost()
   await clearStalePendingJoin()
   if (new URLSearchParams(location.search).get('auto') === '1') {
-    busy = true
+    inFlight = true // the automatic hand-off is a flow too: presses are ignored until it ends
     let ran = false
-    try { ran = await runAfterJoin() } finally { busy = false }
+    try { ran = await runAfterJoin() } finally { inFlight = false }
     if (ran) return
   }
   const session = await getSession()
@@ -449,6 +554,14 @@ async function init() {
   } else {
     showStep('request')
   }
+}
+
+// The host the buttons lead to, as plain text, so the person sees where Join and Sign in go.
+async function showDestination() {
+  let text = ''
+  try { text = new URL(await getApiBase()).host } catch { text = 'not set (the saved address is not allowed)' }
+  el('dest-host').textContent = text
+  document.querySelectorAll('.dest-host-copy').forEach((n) => { n.textContent = text })
 }
 
 // The price line comes from Coriqo when this screen opens (one GET, no credentials); text only.
@@ -519,6 +632,7 @@ async function onConsume() {
     if (res.status === 410) throw new Error('expired')
     if (!res.ok) throw new Error(`http:${res.status}`)
     const body = await res.json()
+    if (skipped) return // Skip pressed meanwhile: keep nothing
     await setSession({
       access_token: body.access_token,
       email: pendingEmail,

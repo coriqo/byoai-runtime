@@ -77,6 +77,10 @@
     #email-link input, #email-link label, #email-link button { margin-left: var(--space-md); margin-right: var(--space-md); }
     #email-link input { width: calc(100% - var(--space-md) * 2); }
     #email-link button.primary { width: calc(100% - var(--space-md) * 2); margin-bottom: var(--space-md); }
+    .hint, .dest { margin: var(--space-sm) 0 0; font-size: var(--text-xs); color: var(--ink-soft); }
+    .path .hint { margin-top: var(--space-xs); }
+    #skip-bar { margin-top: var(--space-xl); }
+    #skip-bar button { margin-top: 0; }
     .step { display: none; }
     .step.active { display: block; }
   </style>
@@ -89,10 +93,13 @@
   </div>
   <h1>Connect Shield to Coriqo</h1>
   <p class="lead" id="lead">
-    Optional. Shield protects you on this computer either way, and pairing it with a Shield on this
-    Mac needs no account and no payment. Connecting links it to your Coriqo workspace, so your team
-    can see that it is protected. Coriqo never receives what you type or what an AI replies.
+    Optional. Shield works on this computer either way, and nothing here is required. Pairing it with a
+    Shield on this Mac needs no account and no payment.
   </p>
+  <div class="card trust" id="trust">
+    <p><b>What connecting does:</b> it links this computer to your Coriqo workspace, so your team can see it is protected.</p>
+    <p><b>What Coriqo never receives:</b> what you type, or what an AI replies.</p>
+  </div>
 
   <section class="step active" id="step-request">
     <div class="path">
@@ -100,6 +107,7 @@
       <p>Sign in with your work account. If your organisation already uses Coriqo, connecting
         is covered by your organisation: no payment.</p>
       <button class="primary" id="oauth-start">Sign in with Coriqo</button>
+      <p class="hint">Opens a Coriqo sign-in window. This page stays open.</p>
     </div>
 
     <div class="path">
@@ -109,10 +117,11 @@
       <p id="join-cost"></p>
       <p>Work for an organisation that uses Coriqo? Don't pay here: ask your administrator to add you. That is
         covered by your organisation, at no cost to you.</p>
-      <p id="join-cost"></p>
       <button class="secondary" id="join-new">Join Coriqo</button>
+      <p class="hint">Opens Coriqo in a new tab. This page stays open.</p>
     </div>
 
+    <p class="dest">Coriqo address: <b id="dest-host"></b></p>
     <p class="msg" id="request-msg"></p>
 
     <details class="sees" id="email-link">
@@ -123,9 +132,6 @@
       <input type="text" id="workspace" autocomplete="off" spellcheck="false" placeholder="e.g. acme-msp" />
       <button class="primary" id="send" disabled>Send sign-in link</button>
     </details>
-
-    <button class="secondary" id="skip">Skip for now</button>
-    <p class="fine">Shield keeps working on this computer either way. You can connect later from the extension's popup.</p>
   </section>
 
   <section class="step" id="step-join">
@@ -136,7 +142,7 @@
     <button class="primary" id="join">Join Coriqo</button>
     <button class="secondary" id="join-retry">I already paid. Sign in again</button>
     <p class="msg" id="join-msg"></p>
-    <p class="fine">Opens Coriqo in a new tab. Nothing about you is put in the address.</p>
+    <p class="fine">Opens Coriqo in a new tab at <b class="dest-host-copy"></b>. Nothing about you is put in the address. This page stays open.</p>
   </section>
 
   <section class="step" id="step-consume">
@@ -200,6 +206,11 @@
     </div>
     <p class="fine"><button class="link" id="sign-out">Sign out</button></p>
   </section>
+
+  <div id="skip-bar">
+    <button class="secondary" id="skip">Skip for now - you can connect later from the Shield icon</button>
+    <p class="fine">Shield keeps working on this computer either way. Skipping sends nothing to Coriqo.</p>
+  </div>
 
   <p class="fine">
     This does not turn on capture by itself — the extension's own consent
