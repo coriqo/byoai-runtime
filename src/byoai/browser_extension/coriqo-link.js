@@ -382,7 +382,34 @@
     return { ok: true, connect: msg.connect === true, tenant: msg.tenant }
   }
 
-  const api = { JOIN_TTL_MS, isPendingJoinFresh, makeJoinState, JOIN_REGIONS, joinUrl, acceptJoinMessage, JOIN_FINISHED, CLIENT_ID, DEFAULT_BASE, linkPolicy, resolveBase, sessionExpired, exactHttpsOrigin, linkSummary, checkClientId, tenantLabel, detectRegion, pickTenant, checkBase, makePkce, buildAuthorizeUrl, parseRedirect, exchangeCode,
+  // The one-line price text Coriqo publishes for joining. Nothing about it is known here: it is
+  // shown only if it is a short plain string, and never as markup.
+  function parseJoinOffer(body) {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return null
+    const s = typeof body.summary === 'string' ? body.summary.trim() : ''
+    if (!s || s.length > 120) return null
+    if (/[\u0000-\u001f\u007f-\u009f​-‏‪-‮⁦-⁩﻿<>]/.test(s)) return null
+    return s
+  }
+
+  // GET only, no credentials, nothing about the person. Any failure is null, never a throw.
+  async function fetchJoinOffer({ fetchImpl, base, timeoutMs = 4000 } = {}) {
+    let timer
+    const ctl = new AbortController()
+    try {
+      const url = `${checkBase(base)}/api/v1/billing/msp-join/offer`
+      const timeout = new Promise((_, rej) => { timer = setTimeout(() => { ctl.abort(); rej(new Error('timeout')) }, timeoutMs) })
+      const work = (async () => {
+        const res = await fetchImpl(url, { method: 'GET', credentials: 'omit', redirect: 'error', signal: ctl.signal, headers: { Accept: 'application/json' } })
+        if (!res || res.status !== 200) return null
+        return parseJoinOffer(await res.json())
+      })()
+      work.catch(() => {})
+      return await Promise.race([work, timeout])
+    } catch { return null } finally { clearTimeout(timer) }
+  }
+
+  const api = { parseJoinOffer, fetchJoinOffer, JOIN_TTL_MS, isPendingJoinFresh, makeJoinState, JOIN_REGIONS, joinUrl, acceptJoinMessage, JOIN_FINISHED, CLIENT_ID, DEFAULT_BASE, linkPolicy, resolveBase, sessionExpired, exactHttpsOrigin, linkSummary, checkClientId, tenantLabel, detectRegion, pickTenant, checkBase, makePkce, buildAuthorizeUrl, parseRedirect, exchangeCode,
     requestEnrolGrant, requestProofNonce, requestDeviceProof, linkLocalShield, verifiedShieldKey }
   root.CoriqoLink = api
   if (typeof module !== 'undefined' && module.exports) module.exports = api

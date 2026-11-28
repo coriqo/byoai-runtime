@@ -2443,7 +2443,7 @@ After the user agrees on the welcome page, it shows a try-it panel: a made-up sa
 message (with a copy button) and links that open ChatGPT, Claude and Gemini.
 Nothing is sent anywhere by it.
 
-The first sign-in screen also offers *New to Coriqo? Join* to a person who has no Coriqo account at all, and when a sign-in works but the account has no workspace the page offers *Join Coriqo*; both start the same join below. It
+The first sign-in screen asks Coriqo for the price line when it opens (one `GET <coriqo base>/api/v1/billing/msp-join/offer`, no credentials, nothing about the person; it is skipped when linking is disabled). The reply's `summary` is shown as text only if it is a plain string of at most 120 characters; otherwise, or on any failure or after 4 seconds, the card says the price is shown before paying. The extension itself contains no price. The screen also offers *New to Coriqo? Join* to a person who has no Coriqo account at all, and when a sign-in works but the account has no workspace the page offers *Join Coriqo*; both start the same join below. It
 opens `<coriqo base>/join?region=<usa|uk|eu|ca|au>&source=extension&state=<64 hex>` in a new tab (the region
 is the same on-device guess as above and is left out when unknown; `state` is 32 random bytes made per join;
 no email, token or workspace is in the address) and stores `coriqo_pending_join` (`{ region, state, at }`, local). Coriqo's page
