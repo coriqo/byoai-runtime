@@ -80,11 +80,11 @@ describe('manifest and service worker', () => {
   it('declares the schema file, which exists and is valid', () => {
     expect(manifest.storage).toEqual({ managed_schema: 'managed_schema.json' })
     const schema = JSON.parse(read('managed_schema.json'))
-    expect(Object.keys(schema.properties).sort()).toEqual(['managed_by', 'shield_port'])
+    expect(Object.keys(schema.properties).sort()).toEqual(['coriqo_api_base', 'coriqo_link', 'managed_by', 'shield_port'])
     expect(schema.properties.shield_port).toMatchObject({ type: 'integer', minimum: 1024, maximum: 65535 })
   })
   it('adds no permission (managed storage needs none)', () => {
-    expect(manifest.permissions).toEqual(['storage', 'activeTab', 'alarms', 'scripting'])
+    expect(manifest.permissions).toEqual(['storage', 'activeTab', 'alarms', 'scripting', 'identity'])
     expect(manifest.host_permissions).toEqual(['http://127.0.0.1/*', 'http://localhost/*'])
   })
 
@@ -92,7 +92,7 @@ describe('manifest and service worker', () => {
     let listener
     const local = { endpoint: saved }
     const chrome = {
-      runtime: { id: 'ext', onMessage: { addListener: (fn) => { listener ??= fn } }, onInstalled: { addListener() {} },
+      runtime: { id: 'ext', onMessage: { addListener: (fn) => { listener ??= fn } }, onMessageExternal: { addListener() {} }, onInstalled: { addListener() {} },
         onStartup: { addListener() {} }, getURL: (p) => p },
       storage: {
         managed: { get: async () => { if (!managed) throw new Error('none'); return managed } },

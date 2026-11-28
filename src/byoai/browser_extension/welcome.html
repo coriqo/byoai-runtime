@@ -41,6 +41,12 @@
     .fine { color: var(--ink-soft); font-size: var(--text-sm); flex: 1 1 260px; }
     .done { border-color: var(--validated); }
     .done h2 { color: var(--validated); }
+    pre { margin: var(--space-md) 0; padding: var(--space-md); white-space: pre-wrap; background: var(--paper-2);
+      border: 1px solid var(--line); border-radius: var(--radius-sm); font: var(--text-sm) var(--font-mono); }
+    .tryit { display: flex; flex-wrap: wrap; gap: var(--space-sm); align-items: center; }
+    .app { display: inline-flex; align-items: center; min-height: var(--target-min); padding: 0 var(--space-lg);
+      border: 1px solid var(--control); border-radius: var(--radius-sm); color: var(--ink); text-decoration: none; font-weight: var(--weight-semibold); }
+    .app:hover { border-color: var(--azure); }
   </style>
 </head>
 <body>
@@ -123,10 +129,19 @@
   </section>
 
   <section class="done" id="on" hidden>
-    <h2>Capture is on</h2>
-    <p>Start Shield with <code>byoai-shield</code> if it isn't running. Open the extension popup any time to see
-      whether it is working, or to turn capture off. You can close this tab. Pages that were already open need a
-      reload before they are covered.</p>
+    <h2>Shield is on. Try it now.</h2>
+    <p>Copy the sample message, open an AI app, paste it and press send. Shield swaps the email, phone and card
+      for labels before the AI sees them. The sample is made up.</p>
+    <pre id="sample">Draft a reply to jane.doe@example.com. Call her on 415-555-0132 and confirm the card 4242 4242 4242 4242.</pre>
+    <div class="tryit">
+      <button class="primary" id="copy-sample">Copy sample message</button>
+      <a class="app" href="https://chatgpt.com/" target="_blank" rel="noopener">Open ChatGPT</a>
+      <a class="app" href="https://claude.ai/new" target="_blank" rel="noopener">Open Claude</a>
+      <a class="app" href="https://gemini.google.com/app" target="_blank" rel="noopener">Open Gemini</a>
+    </div>
+    <p class="fine" id="copied" hidden>Copied. Paste it into the chat and send.</p>
+    <p class="fine">Pages that were already open need a reload. Start Shield with <code>byoai-shield</code> if it
+      isn't running, and open the toolbar popup any time to check on it or turn capture off.</p>
   </section>
   <section id="off" hidden>
     <h2>Capture is off</h2>

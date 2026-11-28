@@ -33,7 +33,7 @@ const ROLLBACK_KEY = 'rollback'
 // The user's agreement to capture, given on the welcome page. Nothing is
 // queued, sent or counted until it exists; withdrawing it removes it again.
 const CONSENT_KEY = 'consent'
-importScripts('consent.js', 'managed-settings.js')
+importScripts('consent.js', 'managed-settings.js', 'coriqo-link.js')
 const CONSENT_VERSION = globalThis.SHIELD_CONSENT_VERSION
 const isGranted = (value) => value?.version === CONSENT_VERSION
 // A synchronous copy of the stored choice. Every gate reads this right before it
@@ -312,6 +312,38 @@ function setOfflineIfQueued() {
   else if (queue.length) setOffline()
   else setWorking()
 }
+
+// A Coriqo page (the pay-to-join page) tells us the person finished joining. It carries no data: it
+// can only nudge a join this extension started, and only from the Coriqo address in use. The sign-in
+// and the connect then run on our own login page, as they would if the person had clicked them.
+async function handleJoinMessage(msg, sender) {
+  // One at a time: the check-then-set below spans awaits, so a burst would all pass it.
+  if (handleJoinMessage.busy) return false
+  handleJoinMessage.busy = true
+  try { return await handleJoinOnce(msg, sender, globalThis.CoriqoLink) } finally { handleJoinMessage.busy = false }
+}
+async function handleJoinOnce(msg, sender, L) {
+  const store = await chrome.storage.local.get(['coriqo_pending_join', 'coriqo_api_base'])
+  let managed = {}
+  try { managed = (await chrome.storage.managed.get(['coriqo_link', 'coriqo_api_base'])) || {} } catch { /* none */ }
+  const policy = L.linkPolicy(managed)
+  if (!policy.enabled) return false // the admin turned linking off: no flag, no tab
+  const base = L.resolveBase({ policy, stored: store.coriqo_api_base, devBuild: !chrome.runtime.getManifest().update_url })
+  const verdict = L.acceptJoinMessage({ msg, senderOrigin: sender.origin, base, pending: store.coriqo_pending_join })
+  if (!verdict.ok) return false
+  const was = store.coriqo_pending_join
+  // Once Coriqo has named the workspace for this join it cannot be changed by a later message with the same state.
+  if (was?.tenant && was.tenant !== verdict.tenant) return false
+  // One hand-off at a time: but if the login tab never ran (closed before it loaded), let the page try again after a minute.
+  if (was?.accepted === true && Date.now() - (was.accepted_at || 0) < 60_000) return false
+  await chrome.storage.local.set({ coriqo_pending_join: { ...was, accepted: true, accepted_at: Date.now(), connect: verdict.connect, tenant: verdict.tenant } })
+  chrome.tabs.create({ url: chrome.runtime.getURL('login.html?auto=1') })
+  return true
+}
+chrome.runtime.onMessageExternal.addListener((msg, sender, reply) => {
+  handleJoinMessage(msg, sender).then((ok) => reply?.({ ok }), () => reply?.({ ok: false }))
+  return true
+})
 
 chrome.runtime.onInstalled.addListener((details) => {
   chrome.action.setBadgeText({ text: '' })

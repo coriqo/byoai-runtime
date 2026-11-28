@@ -66,6 +66,8 @@
     details.sees p b { color: var(--ink); }
     .fine { color: var(--ink-soft); font-size: var(--text-xs); margin-top: var(--space-xl); text-wrap: pretty; }
     .fine a, .card a { color: var(--azure-soft); }
+    .nearest { margin: var(--space-md) 0 var(--space-xs); font-size: var(--text-sm); }
+    .nearest .tag { margin-left: var(--space-xs); font-size: var(--text-xs); color: var(--validated); }
     .step { display: none; }
     .step.active { display: block; }
   </style>
@@ -85,6 +87,7 @@
 
   <section class="step active" id="step-request">
     <button class="primary" id="oauth-start">Sign in with Coriqo</button>
+    <button class="secondary" id="join-new">New to Coriqo? Join</button>
     <p class="fine">Or use an email link instead:</p>
     <label for="email">Work email</label>
     <input type="email" id="email" autocomplete="email" placeholder="you@company.com" />
@@ -94,6 +97,17 @@
     <p class="msg" id="request-msg"></p>
     <button class="secondary" id="skip">Skip for now</button>
     <p class="fine">You can sign in later from the extension's popup. Shield keeps working on this computer either way.</p>
+  </section>
+
+  <section class="step" id="step-join">
+    <div class="card">
+      <p><b>Welcome. This account has no workspace yet.</b> Join a Coriqo workspace to connect Shield.
+        You pay on Coriqo, choose a password there, and Shield connects this computer when you are done.</p>
+    </div>
+    <button class="primary" id="join">Join Coriqo</button>
+    <button class="secondary" id="join-retry">I already paid. Sign in again</button>
+    <p class="msg" id="join-msg"></p>
+    <p class="fine">Opens Coriqo in a new tab. Nothing about you is put in the address.</p>
   </section>
 
   <section class="step" id="step-consume">
@@ -115,8 +129,9 @@
         <span>Signed in as <b id="done-email"></b> (<span id="done-workspace"></span>)</span>
       </div>
     </div>
-    <div class="card" id="upsell-card">
-      <p><b>Browser-only has real limits.</b> No redact or block here — only
+    <details class="card" id="upsell-card" open>
+      <summary><b>Browser-only has real limits</b></summary>
+      <p> No redact or block here — only
         an in-page warning. The chain that proves nothing was tampered with
         is weaker than desktop Shield's, and it only covers the browser:
         Claude Desktop, MCP and agents need desktop Shield.</p>
@@ -125,7 +140,7 @@
         lost.</p>
       <p><a id="install-desktop" href="https://github.com/coriqo/byoai-runtime#readme"
             target="_blank" rel="noopener">Install the desktop app &rarr;</a></p>
-    </div>
+    </details>
     <div class="card" id="connect-card">
       <p><b>Track this computer.</b> Links the Shield running on this Mac to your
         Coriqo account. More than one computer may be billed.</p>
@@ -139,11 +154,18 @@
           this browser; it does not remove this computer from your Coriqo workspace, which your Coriqo admin does.
           <a id="open-privacy-2" href="#">Read exactly what is recorded</a></p>
       </details>
-      <fieldset class="tenants" id="tenant-field" hidden>
-        <legend>Workspace</legend>
-        <div id="tenants" role="radiogroup" aria-label="Workspace"></div>
-      </fieldset>
+      <p class="nearest" id="nearest" hidden>Workspace: <b id="nearest-name"></b>
+        <span class="tag" id="nearest-tag">Nearest to you</span></p>
+      <details class="sees" id="tenant-field" hidden>
+        <summary>Use a different workspace</summary>
+        <fieldset class="tenants">
+          <legend>Workspace</legend>
+          <div id="tenants" role="radiogroup" aria-label="Workspace"></div>
+        </fieldset>
+      </details>
       <button class="primary" id="connect">Connect this computer</button>
+      <p class="msg" id="auto-status" hidden>Connecting this computer to <b id="auto-ws"></b>&hellip;
+        <button id="auto-cancel" type="button">Cancel</button></p>
       <p class="msg" id="connect-msg"></p>
       <p class="fine" id="limit-help" hidden><a id="upgrade" href="#" target="_blank" rel="noopener">Add another device</a></p>
     </div>

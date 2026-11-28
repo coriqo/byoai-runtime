@@ -14,8 +14,16 @@ async function choose(granted) {
     return
   }
   el('ask').hidden = true
+  if (granted) el('coriqo').before(el('on')) // the try-it panel first, the optional sign-in after
   el(granted ? 'on' : 'off').hidden = false
 }
+
+el('copy-sample').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(el('sample').textContent)
+    el('copied').hidden = false
+  } catch { /* the text is on screen to copy by hand */ }
+})
 
 el('agree').addEventListener('click', () => choose(true))
 el('decline').addEventListener('click', () => choose(false))
