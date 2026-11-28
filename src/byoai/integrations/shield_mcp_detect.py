@@ -77,26 +77,42 @@ def _sse_payloads(text: str) -> list[str]:
     return out
 
 
-def _messages(text: str, ctype: str) -> tuple[list[Any], bool]:
-    """Parsed messages (capped) and whether the body was malformed.
+def _relevant(msg: Any) -> bool:
+    """Can this message produce a row or correlate? Only those count toward the cap."""
+    return (
+        isinstance(msg, dict)
+        and msg.get("jsonrpc") == "2.0"
+        and msg.get("method") in ("tools/call", "tools/list", None)
+    )
 
-    Malformed means chunks existed but none parsed; a stray non-JSON SSE event
-    (e.g. a ping) next to valid ones is ignored.
+
+def _messages(text: str, ctype: str) -> tuple[list[Any], str | None]:
+    """Parsed relevant messages (capped) and why the body was not fully inspected.
+
+    ``"malformed body"``: chunks existed but none parsed (a stray non-JSON SSE
+    event such as a ping next to valid ones is ignored). ``"batch truncated"``:
+    relevant messages beyond ``MAX_BATCH`` were dropped.
     """
     chunks = _sse_payloads(text) if ctype == _SSE else [text]
     msgs: list[Any] = []
-    bad = parsed = False
+    bad = parsed = truncated = False
     for chunk in chunks:
         try:
             doc = json.loads(chunk)
-        except ValueError:
+        except (ValueError, RecursionError, MemoryError):
             bad = True
             continue
         parsed = True
-        msgs.extend(doc if isinstance(doc, list) else [doc])
-        if len(msgs) >= MAX_BATCH:
-            break
-    return msgs[:MAX_BATCH], bad and not parsed
+        for msg in doc if isinstance(doc, list) else [doc]:
+            if not _relevant(msg):
+                continue
+            if len(msgs) >= MAX_BATCH:
+                truncated = True
+                break
+            msgs.append(msg)
+    if truncated:
+        return msgs, "batch truncated"
+    return msgs, "malformed body" if bad and not parsed else None
 
 
 def detect_mcp(body: bytes | str | None, direction: str, content_type: str | None = None, *,
@@ -112,15 +128,20 @@ def detect_mcp(body: bytes | str | None, direction: str, content_type: str | Non
     try:
         return _detect(body, direction, content_type, host, encrypted, content_encoding, pending)
     except Exception:  # noqa: BLE001 - a detector must never break the proxy
-        return Detection()
+        det = Detection()
+        det.rows.append(_unobservable(_safe_host(host), "detector error"))
+        return det
+
+
+def _safe_host(host: Any) -> str | None:
+    target = host.strip().lower() if isinstance(host, str) else None
+    return target if target is not None and _HOST.fullmatch(target) else None
 
 
 def _detect(body: Any, direction: str, content_type: str | None, host: str | None,
             encrypted: bool, content_encoding: str | None, pending: _Pending | None) -> Detection:
     det = Detection()
-    target = host.strip().lower() if isinstance(host, str) else None
-    if target is not None and not _HOST.fullmatch(target):
-        target = None
+    target = _safe_host(host)
     if not isinstance(body, (bytes, bytearray, str)) or not body:
         return det
     ctype = (content_type or "").split(";", 1)[0].strip().lower()
@@ -144,14 +165,14 @@ def _detect(body: Any, direction: str, content_type: str | None, host: str | Non
         return det
     if not ctype and text.lstrip().startswith(("data:", "event:")):
         ctype = _SSE
-    msgs, bad = _messages(text, ctype)
+    msgs, why = _messages(text, ctype)
     for msg in msgs:
         if len(det.rows) >= MAX_BATCH:
+            why = "batch truncated"
             break
-        if isinstance(msg, dict) and msg.get("jsonrpc") == "2.0":
-            _one(msg, direction, target, pending, det)
-    if bad and len(det.rows) < MAX_BATCH:
-        det.rows.append(_unobservable(target, "malformed body"))
+        _one(msg, direction, target, pending, det)
+    if why:
+        det.rows.append(_unobservable(target, why))
     return det
 
 

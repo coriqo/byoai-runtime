@@ -146,7 +146,8 @@ def test_pending_is_bounded():
 def test_batch_is_capped():
     msg = {"jsonrpc": "2.0", "method": "tools/call", "params": {"name": "t"}}
     d = detect_mcp(json.dumps([dict(msg, id=i) for i in range(500)]).encode(), "request", None)
-    assert len(d.rows) <= 100
+    assert len(_calls(d.rows)) == 100
+    assert _unobs(d.rows, "batch truncated")
 
 
 @pytest.mark.parametrize("body", [b"{", b"[1,2", b"\xff\xfe", b"data: {oops\n\n"])
@@ -194,3 +195,45 @@ def test_result_in_request_direction_never_touches_pending():
         {"call_id": "1", "method": "tools/call", "tool": "x", "is_error": False}
     ]
     assert pending == {}
+
+
+def _unobs(rows, why):
+    return [r for r in rows if r["evidence_level"] == "unobservable_payload"
+            and r.get("not_covered") == why]
+
+
+def test_batch_beyond_cap_leaves_unobservable_row(validator):
+    pad = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "p"}}
+    late = dict(pad, id=2, params={"name": "late"})
+    body = json.dumps([pad] * 100 + [late]).encode()
+    d = detect_mcp(body, "request", None)
+    [row] = _unobs(d.rows, "batch truncated")
+    validator.validate(row)
+    assert "late" not in [r.get("tool", {}).get("name") for r in d.rows]
+
+
+def test_irrelevant_padding_does_not_consume_the_cap():
+    pad = {"jsonrpc": "2.0", "method": "notifications/x"}
+    call = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "real"}}
+    d = detect_mcp(json.dumps([pad] * 500 + [call]).encode(), "request", None)
+    assert [r["tool"]["name"] for r in _calls(d.rows)] == ["real"]
+    assert not _unobs(d.rows, "batch truncated")
+
+
+def test_deeply_nested_body_is_unobservable_and_never_raises(validator):
+    body = b"[" * 100_000 + b"]" * 100_000
+    [row] = detect_mcp(body, "request", "application/json").rows
+    validator.validate(row)
+    assert row["evidence_level"] == "unobservable_payload"
+
+
+def test_internal_error_leaves_unobservable_row(monkeypatch, validator):
+    import byoai.integrations.shield_mcp_detect as m
+
+    def boom(*a, **k):
+        raise RuntimeError("x")
+    monkeypatch.setattr(m, "_messages", boom)
+    [row] = detect_mcp(_fx("call_request.json"), "request", None, host="h.example").rows
+    validator.validate(row)
+    assert row["evidence_level"] == "unobservable_payload"
+    assert row["not_covered"] == "detector error"
