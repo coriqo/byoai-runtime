@@ -243,3 +243,88 @@ def test_catalog_validates_against_schema():
         (Path(__file__).resolve().parents[2] / "src/byoai/shield_signatures.schema.json").read_text()
     )
     jsonschema.Draft202012Validator(schema, format_checker=jsonschema.FormatChecker()).validate(BASE)
+
+
+def _models_doc():
+    return json.loads((Path(__file__).parents[2] / "src/byoai/shield_catalog_models.json").read_text())
+
+
+def test_star_heavy_path_pattern_cannot_hang_the_matcher():
+    import time
+
+    doc = _models_doc()
+    doc["signatures"][0]["match"]["paths"] = ["/" + "*" * 24]
+    cat = load_catalog_text(json.dumps(doc))
+    t = time.monotonic()
+    assert cat.match("api.openai.com", "/" + "a" * 1000 + "/").provider == "unknown"
+    assert time.monotonic() - t < 1
+
+
+@pytest.mark.parametrize(
+    "pattern,path,ok",
+    [
+        ("/v1/models/*:generateContent", "/v1/models/x:generateContent", True),
+        ("/v1/models/*:generateContent", "/v1/models/:generateContent", False),
+        ("/v1/models/*:generateContent", "/v1/models/a/b:generateContent", False),
+        ("/a/*/*", "/a/x/y", True),
+        ("/a/*/*", "/a/x", False),
+        ("/a*b*c", "/aXbYc", True),
+        ("/a*b*c", "/abc", False),
+        ("/a**", "/abc", True),
+        ("/a**", "/ab", False),
+        ("/v1/messages", "/v1/messages", True),
+        ("/v1/messages", "/v1/messages/", False),
+    ],
+)
+def test_path_glob_semantics(pattern, path, ok):
+    from byoai.shield_signatures import _path_ok
+
+    assert _path_ok(pattern, path) is ok
+
+
+def test_entry_expiring_after_load_stops_matching():
+    doc = _models_doc()
+    for s in doc["signatures"]:
+        s["expires_at"] = "2026-11-28T00:00:00Z"
+    cat = load_catalog_text(json.dumps(doc), now="2026-11-27T12:00:00Z")
+    assert cat.match("api.openai.com", "/v1/chat/completions", now="2026-11-27T13:00:00Z").rule_id
+    assert cat.match("api.openai.com", "/v1/chat/completions", now="2026-11-28T00:00:01Z").provider == "unknown"
+
+
+@pytest.mark.parametrize("ts", ["2027-11-27T::::Z", "9999-99-99T99:99:99Z", "2027-13-01T00:00:00Z", "2027-01-01T25:00:00Z"])
+def test_malformed_expires_at_rejects_file(ts):
+    doc = _models_doc()
+    doc["signatures"][0]["expires_at"] = ts
+    assert load_catalog_text(json.dumps(doc)).error
+
+
+@pytest.mark.parametrize("ts", ["2027-02-14T00:00Z", "2027-02-14T00:00:00.5Z", "2027-02-14T00:00:00.1234567Z"])
+def test_previously_accepted_timestamp_forms_still_load(ts):
+    doc = _models_doc()
+    doc["signatures"][0]["expires_at"] = ts
+    assert load_catalog_text(json.dumps(doc), now="2026-11-27T00:00:00Z").error is None
+
+
+@pytest.mark.parametrize("now", ["2030-01-01", "x", "2030-01-01T00:00:00+00:00", 5, "2031-13-01T00:00:00Z"])
+def test_invalid_now_falls_back_to_the_clock(now):
+    doc = _models_doc()
+    for s in doc["signatures"]:
+        s["expires_at"] = "2030-01-01T00:00:00Z"
+    cat = load_catalog_text(json.dumps(doc), now="2026-11-27T00:00:00Z")
+    assert cat.match("api.openai.com", "/v1/chat/completions", now=now).rule_id
+
+
+def test_non_ascii_digit_timestamp_cannot_bypass_expiry():
+    doc = _models_doc()
+    doc["signatures"][0]["expires_at"] = "٢٠٢٠-01-01T00:00:00Z"  # Arabic-Indic 2020
+    assert load_catalog_text(json.dumps(doc)).error
+
+
+def test_valid_non_canonical_now_is_honoured_not_ignored():
+    doc = _models_doc()
+    for s in doc["signatures"]:
+        s["expires_at"] = "2029-01-01T00:00:00Z"
+    cat = load_catalog_text(json.dumps(doc), now="2030-01-01T00:00Z")
+    assert not cat.entries and cat.expired_ids
+    live = load_catalog_text(json.dumps(doc), now="2026-11-27T00:00:00Z")
+    assert live.match("api.openai.com", "/v1/chat/completions", now="2030-01-01T00:00:00.000Z").provider == "unknown"
