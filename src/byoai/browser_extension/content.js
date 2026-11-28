@@ -614,7 +614,9 @@
     } catch { /* the stream was cut: report what was seen */ }
     const tools = summarise(found)
     if (!tools.length || !config.consented) return
-    emit({ kind: 'browser.chat.reply', app, send_id: sendId, tools, sources: found.domains.size })
+    // A tool name in a reply stream is a request the model made, never proof it ran.
+    emit({ kind: 'browser.chat.reply', app, send_id: sendId, tools, sources: found.domains.size,
+           evidence_level: 'observed_requested' })
   }
 
   // A body that is text however it was wrapped: a string, a String object, an
