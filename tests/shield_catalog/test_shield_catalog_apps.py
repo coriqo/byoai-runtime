@@ -14,6 +14,7 @@ jsonschema = pytest.importorskip("jsonschema")
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_PATH = ROOT / "src" / "byoai" / "shield_signatures.schema.json"
 CATALOG_PATH = ROOT / "src" / "byoai" / "shield_catalog_apps.json"
+MODELS_PATH = ROOT / "src" / "byoai" / "shield_catalog_models.json"
 FP_HOSTS_PATH = Path(__file__).with_name("false_positive_hosts.txt")
 
 #: Vendors the base catalog must cover (the task's starting list).
@@ -74,6 +75,11 @@ def _model_call_matches(entry: dict, host: str, path: str) -> bool:
     if entry["type"] != "model_endpoint" or not _entry_matches_host(entry, host):
         return False
     return any(_path_matches(p, path) for p in entry["match"]["paths"])
+
+
+def _all_model_entries(catalog: dict) -> list[dict]:
+    """Model endpoints live in two base files; ids and hosts never repeat across them."""
+    return catalog["signatures"] + json.loads(MODELS_PATH.read_text())["signatures"]
 
 
 # --- structure -------------------------------------------------------------
@@ -164,7 +170,7 @@ def test_ordinary_hosts_do_not_match(catalog, host):
     ],
 )
 def test_model_call_paths_match(catalog, host, path):
-    assert any(_model_call_matches(e, host, path) for e in catalog["signatures"])
+    assert any(_model_call_matches(e, host, path) for e in _all_model_entries(catalog))
 
 
 @pytest.mark.parametrize(
@@ -182,4 +188,4 @@ def test_model_call_paths_match(catalog, host, path):
     ],
 )
 def test_non_generation_calls_do_not_match(catalog, host, path):
-    assert not any(_model_call_matches(e, host, path) for e in catalog["signatures"])
+    assert not any(_model_call_matches(e, host, path) for e in _all_model_entries(catalog))

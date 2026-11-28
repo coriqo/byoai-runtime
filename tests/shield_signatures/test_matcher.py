@@ -310,6 +310,7 @@ def test_invalid_now_falls_back_to_the_clock(now):
     doc = _models_doc()
     for s in doc["signatures"]:
         s["expires_at"] = "2030-01-01T00:00:00Z"
+        s["last_verified"] = "2029-06-01T00:00:00Z"  # lifetime is capped at 400 days
     cat = load_catalog_text(json.dumps(doc), now="2026-11-27T00:00:00Z")
     assert cat.match("api.openai.com", "/v1/chat/completions", now=now).rule_id
 
@@ -324,6 +325,7 @@ def test_valid_non_canonical_now_is_honoured_not_ignored():
     doc = _models_doc()
     for s in doc["signatures"]:
         s["expires_at"] = "2029-01-01T00:00:00Z"
+        s["last_verified"] = "2028-06-01T00:00:00Z"
     cat = load_catalog_text(json.dumps(doc), now="2030-01-01T00:00Z")
     assert not cat.entries and cat.expired_ids
     live = load_catalog_text(json.dumps(doc), now="2026-11-27T00:00:00Z")

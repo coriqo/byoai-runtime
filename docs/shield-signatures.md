@@ -65,7 +65,7 @@ credential or a message.
 | Key | Content | Rules |
 |---|---|---|
 | `hosts` | Host patterns | Lowercase. Exact (`api.openai.com`) or a single leftmost wildcard label (`*.openai.azure.com`). No regex. A wildcard sits **above a registrable domain**: `*.co.uk` or `*.github.io` (a public suffix) must never appear, and the review of every change checks each wildcard parent against the public suffix list. The schema cannot do that. It also does not stop punycode (`xn--`) lookalike labels, so review reads each `xn--` host decoded. |
-| `paths` | Path patterns | Start with `/`. `*` matches one segment. Query strings are not matched. |
+| `paths` | Path patterns | Start with `/`. `*` matches one or more characters inside one segment, at most **4** per pattern (a loader rejects more). Matching is linear in the pattern and path length. A path containing `..` never matches. Query strings are not matched. |
 | `header_names` | Header **names** | Lowercase. Presence only. |
 | `body_fields` | JSON field **names** | Presence only; the value is never read into a row (a model name may be read only under the envelope's model rules). |
 | `process_names` | Process names | |
@@ -97,7 +97,7 @@ tests must cover each line.
 3. **Location decides the kind, not the file.** The base list loads only from its packaged path. Any file at the bundle location is a bundle whatever its `kind` field says, and must carry a valid signature: a bundle with `signature` removed and `kind` edited to `base` is a bad-signature bundle and is discarded whole. The schema also refuses a `base` file that carries a `signature`, but only this rule stops the downgrade.
    - **Bad signature: fail closed on the bundle.** A bundle with a missing slot, an unknown `key_id`, a malformed or wrong signature, or a failed verification is discarded **whole**. No entry of it is used. Verification is offline against pinned keys. The base list stays in force and the loader reports the failure as health, not as a silent fallback.
 4. **Expired file.** A bundle past its `expires_at` is treated as invalid and discarded whole. An expired base list is still used, since it ships with the package, but each of its entries is still held to rule 5, and the loader reports that the list is stale.
-5. **Expired entry: skip that entry only.** An entry past its `expires_at` never matches. It is reported as a coverage gap, never as "not AI".
+5. **Expired entry: skip that entry only.** An entry past its `expires_at` never matches. It is reported as a coverage gap, never as "not AI". The check runs at **match time** as well as at load, so a long-running process stops matching an entry the moment it expires. Timestamps are parsed strictly (a real calendar date and time, `Z` only); a malformed one, `first_seen > last_verified`, `last_verified > expires_at` or a lifetime over 400 days rejects the file.
 6. **Rollback.** A bundle whose `file_version` is lower than the highest one this loader has accepted is discarded. The loader keeps that number in its own state.
 7. **Merging.** Duplicate `id` inside one file rejects the file. Across base and bundle, the entry with the higher `version` wins, **but** a bundle entry may only add coverage: for the same `id`, each `match` list must contain every value of the base entry's, its `evidence_required` must not be a smaller set, and its `confidence` must not be higher. Otherwise the bundle entry is ignored and the loader reports it as health. A bundle can add entries, never remove or weaken a base entry's match (a dead match such as `hosts: ["x.invalid"]` therefore cannot override). Retiring a base entry is a reviewed change to the base list.
 8. **No regex.** Patterns are the literal forms above. A loader must not compile a signature field as a regular expression.
@@ -117,10 +117,23 @@ host, dedupes across lists, and rejects shared infrastructure (`github.io`,
 `vercel.app`, `amazonaws.com`), generic platforms (`google.com`, `microsoft.com`)
 and parent domains of a seed host, unless the host is an exact AI subdomain such
 as `gemini.google.com`. A host is matched exactly, so a listed domain covers that
-host only.
+host only (`www.` and `api.` are separate hosts, not duplicates).
+A host may carry a port (`api.openai.com:443`); a port outside 1 to 65535 never matches.
 
 The schema is closed, so each entry's category and trust facts sit in a sidecar,
-`src/byoai/shield_catalog_apps_meta.json`, keyed by entry `id`:
+`src/byoai/shield_catalog_apps_meta.json`, keyed by entry `id`. The sidecar records
+`catalog_sha256`, the hash of the catalog file it was built for. `load_app_catalog()`
+rejects the whole catalog if the hash differs, if an id is missing or extra, if a
+value is outside the enums below, if `tier` disagrees with `origin`, or if a
+`candidate` or `ai-enabled` entry reports above `possible`. So a tier cannot be
+dropped or altered without the loader noticing.
+
+Model-API endpoints live in `shield_catalog_models.json`; the app catalog repeats none
+of them (no id or host appears in both files), so an override by `id` has one target.
+Hugging Face (`huggingface.co`) is `ai-enabled` at `possible`: the whole site is
+a code and dataset host, not only a model service.
+
+Sidecar fields:
 
 | Field | Values |
 |---|---|
@@ -131,8 +144,14 @@ The schema is closed, so each entry's category and trust facts sit in a sidecar,
 
 - `ai-enabled` entries and every `candidate` report at most `possible`; only a
   `listed`, `ai-native` entry may report `probable`.
-- `source` is the vendor's own site, never a review site. `last_verified` is the
-  directory's verification date where it gives one, else the import date.
+- `source.url` is the vendor's own site, never a review site. `source.name` and
+  `source.licence` say where the host really came from: `via tio directory`,
+  `via autotune directory` or `via shadow-ai list`, licence
+  `LicenseRef-Third-Party-List`; every `candidate` also says `(unverified)`. Seed
+  entries keep the vendor licence. Nobody at Coriqo has verified a list-derived
+  entry against the vendor: `last_verified` is the list's own date where it gives one,
+  else the import date, and is not a claim of review. `tier` (and `AppEntry.verified`)
+  is the trust signal.
   `expires_at` is 365 days (`listed`) or 180 days (`candidate`) after it.
 - **Overrides.** An admin approves, changes or disables one entry through the
   policy layer, which refers to it by `id`. Ids are unique and the base file is

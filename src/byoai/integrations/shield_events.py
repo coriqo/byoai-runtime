@@ -20,6 +20,67 @@ _KEEP = (
     "action", "text_hmac", "not_covered", "call_id", "payload_hash",
     "mandate_verdict", "error_type",
 )
+
+
+def _rx(pattern: str, limit: int = 0):
+    rx = re.compile(pattern)
+    return lambda v: isinstance(v, str) and (not limit or len(v) <= limit) and rx.fullmatch(v) is not None
+
+
+def _lst(item, limit: int):
+    return lambda v: isinstance(v, list) and len(v) <= limit and all(item(x) for x in v)
+
+
+def _int(lo: int, hi: int):
+    return lambda v: isinstance(v, int) and not isinstance(v, bool) and lo <= v <= hi
+
+
+def _opt(check):
+    return lambda v: v is None or check(v)
+
+
+# One check per pass-through field, mirroring `legacy_fields` in the envelope schema. A row whose
+# field is present but fails its check is stripped (the event is still emitted): never copied.
+_CHECKS = {
+    "wall_clock": _rx(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}"),
+    "chars": _int(0, 9999999),
+    "wire": lambda v: isinstance(v, str) and len(v) <= 60,
+    "sent_at": lambda v: isinstance(v, str) and len(v) <= 40,
+    "row_id": _rx(r"[A-Za-z0-9_-]{8,64}"),
+    "send_id": _rx(r"[A-Za-z0-9-]{8,64}"),
+    "gate_id": _rx(r"[A-Za-z0-9-]{8,64}"),
+    "stage": lambda v: v in ("input", "network"),
+    "flags": _lst(_rx(r"(secret|pii|flag):[a-z0-9_]{1,40}"), 60),
+    "redactions": _lst(_rx(r"[a-z0-9_]{1,40}"), 60),
+    "verdict": _rx(r"(observe|redact|block|blocked|allowed|cancelled|redacted\(\d{1,2}\)"
+                   r"|warned(\u2192|->)(sent|redacted|cancelled|uploaded|removed))", 40),
+    "tools": _lst(_rx(r"[A-Za-z0-9_.:-]{1,48}"), 12),
+    "sources": _int(0, 1000),
+    "mime": _opt(_rx(r"[A-Za-z0-9!#$&^_.+-]{1,60}/[A-Za-z0-9!#$&^_.+-]{1,80}", 141)),
+    "bytes": _int(0, 1099511627775),
+    "sha256": _rx(r"[0-9a-f]{64}"),
+    "name_hash": _opt(_rx(r"hmac-sha256:[0-9a-f]{64}")),
+    "scanned": lambda v: isinstance(v, bool),
+    "rules_version": _rx(r"[0-9a-f]{12}"),
+    "ok": lambda v: isinstance(v, bool),
+    "status": _int(-1, 999),
+    "action": lambda v: v == "warn",
+    "text_hmac": _opt(_rx(r"hmac-sha256:[0-9a-f]{64}")),
+    "not_covered": _rx(r"[A-Za-z0-9_ .:-]{1,60}"),
+    "call_id": _rx(r"[A-Za-z0-9_-]{1,64}"),
+    "payload_hash": _rx(r"(sha256:)?[0-9a-f]{64}"),
+    "mandate_verdict": lambda v: v in ("allowed", "flagged", "blocked", "pending_approval"),
+    "error_type": _rx(r"[a-z0-9_]{1,40}", 40),
+}
+_COMMON = {"wall_clock", "chars", "verdict", "flags", "redactions", "status", "sha256", "bytes",
+           "mime", "scanned", "rules_version", "name_hash"}
+_ALLOWED = {  # which pass-through fields each row family may carry (schema propertyNames)
+    "browser": _COMMON | {"wire", "sent_at", "row_id", "send_id", "gate_id", "stage", "tools",
+                          "sources", "ok"},
+    "desktop": _COMMON | {"action", "not_covered", "text_hmac"},
+    "tool": {"wall_clock", "call_id", "chars", "payload_hash", "mandate_verdict", "error_type"},
+}
+_REPLIES = ("browser.chat.reply", "desktop.chat.response")
 _APP = re.compile(r"^[a-z0-9_]{1,40}$")
 _MODEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/@+-]{0,127}$")
 _TOOL = re.compile(r"^[A-Za-z0-9_.:-]{1,48}$")
@@ -59,9 +120,24 @@ def _model(row: Mapping[str, Any], source: str) -> dict[str, str]:
     return {"identification": "unknown"}
 
 
+def _lenient(verdict: Any) -> Any:
+    """Fold a verdict that fails the strict emit check onto the nearest policy word.
+
+    Non-strings pass through (the callers ignore them). A redact or block is never lost.
+    """
+    if not isinstance(verdict, str):
+        return verdict
+    v = verdict.strip().lower()
+    if v.startswith("redact"):
+        return "redacted(1)"
+    if v.startswith("block"):
+        return "blocked"
+    return verdict
+
+
 def _decision(kind: str, row: Mapping[str, Any]) -> tuple[str, str]:
     """(policy_action, outcome) for one existing row."""
-    verdict = row.get("verdict")
+    verdict = _lenient(row.get("verdict"))
     if kind == "browser.chat.request":
         if isinstance(verdict, str) and verdict.startswith("redacted("):
             return "redact", "sent_redacted"
@@ -74,6 +150,8 @@ def _decision(kind: str, row: Mapping[str, Any]) -> tuple[str, str]:
             return "redact", "sent_redacted"
         if verdict == "observe":
             return "observe", "sent"
+        if verdict == "blocked":
+            return "block", "blocked"
         return "none", "sent"
     if kind in ("browser.chat.attachment", "desktop.chat.attachment"):
         return {"allowed": ("allow", "uploaded"), "blocked": ("block", "blocked")}.get(
@@ -89,7 +167,9 @@ def _decision(kind: str, row: Mapping[str, Any]) -> tuple[str, str]:
         return _MANDATE.get(word, ("none", "unknown")) if isinstance(word, str) \
             else ("none", "unknown")
     if kind == "tool.result":
-        return "allow", "allowed"
+        word = row.get("mandate_verdict")
+        return _MANDATE.get(word, ("allow", "allowed")) if isinstance(word, str) \
+            else ("allow", "allowed")
     if kind == "tool.error":
         err = row.get("error_type")
         word = err[len("mandate_"):] if isinstance(err, str) and err.startswith("mandate_") else ""
@@ -128,10 +208,28 @@ def adapt_row(row: Mapping[str, Any],
     evidence = "observed"
     if kind == "tool.call":
         evidence = "observed_requested"
-    if kind == "desktop.meta" and row.get("not_covered"):
+    family = kind.split(".", 1)[0]
+    base: dict[str, Any] = {}
+    for k in _KEEP:
+        if k not in row:
+            continue
+        if k == "not_covered" and row[k] in (False, None, ""):
+            continue  # an explicit "covered" marker, not a discovery
+        if k not in _ALLOWED[family] or (k == "tools" and kind not in _REPLIES):
+            continue  # foreign to this row family: not copied
+        if k == "not_covered" and isinstance(row[k], str):
+            # Real proxy reasons carry commas and the like; fold them onto the schema's
+            # character set instead of losing the discovery.
+            clean = re.sub(r"[^A-Za-z0-9_ .:-]", " ", row[k])[:60].strip()
+            if clean:
+                base[k] = clean
+            continue
+        if not _CHECKS[k](row[k]):
+            continue  # malformed: strip this field only; the event and its verdict still go out
+        base[k] = row[k]
+    if kind == "desktop.meta" and "not_covered" in base:
         event_type, evidence = "ai.app.discovered", "unobservable_payload"
 
-    base: dict[str, Any] = {k: row[k] for k in _KEEP if k in row}
     app_raw = row.get("app")
     if isinstance(app_raw, str):
         # Schema tags are [a-z0-9_]; fold other spellings (extra-site names,
@@ -153,6 +251,8 @@ def adapt_row(row: Mapping[str, Any],
     client = ident.get("client_name") if isinstance(ident, Mapping) else None
     if isinstance(client, str) and _CALL.fullmatch(client):
         base["identity"] = {"client_name": client}  # nested object: keep only this key
+    # Decided from the raw row (leniently), so a malformed unrelated field cannot downgrade
+    # a block, redact or warn; only the emitted copy is stripped.
     policy, outcome = _decision(kind, row)
     env: dict[str, Any] = {**base, "kind": kind, "envelope_version": 1,
                            "ai_event_type": event_type, "evidence_level": evidence,
@@ -194,16 +294,26 @@ def adapt_row(row: Mapping[str, Any],
 
 
 def _get(event: Any, name: str) -> Any:
-    return event.get(name) if isinstance(event, Mapping) else getattr(event, name, None)
+    try:
+        return event.get(name) if isinstance(event, Mapping) else getattr(event, name, None)
+    except Exception:  # noqa: BLE001 - a hostile object must not break the caller
+        return None
 
 
 def adapt_agent_event(event: Any, governed: bool = False) -> dict[str, Any] | None:
     """Derived envelope for a recorder ``AgentEvent`` (or a dict of its fields).
 
     Never written back into the event payload. ``governed`` marks a
-    ``tool_result`` that came from ``@governed_tool``; only then is
-    ``ai.tool.executed`` used. Other event kinds return ``None``.
+    ``tool_result`` that came from ``@governed_tool``; ``ai.tool.executed`` is used only
+    then, and only for a named tool whose result is not an error. Never raises. Other event kinds return ``None``.
     """
+    try:
+        return _adapt_agent_event(event, governed)
+    except Exception:  # noqa: BLE001 - adapters never raise into the recorder
+        return None
+
+
+def _adapt_agent_event(event: Any, governed: bool) -> dict[str, Any] | None:
     kind = _get(event, "kind")
     if kind not in ("tool_use", "tool_result", "mandate_verdict"):
         return None
@@ -225,13 +335,18 @@ def adapt_agent_event(event: Any, governed: bool = False) -> dict[str, Any] | No
             env["model"] = {"identification": "unknown"}
     elif kind == "tool_result":
         call_id = _get(event, "tool_use_id")
-        if governed:
+        payload = _get(event, "payload")
+        errored = isinstance(payload, Mapping) and bool(payload.get("is_error"))
+        named = isinstance(name, str) and _TOOL.fullmatch(name) is not None
+        if governed and named and not errored:
             env |= {"ai_event_type": "ai.tool.executed", "collector": "governed_tool",
                     "evidence_level": "verified",
                     "tool": {**_tool(name, "executed", call_id),
                              "execution_source": "governed_tool"}}
         else:
             env |= {"ai_event_type": "ai.tool.result", "tool": _tool(name, "result", call_id)}
+            if errored:
+                env["outcome"] = "failed"
     else:
         payload = _get(event, "payload")
         word = payload.get("verdict") if isinstance(payload, Mapping) else None

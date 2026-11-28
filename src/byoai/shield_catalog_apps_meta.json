@@ -2,6 +2,7 @@
   "schema_version": 1,
   "format": "coriqo.shield.catalog-meta",
   "file_version": 2,
+  "catalog_sha256": "609745a84dbc0e5dbe3917c2f207a306345cad2d33237af006a0bb1c748253ce",
   "entries": {
     "app.008agent-ai": {"category": "chatbot", "nature": "ai-enabled", "tier": "candidate", "origin": "tio"},
     "app.0ptikube-dev": {"category": "productivity_agents", "nature": "ai-enabled", "tier": "candidate", "origin": "tio"},
@@ -823,7 +824,7 @@
     "app.hostyai-com": {"category": "model_hub", "nature": "ai-enabled", "tier": "candidate", "origin": "tio"},
     "app.hotdocs-com": {"category": "writing", "nature": "ai-enabled", "tier": "candidate", "origin": "autotune"},
     "app.housecanary-com": {"category": "sales_marketing", "nature": "ai-enabled", "tier": "candidate", "origin": "autotune"},
-    "app.huggingface.hub": {"category": "model_hub", "nature": "ai-native", "tier": "listed", "origin": "seed"},
+    "app.huggingface.hub": {"category": "model_hub", "nature": "ai-enabled", "tier": "listed", "origin": "seed"},
     "app.humanly-ai": {"category": "hr_recruiting", "nature": "ai-native", "tier": "listed", "origin": "shadow-ai"},
     "app.humata-ai": {"category": "search", "nature": "ai-enabled", "tier": "candidate", "origin": "autotune"},
     "app.hyddle-com": {"category": "productivity_agents", "nature": "ai-enabled", "tier": "candidate", "origin": "tio"},
@@ -1147,11 +1148,8 @@
     "app.youper-ai": {"category": "productivity_agents", "nature": "ai-enabled", "tier": "candidate", "origin": "autotune"},
     "app.zawa-ai": {"category": "design", "nature": "ai-enabled", "tier": "candidate", "origin": "autotune"},
     "app.ziprecruiter-com": {"category": "hr_recruiting", "nature": "ai-enabled", "tier": "candidate", "origin": "autotune"},
-    "model.anthropic.messages": {"category": "model_hub", "nature": "ai-native", "tier": "listed", "origin": "seed"},
     "model.deepseek.chat-completions": {"category": "model_hub", "nature": "ai-native", "tier": "listed", "origin": "seed"},
-    "model.google.gemini-generate-content": {"category": "model_hub", "nature": "ai-native", "tier": "listed", "origin": "seed"},
     "model.huggingface.router-chat-completions": {"category": "model_hub", "nature": "ai-native", "tier": "listed", "origin": "seed"},
-    "model.mistral.chat-completions": {"category": "model_hub", "nature": "ai-native", "tier": "listed", "origin": "seed"},
-    "model.openai.chat-completions": {"category": "model_hub", "nature": "ai-native", "tier": "listed", "origin": "seed"}
+    "model.mistral.chat-completions": {"category": "model_hub", "nature": "ai-native", "tier": "listed", "origin": "seed"}
   }
 }

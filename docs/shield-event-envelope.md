@@ -75,6 +75,8 @@ All five core fields are required on an envelope row. The rest appear only when 
 | browser `verdict: warned->cancelled` | `warn` | `cancelled` |
 | desktop `action: "warn"` | `warn` | `sent_redacted` if `redactions` is non-empty, else `sent` |
 | attachment `allowed` / `blocked` | `allow` / `block` | `uploaded` / `blocked` |
+| desktop request `verdict: blocked` | `block` | `blocked` |
+| `tool.result` with a `mandate_verdict` | as `mandate_verdict` below | as `mandate_verdict` below |
 | `mandate_verdict: allowed` / `flagged` / `blocked` / `pending_approval` | `allow` / `flag` / `block` / `pending_approval` | `allowed` / `allowed` / `denied` / `unknown` |
 
 A desktop `warn` has no user prompt (it behaves as redact, see the `shield_proxy.py` docstring), so `policy_action: warn` does **not** mean the user was asked. Only `outcome` says what reached the app.
@@ -172,3 +174,13 @@ python -m pytest tests/integrations/test_shield_envelope_schema.py
 An adapter that produces envelopes should validate its output against the
 schema in its own tests, and must drop any field it cannot source (rule 5 and
 rule 6) rather than guess.
+
+## Adapter hardening
+
+`adapt_row` checks every pass-through field against the shape in `legacy_fields`. A row
+with a present but malformed field (`flags: ["free text"]`, `chars: "lots"`, a `verdict`
+that is not one of the listed words) is dropped (`[]`), never copied into an envelope.
+A field the row's family does not allow (`tools` on a request row) is not copied. A
+`not_covered` of `false` means covered; a non-string truthy value drops the row.
+`adapt_agent_event` never raises, and reports `ai.tool.executed` / `verified` only for
+a `governed` result of a named tool whose payload is not an error.

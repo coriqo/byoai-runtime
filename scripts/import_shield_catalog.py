@@ -39,7 +39,9 @@ META = ROOT / "src" / "byoai" / "shield_catalog_apps_meta.json"
 REJECTED_OUT = ROOT / "tests" / "shield_catalog" / "popular_rejected_hosts.txt"
 ALLOWED_AI = ROOT / "tests" / "shield_catalog" / "popular_allowed_ai_hosts.txt"
 
-LICENCE = "LicenseRef-Vendor-Public-Info"
+#: Non-seed entries are domain facts taken from a third-party list; the licence says so.
+LICENCE = "LicenseRef-Third-Party-List"
+_LIST_NAMES = {"shadow-ai": "shadow-ai list", "tio": "tio directory", "autotune": "autotune directory"}
 LISTED_DAYS, CANDIDATE_DAYS = 365, 180  # the format allows at most 400 after last_verified
 
 SEED_IDS = frozenset(
@@ -47,15 +49,16 @@ SEED_IDS = frozenset(
         "app.openai.chatgpt-web", "app.anthropic.claude-web", "app.google.gemini-web",
         "app.microsoft.copilot-web", "app.perplexity.web", "app.perplexity.api-host",
         "app.mistral.le-chat-web", "app.deepseek.chat-web", "app.huggingface.hub",
-        "model.openai.chat-completions", "model.anthropic.messages",
-        "model.google.gemini-generate-content", "model.mistral.chat-completions",
+        "model.mistral.chat-completions",
         "model.deepseek.chat-completions", "model.huggingface.router-chat-completions",
     }
 )  # fmt: skip
 _SEED_CATEGORY = {
     "app.perplexity.web": "search", "app.perplexity.api-host": "search",
     "app.huggingface.hub": "model_hub",
-}  # fmt: skip
+}
+#: Seed apps that are general platforms with AI features, not AI-first.
+_SEED_AI_ENABLED = frozenset({"app.huggingface.hub"})  # fmt: skip
 
 #: Big generic registrable domains. A host on one is rejected unless it is an exact
 #: AI subdomain in ALLOWED_PLATFORM_SUBDOMAINS (so google.com never matches, but
@@ -202,7 +205,7 @@ def _ts(day: str) -> str:
     return f"{day}T00:00:00Z"
 
 
-def _entry(host, vendor, tech, source_url, nature, tier, first_seen, verified):
+def _entry(host, vendor, tech, source_url, nature, tier, first_seen, verified, origin):
     days = LISTED_DAYS if tier == "listed" else CANDIDATE_DAYS
     expires = (dt.date.fromisoformat(verified) + dt.timedelta(days=days)).isoformat()
     if nature == "ai-enabled":
@@ -229,7 +232,12 @@ def _entry(host, vendor, tech, source_url, nature, tier, first_seen, verified):
         "evidence_required": ["host_match"],
         "false_positive_notes": note,
         "source": {
-            "name": _clean(f"{tech} (vendor site)", 120),
+            # Real origin, not a vendor claim: where the host came from, and that nobody here
+            # verified it. The url is the vendor's own site; the list is only the pointer to it.
+            "name": _clean(
+                f"{tech} via {_LIST_NAMES[origin]}" + (" (unverified)" if tier == "candidate" else ""),
+                120,
+            ),
             "url": source_url,
             "licence": LICENCE,
         },
@@ -263,7 +271,7 @@ def build(shadow, tio, autotune, *, popular, seed, seed_meta, today, popular_all
     def add(host, origin, vendor, tech, raw_url, category, nature, tier, verified):
         entry = _entry(
             host, _clean(vendor, 80), _clean(tech, 120), _source_url(raw_url, host), nature, tier,
-            min(today, verified), verified,
+            min(today, verified), verified, origin,
         )  # fmt: skip
         assert entry["id"] not in meta_entries, entry["id"]
         entries.append(entry)
@@ -382,7 +390,8 @@ def main(argv: list[str] | None = None) -> int:
     for e in seed:
         cat = _SEED_CATEGORY.get(e["id"], "model_hub" if e["id"].startswith("model.") else "chatbot")
         seed_meta[e["id"]] = {
-            "category": cat, "nature": "ai-native", "tier": "listed", "origin": "seed",
+            "category": cat, "tier": "listed", "origin": "seed",
+            "nature": "ai-enabled" if e["id"] in _SEED_AI_ENABLED else "ai-native",
         }  # fmt: skip
     popular_allow = _allow(ALLOWED_AI) if ALLOWED_AI.exists() else set()
     catalog, meta, report = build(
@@ -390,7 +399,9 @@ def main(argv: list[str] | None = None) -> int:
         popular=_hostlist(args.popular), seed=seed, seed_meta=seed_meta,
         today=args.today, popular_allow=popular_allow,
     )  # fmt: skip
-    CATALOG.write_text(dump_catalog(catalog))
+    text = dump_catalog(catalog)
+    meta["catalog_sha256"] = hashlib.sha256(text.encode()).hexdigest()  # binds tier etc. to this file
+    CATALOG.write_text(text)
     META.write_text(dump_meta(meta))
     rej = sorted(
         h for h, why in report["rejected"].items() if why.startswith(("popular", "generic", "parent"))

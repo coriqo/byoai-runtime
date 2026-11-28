@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/shield-signatures.md`, "Base app catalog".
 
 ### Fixed
+- Shield Wave 0/1 review: path matching is linear and capped at 4 `*`; entry expiry
+  and timestamps are enforced at match time and validated strictly (400-day cap);
+  list-derived catalog entries state their real origin and licence; a new
+  `load_app_catalog()` binds tier to the catalog by hash; the duplicate model
+  entries moved out of the app catalog; Hugging Face is `ai-enabled`; the
+  adapter drops malformed rows and reports blocked, tool-result and governed
+  outcomes correctly; ports, `..` and traversal model names no longer match.
 - The device-signed single-trace call (`record_signed_trace`) now takes an
   optional `payload_mode` and sends `X-Coriqo-Payload-Mode` like
   `record_trace` and `record_traces`. It sent no header before, so Coriqo could
